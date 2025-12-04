@@ -209,6 +209,193 @@ git clone https://github.com/Anjok07/ultimatevocalremovergui
 git clone https://github.com/nomadkaraoke/python-audio-separator
 ```
 
+## DAW Integration Research
+
+### Integration Strategies
+
+Stemperator moet stems kunnen routeren naar aparte tracks in de DAW. Er zijn meerdere manieren:
+
+| Methode | Complexiteit | DAW Support | Voordelen |
+|---------|-------------|-------------|-----------|
+| **Multi-Output VST3** | Medium | Alle DAWs | Stems naar mixer channels |
+| **ARA2 Extension** | Hoog | Reaper, Cubase, Studio One, Logic | Non-realtime, full file access |
+| **Sidechain/Aux Send** | Laag | Alle DAWs | Simpel maar beperkt |
+| **Render to Stems** | Laag | Alle DAWs | Offline export |
+
+### Multi-Output VST3 (Primaire Aanpak)
+
+```
+Input (Stereo) → Stemperator → Output 1-2: Vocals
+                             → Output 3-4: Drums
+                             → Output 5-6: Bass
+                             → Output 7-8: Other
+                             → Output 9-10: Mix (optioneel)
+```
+
+**JUCE implementatie:**
+```cpp
+// In PluginProcessor constructor
+AudioProcessor (BusesProperties()
+    .withInput  ("Input", AudioChannelSet::stereo(), true)
+    .withOutput ("Vocals", AudioChannelSet::stereo(), true)
+    .withOutput ("Drums", AudioChannelSet::stereo(), true)
+    .withOutput ("Bass", AudioChannelSet::stereo(), true)
+    .withOutput ("Other", AudioChannelSet::stereo(), true))
+```
+
+### DAW-Specifieke Workflows
+
+#### Reaper
+- **Multi-output routing**: Insert plugin → Right-click → "Build multichannel routing for outputs"
+- **Render stems**: File → Render → "Stems (selected tracks)"
+- **ReaInsert**: Route stems via hardware outputs for external processing
+- **Takes**: Explode stems to takes voor A/B vergelijking
+
+```lua
+-- Reaper ReaScript: Create tracks from Stemperator outputs
+for i = 1, 4 do
+    reaper.InsertTrackAtIndex(i, true)
+    -- Route Stemperator output i to new track
+end
+```
+
+#### Bitwig Studio
+- **Multi-out chains**: Click double-arrow icon → Add chains automatically
+- **Audio Receiver device**: Route stems to any track via SOURCE menu
+- **Modular Grid**: Process stems in The Grid with CV/audio routing
+- **Clip launcher**: Each stem as separate clip
+
+#### Ableton Live
+- **External Audio Effect**: Route stems via plugin's second output
+- **Audio tracks**: Create receives from Stemperator aux sends
+- **Max for Live**: Custom device for stem routing
+- **Native (Live 12.3+)**: Built-in stem separation (concurrent!)
+
+#### FL Studio
+- **Patcher**: Multi-output routing within Patcher environment
+- **Mixer routing**: Route plugin outputs to separate mixer tracks
+- **Edison**: Export stems for editing
+- **Native (FL 21.2+)**: Built-in AI stem separator
+
+#### Cubase
+- **Quadro/5.1 outputs**: Use surround configuration for stems
+- **SpectraLayers ARA2**: Native stem separation integration
+- **Direct Offline Processing**: Apply to stems non-destructively
+- **Native (Cubase 15)**: Built-in AI stem separation
+
+#### Logic Pro
+- **Aux channels**: Route multi-outputs to aux tracks
+- **Track Stacks**: Group stems in summing stack
+- **Native**: Built-in Stem Splitter (macOS)
+
+### ARA2 Integration (Advanced)
+
+ARA2 maakt non-realtime processing mogelijk - ideaal voor AI stem separation:
+
+```cpp
+// JUCE ARA2 setup
+juce_add_plugin(Stemperator
+    ...
+    IS_ARA_EFFECT TRUE
+)
+
+// Implement createARAFactory()
+const ARA::ARAFactory* JUCE_CALLTYPE createARAFactory()
+{
+    return juce::ARADocumentControllerSpecialisation::createARAFactory();
+}
+```
+
+**Voordelen ARA2:**
+- Toegang tot hele audio file (niet alleen realtime buffer)
+- DAW toont waveform van stems
+- Tempo/key sync met project
+- Betere kwaliteit (geen realtime constraint)
+
+**Ondersteunde DAWs:** Reaper, Cubase, Studio One, Logic, Cakewalk
+
+### Competitor Analysis: Peel Stems (zplane)
+
+[Peel Stems](https://products.zplane.de/products/peel-stems) - €59, referentie-implementatie:
+
+| Feature | Peel Stems | Stemperator (Goal) |
+|---------|------------|-------------------|
+| Real-time | Yes (~400ms latency) | Yes |
+| Multi-output | 2 outputs | 4-5 outputs |
+| Focus EQ | Yes (spectral rectangle) | TODO |
+| AI Model | Proprietary | Demucs/ONNX |
+| GPU Accel | No | Yes (OpenCL/CUDA) |
+| Price | €59 | Open Source |
+
+### Competitor Analysis: Moises Stems Plugin
+
+[Moises Stems](https://moises.ai/features/stems-vst-plugin/) - Subscription:
+
+- 7 stems (vocals, keys, drums, guitar, bass, strings, other)
+- Cloud processing (requires internet)
+- Works in all major DAWs
+
+### Competitor Analysis: RipX DAW
+
+[RipX DAW](https://hitnmix.com/ripx-daw/) - €99:
+
+- **RipLink plugin**: Send clips from DAW to RipX
+- ARA2 support (Studio One, Cubase, Reaper, Cakewalk)
+- Note-level editing (beyond just stems)
+- Export stems as WAV
+
+### Export Workflows
+
+```
+Stemperator Export Options:
+├── Quick Export
+│   ├── All stems to folder (WAV/FLAC)
+│   ├── Selected stems only
+│   └── With/without processing
+├── DAW Integration
+│   ├── Render in place (stem replaces original)
+│   ├── Render to new tracks
+│   └── Freeze (cache processed audio)
+└── Batch Export
+    ├── Multiple files → stems folders
+    └── Naming convention: {filename}_{stem}.wav
+```
+
+### Reaper-Specific Features (Priority)
+
+Reaper is zeer flexibel - speciale features:
+
+1. **Custom Actions**: ReaScript voor stem-naar-tracks
+2. **Region/Marker export**: Stems per region
+3. **Track Templates**: Pre-configured stem routing
+4. **SWS Extensions**: Batch stem operations
+5. **Envelope automation**: Per-stem volume/pan automation
+
+```lua
+-- Example: Stemperator ReaScript helper
+-- Creates 4 tracks with routing from Stemperator multi-out
+
+function CreateStemTracks()
+    local stemNames = {"Vocals", "Drums", "Bass", "Other"}
+    local sourceTrack = reaper.GetSelectedTrack(0, 0)
+
+    for i, name in ipairs(stemNames) do
+        reaper.InsertTrackAtIndex(i, true)
+        local newTrack = reaper.GetTrack(0, i)
+        reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", name, true)
+        -- TODO: Setup routing from Stemperator output i
+    end
+end
+```
+
+### Implementation Priority
+
+1. **Phase 1**: Multi-output VST3 (works everywhere)
+2. **Phase 2**: Render-to-stems button in GUI
+3. **Phase 3**: ARA2 for supported DAWs
+4. **Phase 4**: DAW-specific scripts/templates
+5. **Phase 5**: Cloud processing option (optional)
+
 ## References
 
 - Demucs: https://github.com/facebookresearch/demucs
@@ -217,3 +404,8 @@ git clone https://github.com/nomadkaraoke/python-audio-separator
 - Ultimate Vocal Remover: https://github.com/Anjok07/ultimatevocalremovergui
 - Audio Separator (Python): https://github.com/nomadkaraoke/python-audio-separator
 - JUCE: https://juce.com/
+- JUCE ARA Documentation: https://github.com/juce-framework/JUCE/blob/master/docs/ARA.md
+- Celemony JUCE_ARA: https://github.com/Celemony/JUCE_ARA
+- Peel Stems: https://products.zplane.de/products/peel-stems
+- Moises Stems Plugin: https://moises.ai/features/stems-vst-plugin/
+- RipX DAW: https://hitnmix.com/ripx-daw/
