@@ -1,39 +1,57 @@
 #include "StemSeparator.h"
-#include <complex>
+#include <cmath>
 
 StemSeparator::StemSeparator()
 {
-    fftData.resize (fftSize * 2);
-    inputBuffer.resize (fftSize);
-    initGPU();
+    // Initialize buffers
+    fftBuffer.resize (fftSize * 2, 0.0f);
+    spectrumL.resize (numBins);
+    spectrumR.resize (numBins);
+    spectrumMid.resize (numBins);
+    spectrumSide.resize (numBins);
+    prevMagnitude.resize (numBins, 0.0f);
+
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        stemSpectraL[stem].resize (numBins);
+        stemSpectraR[stem].resize (numBins);
+    }
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        inputBuffer[ch].resize (fftSize, 0.0f);
+        for (int stem = 0; stem < NumStems; ++stem)
+            outputBuffers[stem][ch].resize (fftSize, 0.0f);
+    }
 }
 
 StemSeparator::~StemSeparator() = default;
-
-void StemSeparator::initGPU()
-{
-    // TODO: Initialize GPU backend (OpenCL/CUDA/HIP)
-    // For now, use CPU
-    gpuAvailable = false;
-    gpuInfo = "CPU (GPU support coming soon)";
-}
 
 void StemSeparator::prepare (double sr, int blockSz)
 {
     sampleRate = sr;
     blockSize = blockSz;
 
+    // Resize output stems
     for (auto& stem : stems)
         stem.setSize (2, blockSz);
 
-    inputBufferPos = 0;
-    std::fill (inputBuffer.begin(), inputBuffer.end(), 0.0f);
+    reset();
 }
 
 void StemSeparator::reset()
 {
-    inputBufferPos = 0;
-    std::fill (inputBuffer.begin(), inputBuffer.end(), 0.0f);
+    inputWritePos = 0;
+    outputReadPos = 0;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        std::fill (inputBuffer[ch].begin(), inputBuffer[ch].end(), 0.0f);
+        for (int stem = 0; stem < NumStems; ++stem)
+            std::fill (outputBuffers[stem][ch].begin(), outputBuffers[stem][ch].end(), 0.0f);
+    }
+
+    std::fill (prevMagnitude.begin(), prevMagnitude.end(), 0.0f);
 
     for (auto& stem : stems)
         stem.clear();
@@ -42,149 +60,195 @@ void StemSeparator::reset()
 void StemSeparator::process (juce::AudioBuffer<float>& buffer)
 {
     const int numSamples = buffer.getNumSamples();
+    const int numChannels = std::min (buffer.getNumChannels(), 2);
 
     // Ensure stems are sized correctly
     for (auto& stem : stems)
     {
         if (stem.getNumSamples() != numSamples)
             stem.setSize (2, numSamples, false, false, true);
+        stem.clear();
     }
 
-    // For now: simple spectral separation
-    // Mix to mono for analysis
-    std::vector<float> mono (numSamples);
+    // Process sample by sample with overlap-add
     for (int i = 0; i < numSamples; ++i)
     {
-        mono[i] = (buffer.getSample (0, i) + buffer.getSample (1, i)) * 0.5f;
-    }
+        // Push input samples to circular buffer
+        for (int ch = 0; ch < numChannels; ++ch)
+            inputBuffer[ch][inputWritePos] = buffer.getSample (ch, i);
 
-    processSpectralSeparation (mono.data(), numSamples);
-
-    // Copy original to "Other" as fallback
-    for (int ch = 0; ch < 2; ++ch)
-    {
-        // Vocals: center channel extraction (L-R for stereo)
-        // This is a simple approach - real Demucs would be much better
-        if (buffer.getNumChannels() >= 2)
+        // Pop output samples from circular buffer
+        for (int stem = 0; stem < NumStems; ++stem)
         {
-            for (int i = 0; i < numSamples; ++i)
+            for (int ch = 0; ch < numChannels; ++ch)
             {
-                float L = buffer.getSample (0, i);
-                float R = buffer.getSample (1, i);
-                float mid = (L + R) * 0.5f;
-                float side = (L - R) * 0.5f;
-
-                // Vocals tend to be in the center (mid)
-                stems[Vocals].setSample (ch, i, mid * 0.7f);
-
-                // Side contains more instruments
-                stems[Other].setSample (ch, i, side + mid * 0.3f);
+                stems[stem].setSample (ch, i, outputBuffers[stem][ch][outputReadPos]);
+                outputBuffers[stem][ch][outputReadPos] = 0.0f;  // Clear after reading
             }
         }
 
-        // Bass: low-pass filter < 200Hz
-        // Simple first-order IIR
-        float bassCoeff = std::exp (-2.0f * juce::MathConstants<float>::pi * 200.0f / (float) sampleRate);
-        float bassState = 0.0f;
-        for (int i = 0; i < numSamples; ++i)
+        inputWritePos = (inputWritePos + 1) % fftSize;
+        outputReadPos = (outputReadPos + 1) % fftSize;
+
+        // Process FFT frame every hopSize samples
+        if (inputWritePos % hopSize == 0)
         {
-            float sample = buffer.getSample (ch, i);
-            bassState = bassCoeff * bassState + (1.0f - bassCoeff) * sample;
-            stems[Bass].setSample (ch, i, bassState);
-        }
+            // Process each channel
+            for (int ch = 0; ch < numChannels; ++ch)
+                processFFTFrame (ch);
 
-        // Drums: transient detection (high-pass + envelope follower)
-        float hpCoeff = std::exp (-2.0f * juce::MathConstants<float>::pi * 100.0f / (float) sampleRate);
-        float hpState = 0.0f;
-        float envState = 0.0f;
-        float envAttack = 0.01f;
-        float envRelease = 0.1f;
+            // Perform stem separation in frequency domain
+            separateStems();
 
-        for (int i = 0; i < numSamples; ++i)
-        {
-            float sample = buffer.getSample (ch, i);
-            float hp = sample - hpState;
-            hpState = hpCoeff * hpState + (1.0f - hpCoeff) * sample;
-
-            // Envelope follower
-            float absHp = std::abs (hp);
-            if (absHp > envState)
-                envState = envAttack * absHp + (1.0f - envAttack) * envState;
-            else
-                envState = envRelease * absHp + (1.0f - envRelease) * envState;
-
-            // Gate based on envelope
-            float drumGate = envState > 0.1f ? 1.0f : envState * 10.0f;
-            stems[Drums].setSample (ch, i, hp * drumGate);
+            // Reconstruct each stem
+            for (int ch = 0; ch < numChannels; ++ch)
+                reconstructStems (ch);
         }
     }
 }
 
-void StemSeparator::processSpectralSeparation (const float* input, int numSamples)
+void StemSeparator::processFFTFrame (int channel)
 {
-    // Accumulate input for FFT processing
-    for (int i = 0; i < numSamples; ++i)
+    // Copy input to FFT buffer (from circular buffer)
+    int readPos = (inputWritePos - fftSize + fftSize) % fftSize;
+    for (int i = 0; i < fftSize; ++i)
     {
-        inputBuffer[inputBufferPos++] = input[i];
+        fftBuffer[i] = inputBuffer[channel][(readPos + i) % fftSize];
+        fftBuffer[fftSize + i] = 0.0f;  // Clear imaginary part
+    }
 
-        if (inputBufferPos >= fftSize)
+    // Apply window
+    window.multiplyWithWindowingTable (fftBuffer.data(), fftSize);
+
+    // Forward FFT
+    fft.performRealOnlyForwardTransform (fftBuffer.data());
+
+    // Extract spectrum
+    auto& spectrum = (channel == 0) ? spectrumL : spectrumR;
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        float real = fftBuffer[bin * 2];
+        float imag = fftBuffer[bin * 2 + 1];
+        spectrum[bin] = std::complex<float> (real, imag);
+    }
+}
+
+void StemSeparator::separateStems()
+{
+    // Calculate Mid/Side
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        spectrumMid[bin] = (spectrumL[bin] + spectrumR[bin]) * 0.5f;
+        spectrumSide[bin] = (spectrumL[bin] - spectrumR[bin]) * 0.5f;
+    }
+
+    // Frequency boundaries
+    int bassBin = freqToBin (bassCutoffHz);
+    int vocalLowBin = freqToBin (200.0f);
+    int vocalHighBin = freqToBin (4000.0f);
+
+    // Separation masks
+    std::vector<float> bassMask (numBins, 0.0f);
+    std::vector<float> vocalsMask (numBins, 0.0f);
+    std::vector<float> drumsMask (numBins, 0.0f);
+
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        float freq = binToFreq (bin);
+        float midMag = std::abs (spectrumMid[bin]);
+        float sideMag = std::abs (spectrumSide[bin]);
+        float totalMag = midMag + sideMag + 1e-10f;
+
+        // Bass mask: low-pass with smooth rolloff
+        if (bin <= bassBin)
         {
-            // Apply window and FFT
-            std::copy (inputBuffer.begin(), inputBuffer.end(), fftData.begin());
-            window.multiplyWithWindowingTable (fftData.data(), fftSize);
-            fft.performRealOnlyForwardTransform (fftData.data());
-
-            // TODO: GPU-accelerated spectral masking for better separation
-            // This would use the GPU kernels from VinylRestorationSuite
-
-            // Shift buffer
-            std::copy (inputBuffer.begin() + fftSize / 2, inputBuffer.end(), inputBuffer.begin());
-            inputBufferPos = fftSize / 2;
+            float rolloff = 1.0f - (float) bin / (float) bassBin * 0.3f;
+            bassMask[bin] = rolloff;
         }
+        else if (bin < bassBin * 1.5f)
+        {
+            float t = (float) (bin - bassBin) / (float) (bassBin * 0.5f);
+            bassMask[bin] = 1.0f - t;
+        }
+
+        // Vocals mask: center-panned content in vocal frequency range
+        float centerWeight = midMag / totalMag;  // How centered is this bin?
+        if (bin >= vocalLowBin && bin <= vocalHighBin)
+        {
+            // Vocals are typically centered (high mid, low side)
+            float vocalWeight = centerWeight * vocalsFocus + (1.0f - vocalsFocus) * 0.5f;
+            vocalsMask[bin] = vocalWeight;
+        }
+
+        // Drums mask: transient detection
+        float currentMag = std::abs (spectrumL[bin]) + std::abs (spectrumR[bin]);
+        float prevMag = prevMagnitude[bin];
+        float transient = std::max (0.0f, currentMag - prevMag * 1.2f);
+        float steadyState = std::min (currentMag, prevMag);
+
+        // Drums are more transient, less harmonic
+        float transientRatio = transient / (currentMag + 1e-10f);
+        drumsMask[bin] = transientRatio * drumSensitivity;
+
+        // Update previous magnitude
+        prevMagnitude[bin] = currentMag * 0.9f + prevMag * 0.1f;  // Smooth
+    }
+
+    // Apply masks and create stem spectra
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        // Normalize masks to sum to ~1
+        float totalMask = bassMask[bin] + vocalsMask[bin] + drumsMask[bin];
+        float otherMask = std::max (0.0f, 1.0f - totalMask);
+
+        // Bass (from mid channel mostly - bass is mono)
+        float bassGain = bassMask[bin];
+        stemSpectraL[Bass][bin] = spectrumMid[bin] * bassGain;
+        stemSpectraR[Bass][bin] = spectrumMid[bin] * bassGain;
+
+        // Vocals (from mid channel)
+        float vocalsGain = vocalsMask[bin] * (1.0f - bassMask[bin]);
+        stemSpectraL[Vocals][bin] = spectrumMid[bin] * vocalsGain;
+        stemSpectraR[Vocals][bin] = spectrumMid[bin] * vocalsGain;
+
+        // Drums (transient content from both L+R)
+        float drumsGain = drumsMask[bin] * (1.0f - bassMask[bin]) * (1.0f - vocalsMask[bin]);
+        stemSpectraL[Drums][bin] = spectrumL[bin] * drumsGain;
+        stemSpectraR[Drums][bin] = spectrumR[bin] * drumsGain;
+
+        // Other (residual - everything that's left)
+        float otherGain = std::max (0.0f, 1.0f - bassGain - vocalsGain - drumsGain);
+        stemSpectraL[Other][bin] = spectrumL[bin] * otherGain + spectrumSide[bin] * (1.0f - vocalsMask[bin]);
+        stemSpectraR[Other][bin] = spectrumR[bin] * otherGain - spectrumSide[bin] * (1.0f - vocalsMask[bin]);
     }
 }
 
-void StemSeparator::extractVocals (const std::vector<std::complex<float>>& spectrum,
-                                   std::vector<std::complex<float>>& vocals)
+void StemSeparator::reconstructStems (int channel)
 {
-    // Vocals are typically 300Hz - 3kHz with harmonic structure
-    int lowBin = (int) (300.0 * fftSize / sampleRate);
-    int highBin = (int) (3000.0 * fftSize / sampleRate);
-
-    vocals.resize (spectrum.size());
-    for (size_t i = 0; i < spectrum.size(); ++i)
+    for (int stem = 0; stem < NumStems; ++stem)
     {
-        if (i >= (size_t) lowBin && i <= (size_t) highBin)
-            vocals[i] = spectrum[i] * 0.8f;  // Soft mask
-        else
-            vocals[i] = spectrum[i] * 0.1f;
-    }
-}
+        auto& spectrum = (channel == 0) ? stemSpectraL[stem] : stemSpectraR[stem];
 
-void StemSeparator::extractBass (const std::vector<std::complex<float>>& spectrum,
-                                 std::vector<std::complex<float>>& bass)
-{
-    // Bass is < 200Hz
-    int cutoffBin = (int) (200.0 * fftSize / sampleRate);
+        // Pack spectrum into FFT buffer
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            fftBuffer[bin * 2] = spectrum[bin].real();
+            fftBuffer[bin * 2 + 1] = spectrum[bin].imag();
+        }
 
-    bass.resize (spectrum.size());
-    for (size_t i = 0; i < spectrum.size(); ++i)
-    {
-        if (i <= (size_t) cutoffBin)
-            bass[i] = spectrum[i];
-        else
-            bass[i] = spectrum[i] * 0.05f;
-    }
-}
+        // Inverse FFT
+        fft.performRealOnlyInverseTransform (fftBuffer.data());
 
-void StemSeparator::extractDrums (const std::vector<std::complex<float>>& spectrum,
-                                  std::vector<std::complex<float>>& drums)
-{
-    // Drums have broadband transients - use onset detection
-    // This is a placeholder - real implementation needs temporal analysis
-    drums.resize (spectrum.size());
-    for (size_t i = 0; i < spectrum.size(); ++i)
-    {
-        drums[i] = spectrum[i] * 0.3f;
+        // Apply window and add to output buffer (overlap-add)
+        window.multiplyWithWindowingTable (fftBuffer.data(), fftSize);
+
+        int writePos = (outputReadPos) % fftSize;
+        float normalization = 1.0f / (float) (fftSize / hopSize) * 0.5f;  // Overlap-add normalization
+
+        for (int i = 0; i < fftSize; ++i)
+        {
+            int pos = (writePos + i) % fftSize;
+            outputBuffers[stem][channel][pos] += fftBuffer[i] * normalization;
+        }
     }
 }

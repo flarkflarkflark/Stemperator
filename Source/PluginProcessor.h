@@ -3,56 +3,90 @@
 #include <JuceHeader.h>
 #include "DSP/StemSeparator.h"
 
-class StemperatorProcessor : public juce::AudioProcessor
+/**
+ * Stemperator - AI-Powered Stem Separation Plugin
+ *
+ * Multi-output VST3 plugin that separates audio into 4 stems:
+ * - Vocals (center channel extraction + harmonic analysis)
+ * - Drums (transient detection + spectral percussion)
+ * - Bass (low frequency isolation)
+ * - Other (residual - everything else)
+ *
+ * Each stem is output on a separate stereo bus for flexible DAW routing.
+ */
+class StemperatorProcessor : public juce::AudioProcessor,
+                              public juce::AudioProcessorValueTreeState::Listener
 {
 public:
     StemperatorProcessor();
     ~StemperatorProcessor() override;
 
+    //==============================================================================
     void prepareToPlay (double sampleRate, int samplesPerBlock) override;
     void releaseResources() override;
     bool isBusesLayoutSupported (const BusesLayout& layouts) const override;
     void processBlock (juce::AudioBuffer<float>&, juce::MidiBuffer&) override;
 
+    //==============================================================================
     juce::AudioProcessorEditor* createEditor() override;
     bool hasEditor() const override { return true; }
 
+    //==============================================================================
     const juce::String getName() const override { return JucePlugin_Name; }
-
     bool acceptsMidi() const override { return false; }
     bool producesMidi() const override { return false; }
     bool isMidiEffect() const override { return false; }
-    double getTailLengthSeconds() const override { return 0.0; }
+    double getTailLengthSeconds() const override { return 0.5; }
 
+    //==============================================================================
     int getNumPrograms() override { return 1; }
     int getCurrentProgram() override { return 0; }
     void setCurrentProgram (int) override {}
     const juce::String getProgramName (int) override { return {}; }
     void changeProgramName (int, const juce::String&) override {}
 
+    //==============================================================================
     void getStateInformation (juce::MemoryBlock& destData) override;
     void setStateInformation (const void* data, int sizeInBytes) override;
 
-    // Stem access
+    //==============================================================================
+    void parameterChanged (const juce::String& parameterID, float newValue) override;
+
+    //==============================================================================
+    // Stem enumeration
     enum Stem { Vocals = 0, Drums, Bass, Other, NumStems };
+    static constexpr const char* stemNames[NumStems] = { "Vocals", "Drums", "Bass", "Other" };
 
-    float getStemLevel (Stem stem) const { return stemLevels[stem]; }
-    void setStemLevel (Stem stem, float level) { stemLevels[stem] = level; }
+    // Get stem levels for visualization
+    float getStemLevel (Stem stem) const { return stemLevels[stem].load(); }
 
-    bool getStemMute (Stem stem) const { return stemMutes[stem]; }
-    void setStemMute (Stem stem, bool mute) { stemMutes[stem] = mute; }
+    // Get input level for visualization
+    float getInputLevel() const { return inputLevel.load(); }
 
-    bool getStemSolo (Stem stem) const { return stemSolos[stem]; }
-    void setStemSolo (Stem stem, bool solo) { stemSolos[stem] = solo; }
+    // Parameter tree
+    juce::AudioProcessorValueTreeState& getParameters() { return parameters; }
 
+    // Separator access for advanced features
     StemSeparator& getSeparator() { return separator; }
 
 private:
+    //==============================================================================
+    juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
+
+    juce::AudioProcessorValueTreeState parameters;
     StemSeparator separator;
 
-    std::array<float, NumStems> stemLevels = { 1.0f, 1.0f, 1.0f, 1.0f };
-    std::array<bool, NumStems> stemMutes = { false, false, false, false };
-    std::array<bool, NumStems> stemSolos = { false, false, false, false };
+    // Atomic levels for thread-safe GUI updates
+    std::array<std::atomic<float>, NumStems> stemLevels;
+    std::atomic<float> inputLevel { 0.0f };
+
+    // Smoothed parameters
+    juce::LinearSmoothedValue<float> stemGains[NumStems];
+    juce::LinearSmoothedValue<float> masterGain;
+
+    // Processing state
+    double currentSampleRate = 44100.0;
+    int currentBlockSize = 512;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorProcessor)
 };

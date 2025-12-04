@@ -2,17 +2,19 @@
 
 #include <JuceHeader.h>
 #include <array>
+#include <complex>
 
 /**
- * StemSeparator - AI-based audio stem separation
+ * StemSeparator - Real-time spectral stem separation
  *
- * Separates audio into 4 stems: Vocals, Drums, Bass, Other
+ * Uses multiple techniques for separation:
+ * 1. Stereo Mid/Side for center (vocals) extraction
+ * 2. Low-pass filtering for bass isolation
+ * 3. Transient/Steady-state decomposition for drums
+ * 4. Harmonic/Percussive separation (HPSS)
+ * 5. Residual calculation for "other"
  *
- * Modes:
- * - Real-time: Fast spectral separation (FFT-based)
- * - Offline: High-quality AI separation (Demucs/Spleeter via GPU)
- *
- * GPU acceleration via OpenCL/CUDA/HIP for faster processing.
+ * All processing happens in the frequency domain using overlap-add FFT.
  */
 class StemSeparator
 {
@@ -26,51 +28,64 @@ public:
     void prepare (double sampleRate, int samplesPerBlock);
     void reset();
 
-    /** Real-time spectral separation */
+    /** Main processing function */
     void process (juce::AudioBuffer<float>& buffer);
 
-    /** Get separated stems (updated after process()) */
+    /** Get separated stems */
     std::array<juce::AudioBuffer<float>, NumStems>& getStems() { return stems; }
 
-    /** Status */
-    bool isProcessing() const { return processing.load(); }
-    float getProgress() const { return progress.load(); }
-    juce::String getStatusMessage() const { return statusMessage; }
-
-    /** GPU info */
-    bool isUsingGPU() const { return gpuAvailable; }
-    juce::String getGPUInfo() const { return gpuInfo; }
+    /** Adjustable parameters */
+    void setBassCutoff (float hz) { bassCutoffHz = hz; }
+    void setVocalsFocus (float focus) { vocalsFocus = juce::jlimit (0.0f, 1.0f, focus); }
+    void setDrumSensitivity (float sens) { drumSensitivity = juce::jlimit (0.0f, 1.0f, sens); }
 
 private:
     double sampleRate = 44100.0;
     int blockSize = 512;
 
-    std::array<juce::AudioBuffer<float>, NumStems> stems;
-
-    // FFT for spectral separation
-    static constexpr int fftOrder = 11; // 2048 samples
+    // FFT configuration
+    static constexpr int fftOrder = 11;  // 2048 samples
     static constexpr int fftSize = 1 << fftOrder;
+    static constexpr int hopSize = fftSize / 4;  // 75% overlap
+    static constexpr int numBins = fftSize / 2 + 1;
+
     juce::dsp::FFT fft { fftOrder };
     juce::dsp::WindowingFunction<float> window { fftSize, juce::dsp::WindowingFunction<float>::hann };
 
-    std::vector<float> fftData;
-    std::vector<float> inputBuffer;
-    int inputBufferPos = 0;
+    // Circular buffers for overlap-add
+    std::array<std::vector<float>, 2> inputBuffer;    // L/R input circular buffer
+    std::array<std::vector<float>, 2> outputBuffers[NumStems];  // L/R output for each stem
+    int inputWritePos = 0;
+    int outputReadPos = 0;
 
-    // Status
-    std::atomic<bool> processing { false };
-    std::atomic<float> progress { 0.0f };
-    juce::String statusMessage = "Ready";
+    // FFT working buffers
+    std::vector<float> fftBuffer;
+    std::vector<std::complex<float>> spectrumL, spectrumR;
+    std::vector<std::complex<float>> spectrumMid, spectrumSide;
 
-    // GPU
-    bool gpuAvailable = false;
-    juce::String gpuInfo = "CPU only";
+    // Stem spectra
+    std::array<std::vector<std::complex<float>>, NumStems> stemSpectraL;
+    std::array<std::vector<std::complex<float>>, NumStems> stemSpectraR;
 
-    void initGPU();
-    void processSpectralSeparation (const float* input, int numSamples);
-    void extractVocals (const std::vector<std::complex<float>>& spectrum, std::vector<std::complex<float>>& vocals);
-    void extractBass (const std::vector<std::complex<float>>& spectrum, std::vector<std::complex<float>>& bass);
-    void extractDrums (const std::vector<std::complex<float>>& spectrum, std::vector<std::complex<float>>& drums);
+    // Output stems
+    std::array<juce::AudioBuffer<float>, NumStems> stems;
+
+    // Parameters
+    float bassCutoffHz = 150.0f;
+    float vocalsFocus = 0.5f;
+    float drumSensitivity = 0.5f;
+
+    // Previous frame for transient detection
+    std::vector<float> prevMagnitude;
+
+    // Internal processing
+    void processFFTFrame (int channel);
+    void separateStems();
+    void reconstructStems (int channel);
+
+    // Frequency helpers
+    int freqToBin (float freq) const { return (int) (freq * fftSize / sampleRate); }
+    float binToFreq (int bin) const { return (float) bin * (float) sampleRate / (float) fftSize; }
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemSeparator)
 };
