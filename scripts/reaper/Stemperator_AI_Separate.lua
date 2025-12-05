@@ -1,7 +1,11 @@
 -- @description Stemperator - AI Stem Separation
 -- @author flarkAUDIO
--- @version 1.3.0
+-- @version 1.4.0
 -- @changelog
+--   v1.4.0: Time selection support
+--   - Can now separate time selections (not just media items)
+--   - If no item selected, uses time selection instead
+--   - Stems are placed at the time selection position
 --   v1.3.0: 6-stem model support with Guitar/Piano
 --   - Guitar and Piano checkboxes appear when 6-stem model selected
 --   - Keys 5/6 toggle Guitar/Piano stems
@@ -30,8 +34,8 @@
 --   # Stemperator - AI Stem Separation
 --
 --   High-quality AI-powered stem separation using Demucs/audio-separator.
---   Separates the selected media item into stems: Vocals, Drums, Bass, Other
---   (and optionally Guitar, Piano with 6-stem model).
+--   Separates the selected media item (or time selection) into stems:
+--   Vocals, Drums, Bass, Other (and optionally Guitar, Piano with 6-stem model).
 --
 --   ## Features
 --   - Processes ONLY the selected item portion (respects splits!)
@@ -669,6 +673,113 @@ local function renderItemToWav(item, outputPath)
     else return nil, "Failed to extract audio" end
 end
 
+-- Render time selection to a temporary WAV file
+local function renderTimeSelectionToWav(outputPath)
+    local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    if startTime >= endTime then return nil, "No time selection" end
+
+    -- Use REAPER's render to bounce time selection
+    -- We need to render whatever audio is in the time selection
+
+    -- Save current render settings
+    local projPath = reaper.GetProjectPath("")
+
+    -- Create render settings for time selection
+    local renderCfg = {
+        ["RENDER_FILE"] = outputPath:match("(.+)[/\\]"),
+        ["RENDER_PATTERN"] = outputPath:match("[/\\]([^/\\]+)$"):gsub("%.wav$", ""),
+        ["RENDER_FMT"] = "WAV",
+        ["RENDER_SRATE"] = 44100,
+        ["RENDER_CHANNELS"] = 2,
+        ["RENDER_STARTPOS"] = 0,  -- time selection
+        ["RENDER_ENDPOS"] = 0,
+        ["RENDER_TAILFLAG"] = 0,
+        ["RENDER_TAILMS"] = 0,
+        ["RENDER_ADDTOPROJ"] = 0,
+        ["RENDER_DITHER"] = 0,
+    }
+
+    -- Use command line render via REAPER action
+    -- First, set time selection as render bounds
+    reaper.GetSet_LoopTimeRange(true, false, startTime, endTime, false)
+
+    -- Create a simple render script using ffmpeg to mix down
+    -- This is more reliable than REAPER's render API
+
+    -- Get all tracks and their audio
+    local numTracks = reaper.CountTracks(0)
+    if numTracks == 0 then return nil, "No tracks in project" end
+
+    -- Use REAPER's built-in render (action 42230 = Render project to file)
+    -- But we need a simpler approach - just bounce via selected tracks
+
+    -- Alternative: Use SWS BR_RenderProject or simpler approach
+    -- For now, use glue-based approach: select items in time range, glue, export
+
+    -- Simpler approach: Find items overlapping time selection and use first one
+    local foundItem = nil
+    local foundTrack = nil
+    for t = 0, numTracks - 1 do
+        local track = reaper.GetTrack(0, t)
+        local numItems = reaper.CountTrackMediaItems(track)
+        for i = 0, numItems - 1 do
+            local item = reaper.GetTrackMediaItem(track, i)
+            local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+            local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+            local iEnd = iPos + iLen
+            -- Check if item overlaps time selection
+            if iPos < endTime and iEnd > startTime then
+                foundItem = item
+                foundTrack = track
+                break
+            end
+        end
+        if foundItem then break end
+    end
+
+    if not foundItem then return nil, "No audio items in time selection" end
+
+    -- Get the source and extract just the time selection portion
+    local take = reaper.GetActiveTake(foundItem)
+    if not take then return nil, "No active take" end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    if not source then return nil, "No source" end
+
+    local sourceFile = reaper.GetMediaSourceFileName(source, "")
+    if not sourceFile or sourceFile == "" then return nil, "No source file" end
+
+    -- Calculate offsets relative to the item
+    local itemPos = reaper.GetMediaItemInfo_Value(foundItem, "D_POSITION")
+    local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+    local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+
+    -- Calculate the portion of the source file to extract
+    local selStartInItem = math.max(0, startTime - itemPos)
+    local selEndInItem = math.min(endTime - itemPos, reaper.GetMediaItemInfo_Value(foundItem, "D_LENGTH"))
+    local duration = (selEndInItem - selStartInItem) * playrate
+
+    -- Source offset = take offset + selection start relative to item
+    local sourceOffset = takeOffset + (selStartInItem * playrate)
+
+    local ffmpegCmd = string.format(
+        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"' .. suppressStderr(),
+        sourceFile, sourceOffset, duration, outputPath
+    )
+
+    os.execute(ffmpegCmd)
+
+    local f = io.open(outputPath, "r")
+    if f then f:close(); return outputPath, nil, foundItem  -- Return the found item too
+    else return nil, "Failed to extract audio from time selection", nil end
+end
+
+-- Check if there's a valid time selection
+local function hasTimeSelection()
+    local startTime, endTime = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+    return endTime > startTime
+end
+
 -- Run AI separation
 local function runSeparation(inputFile, outputDir, model)
     local cmd = string.format(
@@ -692,6 +803,97 @@ local function runSeparation(inputFile, outputDir, model)
 
     if next(stems) == nil then return nil, "No stems created" end
     return stems
+end
+
+-- Replace only a portion of an item with stems (for time selection mode)
+-- Splits the item at selection boundaries and replaces only the selected portion
+local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
+    local track = reaper.GetMediaItem_Track(item)
+    local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+
+    reaper.Undo_BeginBlock()
+
+    -- We need to split the item at selection boundaries
+    -- First, deselect all items and select only our target item
+    reaper.SelectAllMediaItems(0, false)
+    reaper.SetMediaItemSelected(item, true)
+
+    local leftItem = nil   -- Part before selection (if any)
+    local middleItem = item -- Part to replace
+    local rightItem = nil  -- Part after selection (if any)
+
+    -- Split at selection start if it's inside the item
+    if selStart > origItemPos and selStart < origItemEnd then
+        middleItem = reaper.SplitMediaItem(item, selStart)
+        leftItem = item
+        if middleItem then
+            reaper.SetMediaItemSelected(leftItem, false)
+            reaper.SetMediaItemSelected(middleItem, true)
+        else
+            -- Split failed, middle is still the original item
+            middleItem = item
+            leftItem = nil
+        end
+    end
+
+    -- Split at selection end if it's inside what remains
+    if middleItem then
+        local midPos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
+        local midEnd = midPos + reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
+
+        if selEnd > midPos and selEnd < midEnd then
+            rightItem = reaper.SplitMediaItem(middleItem, selEnd)
+            if rightItem then
+                reaper.SetMediaItemSelected(rightItem, false)
+            end
+        end
+    end
+
+    -- Now delete the middle item and insert stems in its place
+    local selLen = selEnd - selStart
+    if middleItem then
+        reaper.DeleteTrackMediaItem(track, middleItem)
+    end
+
+    -- Create stem items at the selection position
+    local items = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                local newItem = reaper.AddMediaItemToTrack(track)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selStart)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
+
+                local take = reaper.AddTakeToMediaItem(newItem)
+                local source = reaper.PCM_Source_CreateFromFile(stemPath)
+                reaper.SetMediaItemTake_Source(take, source)
+                reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3]))
+
+                items[#items + 1] = newItem
+            end
+        end
+    end
+
+    -- Merge into takes
+    if #items > 1 then
+        local mainItem = items[1]
+        for i = 2, #items do
+            local srcTake = reaper.GetActiveTake(items[i])
+            if srcTake then
+                local newTake = reaper.AddTakeToMediaItem(mainItem)
+                reaper.SetMediaItemTake_Source(newTake, reaper.GetMediaItemTake_Source(srcTake))
+                local _, name = reaper.GetSetMediaItemTakeInfo_String(srcTake, "P_NAME", "", false)
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", name, true)
+            end
+            reaper.DeleteTrackMediaItem(track, items[i])
+        end
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Replace selection in-place", -1)
+    return #items
 end
 
 -- Replace item in-place with stems as takes
@@ -820,16 +1022,91 @@ end
 local selectedItem = nil
 local itemPos = 0
 local itemLen = 0
+local timeSelectionMode = false  -- true when processing time selection instead of item
+local timeSelectionStart = 0
+local timeSelectionEnd = 0
+local timeSelectionSourceItem = nil  -- The item found in time selection (for in-place replacement)
+
+-- Create new tracks for stems from time selection (no original item)
+local function createStemTracksForSelection(stemPaths, selPos, selLen)
+    reaper.Undo_BeginBlock()
+
+    -- Get the first selected track as reference, or track 0
+    local refTrack = reaper.GetSelectedTrack(0, 0) or reaper.GetTrack(0, 0)
+    local trackIdx = 0
+    if refTrack then
+        trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(refTrack, "IP_TRACKNUMBER"))
+    end
+
+    local selectedCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and stemPaths[stem.name:lower()] then selectedCount = selectedCount + 1 end
+    end
+
+    local folderTrack = nil
+    local sourceName = "Selection"
+    if selectedCount > 1 and SETTINGS.createFolder then
+        reaper.InsertTrackAtIndex(trackIdx, true)
+        folderTrack = reaper.GetTrack(0, trackIdx)
+        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceName .. " - Stems", true)
+        reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+        reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", rgbToReaperColor(180, 140, 200))
+        trackIdx = trackIdx + 1
+    end
+
+    local importedCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
+                local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
+
+                local newTrackName = selectedCount == 1 and (stem.name .. " - " .. sourceName) or (sourceName .. " - " .. stem.name)
+                reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+
+                local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+
+                local newItem = reaper.AddMediaItemToTrack(newTrack)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selPos)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
+
+                local newTake = reaper.AddTakeToMediaItem(newItem)
+                reaper.SetMediaItemTake_Source(newTake, reaper.PCM_Source_CreateFromFile(stemPath))
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", stem.name, true)
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+
+                importedCount = importedCount + 1
+            end
+        end
+    end
+
+    if folderTrack and importedCount > 0 then
+        reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + importedCount - 1), "I_FOLDERDEPTH", -1)
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Create stem tracks from selection", -1)
+    return importedCount
+end
 
 -- Separation workflow
 function runSeparationWorkflow()
-    if not selectedItem then return end
+    -- Validate we have something to process
+    if not timeSelectionMode and not selectedItem then return end
 
     local tempDir = getTempDir() .. PATH_SEP .. "stemperator_" .. os.time()
     makeDir(tempDir)
     local tempInput = tempDir .. PATH_SEP .. "input.wav"
 
-    local extracted, err = renderItemToWav(selectedItem, tempInput)
+    local extracted, err, sourceItem
+    if timeSelectionMode then
+        extracted, err, sourceItem = renderTimeSelectionToWav(tempInput)
+        timeSelectionSourceItem = sourceItem  -- Store for later use
+    else
+        extracted, err = renderItemToWav(selectedItem, tempInput)
+    end
+
     if not extracted then
         reaper.MB("Failed to extract audio:\n\n" .. (err or "Unknown"), SCRIPT_NAME, 0)
         return
@@ -849,24 +1126,38 @@ function runSeparationWorkflow()
     end
 
     local count
-    if SETTINGS.createNewTracks then
+    local resultMsg
+
+    if timeSelectionMode then
+        -- Time selection mode: respect user's setting
+        if SETTINGS.createNewTracks then
+            count = createStemTracksForSelection(stems, itemPos, itemLen)
+            resultMsg = count .. " stem track(s) created from time selection."
+        else
+            -- In-place mode: replace only the selected portion of the item
+            if timeSelectionSourceItem then
+                -- Use partial replacement - splits the item and replaces only the selected part
+                count = replaceInPlacePartial(timeSelectionSourceItem, stems, timeSelectionStart, timeSelectionEnd)
+                resultMsg = count == 1 and "Selection replaced with stem." or "Selection replaced with stems as takes (press T to switch)."
+            else
+                -- Fallback: create new tracks if no source item
+                count = createStemTracksForSelection(stems, itemPos, itemLen)
+                resultMsg = count .. " stem track(s) created from time selection."
+            end
+        end
+    elseif SETTINGS.createNewTracks then
         count = createStemTracks(selectedItem, stems, itemPos, itemLen)
+        local action = SETTINGS.deleteOriginalTrack and "Track deleted." or
+                       (SETTINGS.deleteOriginal and "Item deleted." or "Item muted.")
+        resultMsg = count .. " stem track(s) created.\n" .. action
     else
         count = replaceInPlace(selectedItem, stems, itemPos, itemLen)
+        resultMsg = count == 1 and "Stem replaced." or "Stems added as takes (press T to switch)."
     end
 
     local selectedNames = {}
     for _, stem in ipairs(STEMS) do
         if stem.selected then selectedNames[#selectedNames + 1] = stem.name end
-    end
-
-    local resultMsg
-    if SETTINGS.createNewTracks then
-        local action = SETTINGS.deleteOriginalTrack and "Track deleted." or
-                       (SETTINGS.deleteOriginal and "Item deleted." or "Item muted.")
-        resultMsg = count .. " stem track(s) created.\n" .. action
-    else
-        resultMsg = count == 1 and "Stem replaced." or "Stems added as takes (press T to switch)."
     end
 
     reaper.MB("Separation complete!\n\nExtracted: " .. table.concat(selectedNames, ", ") .. "\n\n" .. resultMsg, SCRIPT_NAME, 0)
@@ -907,13 +1198,23 @@ end
 -- Main
 local function main()
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
-    if not selectedItem then
-        reaper.MB("Please select a media item to separate.", SCRIPT_NAME, 0)
-        return
-    end
+    timeSelectionMode = false
 
-    itemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
-    itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
+    if not selectedItem then
+        -- No item selected - check for time selection
+        if hasTimeSelection() then
+            timeSelectionMode = true
+            timeSelectionStart, timeSelectionEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+            itemPos = timeSelectionStart
+            itemLen = timeSelectionEnd - timeSelectionStart
+        else
+            reaper.MB("Please select a media item or make a time selection to separate.", SCRIPT_NAME, 0)
+            return
+        end
+    else
+        itemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
+        itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
+    end
 
     -- Load settings first
     loadSettings()
