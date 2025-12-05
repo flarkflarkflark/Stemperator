@@ -2,45 +2,52 @@
 
 ## Project Overview
 
-**Stemperator** is a real-time stem separation VST3 plugin that uses AI/ML models (Demucs, Spleeter) to separate audio into stems:
+**Stemperator** is an AI-powered stem separation VST3 plugin and standalone application by flarkAUDIO. It separates audio into 4 stems:
 - **Vocals** - Lead and backing vocals
 - **Drums** - Percussion and drums
 - **Bass** - Bass guitar and low-frequency instruments
 - **Other** - Everything else (guitars, synths, keys, etc.)
 
-The plugin can operate in real-time within a DAW or process files in the standalone application.
+## Current Implementation Status
+
+| Feature | Status | Implementation |
+|---------|--------|----------------|
+| Multi-output VST3 | ✅ Done | 4 stereo outputs routable in DAW |
+| Premium Scalable GUI | ✅ Done | FabFilter-style, 600x400 to 1600x1000 |
+| GPU Spectral Separation | ✅ Done | rocFFT on AMD, OpenCL fallback |
+| Demucs AI Integration | ✅ Done | Python subprocess, PyTorch backend |
+| Real-time Demucs | ❌ Future | Complex, requires streaming inference |
 
 ## Building
 
 ### Prerequisites
 
 ```bash
-# Install JUCE (submodule)
-git submodule add https://github.com/juce-framework/JUCE.git JUCE
+# JUCE is included as submodule
 git submodule update --init --recursive
 
-# Install LibTorch (optional, for Demucs models)
-# Download from https://pytorch.org/get-started/locally/
-# Extract to /opt/libtorch or set TORCH_DIR
+# Optional: GPU acceleration (AMD)
+sudo pacman -S rocm-hip-sdk rocfft  # Arch Linux
 
-# Or use ONNX Runtime (lighter weight)
-# sudo apt install libonnxruntime-dev
+# Optional: AI separation
+./scripts/setup_demucs.sh  # Installs PyTorch + Demucs
 ```
 
 ### Build Commands
 
 ```bash
 mkdir build && cd build
-cmake .. -DCMAKE_BUILD_TYPE=Release
-cmake --build . --config Release
+cmake ..  # Auto-detects GPU backend
+cmake --build . --config Release -j8
 ```
 
 ### Build Options
 
 ```bash
-cmake -DUSE_LIBTORCH=ON ..   # Enable Demucs (default)
-cmake -DUSE_ONNX=ON ..       # Use ONNX Runtime instead
-cmake -DUSE_LIBTORCH=OFF -DUSE_ONNX=OFF ..  # Spectral-only (no AI)
+cmake -DGPU_BACKEND=HIP ..      # Force AMD ROCm
+cmake -DGPU_BACKEND=OPENCL ..   # Force OpenCL (universal)
+cmake -DGPU_BACKEND=NONE ..     # CPU only
+cmake -DENABLE_GPU=OFF ..       # Disable GPU detection
 ```
 
 ## Architecture
@@ -48,22 +55,24 @@ cmake -DUSE_LIBTORCH=OFF -DUSE_ONNX=OFF ..  # Spectral-only (no AI)
 ```
 Stemperator/
 ├── Source/
-│   ├── PluginProcessor.cpp/h    # Audio processing engine
-│   ├── PluginEditor.cpp/h       # Main GUI
+│   ├── PluginProcessor.cpp/h     # Main processor (StemSeparatorImpl alias)
+│   ├── PluginEditor.cpp/h        # Premium scalable GUI
 │   ├── DSP/
-│   │   ├── StemSeparator.cpp/h      # Main separator (orchestrates)
-│   │   ├── SpectralSeparator.cpp/h  # FFT-based fallback separation
-│   │   └── DemucsModel.cpp/h        # AI model inference wrapper
-│   ├── GUI/
-│   │   ├── StemMixer.cpp/h      # 4-channel stem mixer with faders
-│   │   └── WaveformView.cpp/h   # Waveform display per stem
-│   └── Utils/
-│       └── ModelLoader.cpp/h    # Load/manage ML models
-├── models/                       # Pre-trained model files
-│   ├── demucs_v4.pt             # Demucs v4 PyTorch model
-│   └── htdemucs.onnx            # ONNX converted model
-└── Resources/
-    └── presets/                  # Factory presets
+│   │   ├── StemSeparator.cpp/h       # CPU spectral separation (fallback)
+│   │   └── SpectralProcessor.cpp/h   # FFT utilities
+│   ├── GPU/
+│   │   └── GPUStemSeparator.cpp/h    # rocFFT-accelerated separation
+│   ├── AI/
+│   │   ├── DemucsProcessor.cpp/h     # C++ wrapper for Demucs
+│   │   └── demucs_process.py         # Python processing script
+│   └── GUI/
+│       ├── StemChannel.cpp/h         # Individual stem controls
+│       ├── Visualizer.cpp/h          # Spectrum/level display
+│       └── PremiumLookAndFeel.h      # FabFilter-style theme
+├── scripts/
+│   └── setup_demucs.sh           # Dependency installer
+└── build/
+    └── Stemperator_artefacts/    # Build outputs
 ```
 
 ## DSP Pipeline

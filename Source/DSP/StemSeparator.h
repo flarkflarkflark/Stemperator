@@ -39,6 +39,10 @@ public:
     void setVocalsFocus (float focus) { vocalsFocus = juce::jlimit (0.0f, 1.0f, focus); }
     void setDrumSensitivity (float sens) { drumSensitivity = juce::jlimit (0.0f, 1.0f, sens); }
 
+    /** GPU status (CPU version always returns false) */
+    bool isUsingGPU() const { return false; }
+    juce::String getGPUInfo() const { return "CPU Processing"; }
+
 private:
     double sampleRate = 44100.0;
     int blockSize = 512;

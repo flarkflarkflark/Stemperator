@@ -8,21 +8,51 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Add JUCE
 add_subdirectory(JUCE)
 
-# GPU Acceleration (optional)
-option(ENABLE_GPU "Enable GPU acceleration via OpenCL" ON)
+# =============================================================================
+# GPU Acceleration Detection
+# =============================================================================
+option(ENABLE_GPU "Enable GPU acceleration" ON)
+set(GPU_BACKEND "AUTO" CACHE STRING "GPU backend: AUTO, HIP, OPENCL, NONE")
+
+set(USE_HIP OFF)
+set(USE_OPENCL OFF)
 
 if(ENABLE_GPU)
-    find_package(OpenCL QUIET)
-    if(OpenCL_FOUND)
-        message(STATUS "OpenCL found - GPU acceleration enabled")
-        add_definitions(-DUSE_OPENCL=1)
-    else()
-        message(STATUS "OpenCL not found - using CPU only")
-        set(ENABLE_GPU OFF)
+    if(GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "HIP")
+        # Try to find HIP/ROCm first (AMD GPUs)
+        list(APPEND CMAKE_PREFIX_PATH "/opt/rocm" "/opt/rocm/hip")
+
+        find_package(hip QUIET CONFIG)
+        find_package(rocfft QUIET CONFIG)
+
+        if(hip_FOUND AND rocfft_FOUND)
+            message(STATUS "✓ HIP/ROCm found - GPU acceleration enabled for AMD GPUs")
+            message(STATUS "  HIP version: ${hip_VERSION}")
+            set(USE_HIP ON)
+        elseif(GPU_BACKEND STREQUAL "HIP")
+            message(FATAL_ERROR "HIP requested but not found. Install ROCm or set GPU_BACKEND=AUTO")
+        endif()
+    endif()
+
+    if(NOT USE_HIP AND (GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "OPENCL"))
+        # Fall back to OpenCL (works on all GPUs)
+        find_package(OpenCL QUIET)
+        if(OpenCL_FOUND)
+            message(STATUS "✓ OpenCL found - GPU acceleration enabled (universal)")
+            set(USE_OPENCL ON)
+        elseif(GPU_BACKEND STREQUAL "OPENCL")
+            message(FATAL_ERROR "OpenCL requested but not found")
+        endif()
+    endif()
+
+    if(NOT USE_HIP AND NOT USE_OPENCL)
+        message(STATUS "✗ No GPU backend found - using CPU only")
     endif()
 endif()
 
-# Plugin definition - MULTI-OUTPUT for stem separation
+# =============================================================================
+# Plugin Definition - MULTI-OUTPUT for stem separation
+# =============================================================================
 juce_add_plugin(Stemperator
     COMPANY_NAME "flarkAUDIO"
     COMPANY_WEBSITE "https://github.com/flarkflarkflark/Stemperator"
@@ -51,8 +81,10 @@ juce_add_plugin(Stemperator
 
 juce_generate_juce_header(Stemperator)
 
-# Source files
-target_sources(Stemperator PRIVATE
+# =============================================================================
+# Source Files
+# =============================================================================
+set(STEMPERATOR_SOURCES
     Source/PluginProcessor.cpp
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
@@ -65,8 +97,31 @@ target_sources(Stemperator PRIVATE
     Source/GUI/StemChannel.h
     Source/GUI/Visualizer.cpp
     Source/GUI/Visualizer.h
+    Source/GUI/PremiumLookAndFeel.h
+    Source/GUI/SeparationWizard.cpp
+    Source/GUI/SeparationWizard.h
+    # AI-powered stem separation
+    Source/AI/DemucsProcessor.cpp
+    Source/AI/DemucsProcessor.h
+    Source/AI/UVRProcessor.cpp
+    Source/AI/UVRProcessor.h
+    Source/AI/SeparationWorkflow.cpp
+    Source/AI/SeparationWorkflow.h
 )
 
+# Add GPU sources if available
+if(USE_HIP OR USE_OPENCL)
+    list(APPEND STEMPERATOR_SOURCES
+        Source/GPU/GPUStemSeparator.cpp
+        Source/GPU/GPUStemSeparator.h
+    )
+endif()
+
+target_sources(Stemperator PRIVATE ${STEMPERATOR_SOURCES})
+
+# =============================================================================
+# Compile Definitions
+# =============================================================================
 target_compile_definitions(Stemperator
     PUBLIC
         JUCE_WEB_BROWSER=0
@@ -74,8 +129,23 @@ target_compile_definitions(Stemperator
         JUCE_VST3_CAN_REPLACE_VST2=0
         JUCE_DISPLAY_SPLASH_SCREEN=0
         JUCE_MODAL_LOOPS_PERMITTED=1
+        # Disable VSync to reduce GPU idle usage on Linux
+        JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=0
+        # Standalone settings - disable audio input (we only process files)
+        JUCE_STANDALONE_FILTER_WINDOW_USE_KIOSK_MODE=0
+        JucePlugin_WantsMidiInput=0
+        JucePlugin_ProducesMidiOutput=0
 )
 
+if(USE_HIP)
+    target_compile_definitions(Stemperator PUBLIC USE_HIP=1)
+elseif(USE_OPENCL)
+    target_compile_definitions(Stemperator PUBLIC USE_OPENCL=1)
+endif()
+
+# =============================================================================
+# Link Libraries
+# =============================================================================
 target_link_libraries(Stemperator
     PRIVATE
         juce::juce_audio_basics
@@ -97,6 +167,47 @@ target_link_libraries(Stemperator
         juce::juce_recommended_warning_flags
 )
 
-if(ENABLE_GPU AND OpenCL_FOUND)
+# Link GPU libraries
+if(USE_HIP)
+    target_link_libraries(Stemperator PRIVATE hip::host roc::rocfft)
+    target_include_directories(Stemperator PRIVATE /opt/rocm/include)
+elseif(USE_OPENCL)
     target_link_libraries(Stemperator PRIVATE OpenCL::OpenCL)
 endif()
+
+# =============================================================================
+# Copy AI scripts to build directories
+# =============================================================================
+# Copy to Standalone directory
+add_custom_command(TARGET Stemperator_Standalone POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/Source/AI/demucs_process.py
+        $<TARGET_FILE_DIR:Stemperator_Standalone>/demucs_process.py
+    COMMENT "Copying Demucs script to Standalone"
+)
+
+# Copy to VST3 directory
+add_custom_command(TARGET Stemperator_VST3 POST_BUILD
+    COMMAND ${CMAKE_COMMAND} -E copy_if_different
+        ${CMAKE_SOURCE_DIR}/Source/AI/demucs_process.py
+        ${CMAKE_BINARY_DIR}/Stemperator_artefacts/VST3/demucs_process.py
+    COMMENT "Copying Demucs script to VST3"
+)
+
+# =============================================================================
+# GPU Status Summary
+# =============================================================================
+message(STATUS "")
+message(STATUS "=== Stemperator Build Configuration ===")
+message(STATUS "  Version: ${PROJECT_VERSION}")
+if(USE_HIP)
+    message(STATUS "  GPU Backend: HIP/ROCm (AMD optimized)")
+    message(STATUS "  rocFFT: Enabled")
+elseif(USE_OPENCL)
+    message(STATUS "  GPU Backend: OpenCL (universal)")
+else()
+    message(STATUS "  GPU Backend: None (CPU only)")
+endif()
+message(STATUS "  AI Separation: UVR/Demucs (requires Python + audio-separator)")
+message(STATUS "  Install AI: pip install audio-separator[gpu]")
+message(STATUS "")

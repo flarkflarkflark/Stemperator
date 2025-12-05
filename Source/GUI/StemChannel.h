@@ -12,8 +12,7 @@
  * - Clean typography and spacing
  */
 class StemChannel : public juce::Component,
-                    public juce::Button::Listener,
-                    public juce::Timer
+                    public juce::Button::Listener
 {
 public:
     StemChannel (const juce::String& name, juce::Colour colour);
@@ -21,7 +20,6 @@ public:
     void paint (juce::Graphics&) override;
     void resized() override;
     void buttonClicked (juce::Button* button) override;
-    void timerCallback() override { repaint(); }
 
     // Parameter attachment
     void attachToParameters (juce::AudioProcessorValueTreeState& apvts,

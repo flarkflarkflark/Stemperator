@@ -29,6 +29,8 @@ public:
         static inline const juce::Colour drums      = juce::Colour (0xff5599ff);  // Electric blue
         static inline const juce::Colour bass       = juce::Colour (0xff55ff99);  // Neon green
         static inline const juce::Colour other      = juce::Colour (0xffffaa33);  // Warm orange
+        static inline const juce::Colour guitar     = juce::Colour (0xffffb450);  // Golden orange (6-stem)
+        static inline const juce::Colour piano      = juce::Colour (0xffff78c8);  // Pink magenta (6-stem)
 
         // UI accents
         static inline const juce::Colour accent     = juce::Colour (0xff7b68ee);  // Medium slate blue

@@ -25,6 +25,9 @@ public:
     void setStemLevels (float vocals, float drums, float bass, float other);
     void setInputLevel (float level);
 
+    // Animation control - call setActive(true) when playing/exporting
+    void setActive (bool shouldBeActive);
+
 private:
     std::array<float, 4> stemLevels = { 0, 0, 0, 0 };
     std::array<float, 4> displayLevels = { 0, 0, 0, 0 };
