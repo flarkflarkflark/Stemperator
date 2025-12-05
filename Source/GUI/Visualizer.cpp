@@ -1,9 +1,14 @@
 #include "Visualizer.h"
 #include "PremiumLookAndFeel.h"
+#include <cmath>
 
 Visualizer::Visualizer()
 {
-    startTimerHz (30);  // 30 FPS
+    // Don't start timer - will be started when setActive(true) is called
+
+    // Optimize rendering - cache to reduce GPU load when idle
+    setBufferedToImage (true);
+    setOpaque (true);
 }
 
 void Visualizer::paint (juce::Graphics& g)
@@ -135,16 +140,27 @@ void Visualizer::resized()
 
 void Visualizer::timerCallback()
 {
+    // Track if anything has changed that requires a repaint
+    bool needsRepaint = false;
+    constexpr float changeThreshold = 0.001f;  // Minimum change to trigger repaint
+
     // Smooth level display with fast attack, slow release
     for (size_t i = 0; i < 4; ++i)
     {
         float target = stemLevels[i];
+        float oldDisplay = displayLevels[i];
+
         if (target > displayLevels[i])
             displayLevels[i] = target;  // Fast attack
         else
             displayLevels[i] = displayLevels[i] * 0.88f + target * 0.12f;  // Smooth release
 
+        // Check if display changed significantly
+        if (std::abs (displayLevels[i] - oldDisplay) > changeThreshold)
+            needsRepaint = true;
+
         // Peak hold
+        float oldPeak = peakLevels[i];
         if (target >= peakLevels[i])
         {
             peakLevels[i] = target;
@@ -156,16 +172,30 @@ void Visualizer::timerCallback()
             if (peakHoldCounts[i] > peakHoldTime)
                 peakLevels[i] *= 0.93f;
         }
+
+        if (std::abs (peakLevels[i] - oldPeak) > changeThreshold)
+            needsRepaint = true;
     }
 
+    float oldInputDisplay = displayInputLevel;
     displayInputLevel = displayInputLevel * 0.85f + inputLevel * 0.15f;
+    if (std::abs (displayInputLevel - oldInputDisplay) > changeThreshold)
+        needsRepaint = true;
 
-    // Update animation phase
-    animationPhase += 0.1f;
-    if (animationPhase > juce::MathConstants<float>::twoPi)
-        animationPhase -= juce::MathConstants<float>::twoPi;
+    // Update animation phase only if there are active levels (something is playing)
+    bool hasActiveLevels = (displayLevels[0] > 0.01f || displayLevels[1] > 0.01f ||
+                            displayLevels[2] > 0.01f || displayLevels[3] > 0.01f);
+    if (hasActiveLevels)
+    {
+        animationPhase += 0.1f;
+        if (animationPhase > juce::MathConstants<float>::twoPi)
+            animationPhase -= juce::MathConstants<float>::twoPi;
+        needsRepaint = true;  // Animation needs repaint
+    }
 
-    repaint();
+    // Only repaint if something actually changed
+    if (needsRepaint)
+        repaint();
 }
 
 void Visualizer::setStemLevels (float vocals, float drums, float bass, float other)
@@ -179,4 +209,12 @@ void Visualizer::setStemLevels (float vocals, float drums, float bass, float oth
 void Visualizer::setInputLevel (float level)
 {
     inputLevel = level;
+}
+
+void Visualizer::setActive (bool shouldBeActive)
+{
+    if (shouldBeActive && ! isTimerRunning())
+        startTimerHz (30);
+    else if (! shouldBeActive && isTimerRunning())
+        stopTimer();
 }

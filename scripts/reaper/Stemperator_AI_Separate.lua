@@ -1,7 +1,16 @@
 -- @description Stemperator - AI Stem Separation
 -- @author flarkAUDIO
--- @version 1.1.1
+-- @version 1.3.0
 -- @changelog
+--   v1.3.0: 6-stem model support with Guitar/Piano
+--   - Guitar and Piano checkboxes appear when 6-stem model selected
+--   - Keys 5/6 toggle Guitar/Piano stems
+--   - Presets updated to include Guitar/Piano when using 6-stem model
+--   v1.2.0: Scalable/resizable GUI
+--   - Window is now resizable (drag edges/corners)
+--   - All elements scale proportionally with window size
+--   - Minimum size: 380x340, Maximum: 760x680
+--   - Window size persists between sessions
 --   v1.1.1: Cross-platform support
 --   - Full Windows, Linux, and macOS compatibility
 --   - Auto-detect Python and ffmpeg paths per platform
@@ -117,11 +126,14 @@ local PYTHON_PATH = findPython()
 local SEPARATOR_SCRIPT = findSeparatorScript()
 
 -- Stem configuration (with selection state)
+-- First 4 are always shown, Guitar/Piano only for 6-stem model
 local STEMS = {
-    { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true, key = "1" },
-    { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true, key = "2" },
-    { name = "Bass",   color = {150, 100, 255}, file = "bass.wav", selected = true, key = "3" },
-    { name = "Other",  color = {100, 255, 150}, file = "other.wav", selected = true, key = "4" },
+    { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true, key = "1", sixStemOnly = false },
+    { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true, key = "2", sixStemOnly = false },
+    { name = "Bass",   color = {150, 100, 255}, file = "bass.wav", selected = true, key = "3", sixStemOnly = false },
+    { name = "Other",  color = {100, 255, 150}, file = "other.wav", selected = true, key = "4", sixStemOnly = false },
+    { name = "Guitar", color = {255, 180, 80},  file = "guitar.wav", selected = true, key = "5", sixStemOnly = true },
+    { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
 
 -- Available models
@@ -145,6 +157,14 @@ local GUI = {
     running = false,
     result = nil,
     wasMouseDown = false,
+    -- Scaling
+    baseW = 380,
+    baseH = 340,
+    minW = 380,
+    minH = 340,
+    maxW = 1520,  -- Up to 4x scale
+    maxH = 1360,
+    scale = 1.0,
 }
 
 -- Load settings from ExtState
@@ -169,6 +189,12 @@ local function loadSettings()
         local sel = reaper.GetExtState(EXT_SECTION, "stem_" .. stem.name)
         if sel ~= "" then STEMS[i].selected = (sel == "1") end
     end
+
+    -- Load window size
+    local winW = reaper.GetExtState(EXT_SECTION, "windowWidth")
+    local winH = reaper.GetExtState(EXT_SECTION, "windowHeight")
+    if winW ~= "" then GUI.savedW = tonumber(winW) end
+    if winH ~= "" then GUI.savedH = tonumber(winH) end
 end
 
 -- Save settings to ExtState
@@ -181,6 +207,12 @@ local function saveSettings()
 
     for _, stem in ipairs(STEMS) do
         reaper.SetExtState(EXT_SECTION, "stem_" .. stem.name, stem.selected and "1" or "0", true)
+    end
+
+    -- Save window size
+    if gfx.w > 0 and gfx.h > 0 then
+        reaper.SetExtState(EXT_SECTION, "windowWidth", tostring(gfx.w), true)
+        reaper.SetExtState(EXT_SECTION, "windowHeight", tostring(gfx.h), true)
     end
 end
 
@@ -222,12 +254,26 @@ local function rgbToReaperColor(r, g, b)
     return reaper.ColorToNative(r, g, b) | 0x1000000
 end
 
--- Draw a checkbox and return if it was clicked
+-- Scaling helper: converts base coordinates to current scale
+local function S(val)
+    return math.floor(val * GUI.scale + 0.5)
+end
+
+-- Calculate current scale based on window size
+local function updateScale()
+    local scaleW = gfx.w / GUI.baseW
+    local scaleH = gfx.h / GUI.baseH
+    GUI.scale = math.min(scaleW, scaleH)
+    -- Clamp scale (1.0 to 4.0)
+    GUI.scale = math.max(1.0, math.min(4.0, GUI.scale))
+end
+
+-- Draw a checkbox and return if it was clicked (scaled)
 local function drawCheckbox(x, y, checked, label, r, g, b)
-    local boxSize = 18
+    local boxSize = S(18)
     local clicked = false
     local labelWidth = gfx.measurestr(label)
-    local totalWidth = boxSize + 8 + labelWidth
+    local totalWidth = boxSize + S(8) + labelWidth
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local mouseDown = gfx.mouse_cap & 1 == 1
 
@@ -246,28 +292,29 @@ local function drawCheckbox(x, y, checked, label, r, g, b)
 
     if checked then
         gfx.set(1, 1, 1, 1)
-        gfx.line(x + 3, y + 9, x + 7, y + 13)
-        gfx.line(x + 7, y + 13, x + 14, y + 4)
-        gfx.line(x + 3, y + 10, x + 7, y + 14)
-        gfx.line(x + 7, y + 14, x + 14, y + 5)
+        local s = GUI.scale
+        gfx.line(x + S(3), y + S(9), x + S(7), y + S(13))
+        gfx.line(x + S(7), y + S(13), x + S(14), y + S(4))
+        gfx.line(x + S(3), y + S(10), x + S(7), y + S(14))
+        gfx.line(x + S(7), y + S(14), x + S(14), y + S(5))
     end
 
     gfx.set(r/255, g/255, b/255, 1)
-    gfx.x = x + boxSize + 8
-    gfx.y = y + 2
+    gfx.x = x + boxSize + S(8)
+    gfx.y = y + S(2)
     gfx.drawstr(label)
 
     return clicked
 end
 
--- Draw a radio button and return if it was clicked
+-- Draw a radio button and return if it was clicked (scaled)
 local function drawRadio(x, y, selected, label)
-    local radius = 8
+    local radius = S(8)
     local clicked = false
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local mouseDown = gfx.mouse_cap & 1 == 1
 
-    if mouseDown and mx >= x and mx <= x + 150 and my >= y and my <= y + radius * 2 then
+    if mouseDown and mx >= x and mx <= x + S(150) and my >= y and my <= y + radius * 2 then
         if not GUI.wasMouseDown then clicked = true end
     end
 
@@ -276,18 +323,18 @@ local function drawRadio(x, y, selected, label)
 
     if selected then
         gfx.set(0.4, 0.7, 1, 1)
-        gfx.circle(x + radius, y + radius, radius - 3, 1, 1)
+        gfx.circle(x + radius, y + radius, radius - S(3), 1, 1)
     end
 
     gfx.set(0.9, 0.9, 0.9, 1)
-    gfx.x = x + radius * 2 + 8
-    gfx.y = y + 2
+    gfx.x = x + radius * 2 + S(8)
+    gfx.y = y + S(2)
     gfx.drawstr(label)
 
     return clicked
 end
 
--- Draw a small button and return if it was clicked
+-- Draw a small button and return if it was clicked (scaled)
 local function drawButton(x, y, w, h, label, isDefault, color)
     local clicked = false
     local mx, my = gfx.mouse_x, gfx.mouse_y
@@ -318,7 +365,7 @@ local function drawButton(x, y, w, h, label, isDefault, color)
     gfx.set(1, 1, 1, 1)
     local tw = gfx.measurestr(label)
     gfx.x = x + (w - tw) / 2
-    gfx.y = y + (h - 14) / 2
+    gfx.y = y + (h - S(14)) / 2
     gfx.drawstr(label)
 
     return clicked
@@ -326,87 +373,97 @@ end
 
 -- Main dialog loop
 local function dialogLoop()
+    -- Try to make window resizable (needs to be called after window is visible)
+    makeWindowResizable()
+
+    -- Update scale based on current window size
+    updateScale()
+
     gfx.set(0.18, 0.18, 0.2, 1)
     gfx.rect(0, 0, gfx.w, gfx.h, 1)
 
     -- Title
     gfx.set(1, 1, 1, 1)
-    gfx.setfont(1, "Arial", 18, string.byte('b'))
-    gfx.x = 20
-    gfx.y = 12
+    gfx.setfont(1, "Arial", S(18), string.byte('b'))
+    gfx.x = S(20)
+    gfx.y = S(12)
     gfx.drawstr("Stemperator - AI Stem Separation")
 
-    gfx.setfont(1, "Arial", 13)
+    gfx.setfont(1, "Arial", S(13))
 
     -- === LEFT COLUMN: Stems ===
+    local is6Stem = (SETTINGS.model == "htdemucs_6s")
     gfx.set(0.7, 0.7, 0.7, 1)
-    gfx.x = 20
-    gfx.y = 45
-    gfx.drawstr("Stems (1-4):")
+    gfx.x = S(20)
+    gfx.y = S(45)
+    gfx.drawstr(is6Stem and "Stems (1-6):" or "Stems (1-4):")
 
-    local y = 65
+    local y = S(65)
     for i, stem in ipairs(STEMS) do
-        local label = stem.key .. " " .. stem.name
-        if drawCheckbox(25, y, stem.selected, label, stem.color[1], stem.color[2], stem.color[3]) then
-            STEMS[i].selected = not STEMS[i].selected
+        -- Only show Guitar/Piano if 6-stem model selected
+        if not stem.sixStemOnly or is6Stem then
+            local label = stem.key .. " " .. stem.name
+            if drawCheckbox(S(25), y, stem.selected, label, stem.color[1], stem.color[2], stem.color[3]) then
+                STEMS[i].selected = not STEMS[i].selected
+            end
+            y = y + S(24)
         end
-        y = y + 24
     end
 
     -- Presets section
     gfx.set(0.7, 0.7, 0.7, 1)
-    gfx.x = 20
-    gfx.y = y + 8
+    gfx.x = S(20)
+    gfx.y = y + S(8)
     gfx.drawstr("Presets:")
 
-    y = y + 28
-    if drawButton(25, y, 60, 22, "All", false) then applyPresetAll() end
-    if drawButton(90, y, 70, 22, "Karaoke", false, {100, 180, 100}) then applyPresetKaraoke() end
-    y = y + 26
-    if drawButton(25, y, 60, 22, "Vocals", false, {255, 100, 100}) then applyPresetVocalsOnly() end
-    if drawButton(90, y, 70, 22, "Drums", false, {100, 200, 255}) then applyPresetDrumsOnly() end
+    y = y + S(28)
+    if drawButton(S(25), y, S(60), S(22), "All", false) then applyPresetAll() end
+    if drawButton(S(90), y, S(70), S(22), "Karaoke", false, {100, 180, 100}) then applyPresetKaraoke() end
+    y = y + S(26)
+    if drawButton(S(25), y, S(60), S(22), "Vocals", false, {255, 100, 100}) then applyPresetVocalsOnly() end
+    if drawButton(S(90), y, S(70), S(22), "Drums", false, {100, 200, 255}) then applyPresetDrumsOnly() end
 
     -- === RIGHT COLUMN: Model & Options ===
     gfx.set(0.7, 0.7, 0.7, 1)
-    gfx.x = 180
-    gfx.y = 45
+    gfx.x = S(180)
+    gfx.y = S(45)
     gfx.drawstr("AI Model:")
 
-    y = 65
+    y = S(65)
     for _, model in ipairs(MODELS) do
-        if drawRadio(185, y, SETTINGS.model == model.id, model.name) then
+        if drawRadio(S(185), y, SETTINGS.model == model.id, model.name) then
             SETTINGS.model = model.id
         end
-        y = y + 24
+        y = y + S(24)
     end
 
     -- Output mode
     gfx.set(0.7, 0.7, 0.7, 1)
-    gfx.x = 180
-    gfx.y = y + 10
+    gfx.x = S(180)
+    gfx.y = y + S(10)
     gfx.drawstr("Output:")
 
-    y = y + 28
-    if drawRadio(185, y, SETTINGS.createNewTracks, "New tracks") then
+    y = y + S(28)
+    if drawRadio(S(185), y, SETTINGS.createNewTracks, "New tracks") then
         SETTINGS.createNewTracks = true
     end
-    y = y + 22
-    if drawRadio(185, y, not SETTINGS.createNewTracks, "In-place (takes)") then
+    y = y + S(22)
+    if drawRadio(S(185), y, not SETTINGS.createNewTracks, "In-place (takes)") then
         SETTINGS.createNewTracks = false
     end
 
     -- Options (only when creating new tracks)
     if SETTINGS.createNewTracks then
-        y = y + 28
-        if drawCheckbox(185, y, SETTINGS.createFolder, "Group in folder", 160, 160, 160) then
+        y = y + S(28)
+        if drawCheckbox(S(185), y, SETTINGS.createFolder, "Group in folder", 160, 160, 160) then
             SETTINGS.createFolder = not SETTINGS.createFolder
         end
-        y = y + 22
-        if drawCheckbox(185, y, SETTINGS.deleteOriginal, "Delete item", 160, 160, 160) then
+        y = y + S(22)
+        if drawCheckbox(S(185), y, SETTINGS.deleteOriginal, "Delete item", 160, 160, 160) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
         end
-        y = y + 22
-        if drawCheckbox(185, y, SETTINGS.deleteOriginalTrack, "Delete track", 255, 120, 120) then
+        y = y + S(22)
+        if drawCheckbox(S(185), y, SETTINGS.deleteOriginalTrack, "Delete track", 255, 120, 120) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then SETTINGS.deleteOriginal = true end
         end
@@ -414,18 +471,24 @@ local function dialogLoop()
 
     -- Keyboard shortcuts hint
     gfx.set(0.5, 0.5, 0.5, 1)
-    gfx.setfont(1, "Arial", 11)
-    gfx.x = 20
-    gfx.y = gfx.h - 65
-    gfx.drawstr("Keys: 1-4=stems, K=karaoke, I=instrumental, D=drums")
+    gfx.setfont(1, "Arial", S(11))
+    gfx.x = S(20)
+    gfx.y = gfx.h - S(65)
+    if is6Stem then
+        gfx.drawstr("Keys: 1-6=stems, K=karaoke, A=all, +/-=resize")
+    else
+        gfx.drawstr("Keys: 1-4=stems, K=karaoke, A=all, +/-=resize")
+    end
 
     -- Buttons
-    gfx.setfont(1, "Arial", 13)
-    local btnY = gfx.h - 40
-    if drawButton(gfx.w - 185, btnY, 80, 28, "Cancel", false) then
+    gfx.setfont(1, "Arial", S(13))
+    local btnY = gfx.h - S(40)
+    local btnW = S(80)
+    local btnH = S(28)
+    if drawButton(gfx.w - S(185), btnY, btnW, btnH, "Cancel", false) then
         GUI.result = false
     end
-    if drawButton(gfx.w - 95, btnY, 80, 28, "Separate", true) then
+    if drawButton(gfx.w - S(95), btnY, btnW, btnH, "Separate", true) then
         local anySelected = false
         for _, stem in ipairs(STEMS) do
             if stem.selected then anySelected = true; break end
@@ -453,15 +516,25 @@ local function dialogLoop()
             saveSettings()
             GUI.result = true
         end
-    elseif char == 49 then STEMS[1].selected = not STEMS[1].selected  -- 1
-    elseif char == 50 then STEMS[2].selected = not STEMS[2].selected  -- 2
-    elseif char == 51 then STEMS[3].selected = not STEMS[3].selected  -- 3
-    elseif char == 52 then STEMS[4].selected = not STEMS[4].selected  -- 4
+    elseif char == 49 then STEMS[1].selected = not STEMS[1].selected  -- 1: Vocals
+    elseif char == 50 then STEMS[2].selected = not STEMS[2].selected  -- 2: Drums
+    elseif char == 51 then STEMS[3].selected = not STEMS[3].selected  -- 3: Bass
+    elseif char == 52 then STEMS[4].selected = not STEMS[4].selected  -- 4: Other
+    elseif char == 53 and SETTINGS.model == "htdemucs_6s" then STEMS[5].selected = not STEMS[5].selected  -- 5: Guitar (6-stem only)
+    elseif char == 54 and SETTINGS.model == "htdemucs_6s" then STEMS[6].selected = not STEMS[6].selected  -- 6: Piano (6-stem only)
     elseif char == 107 or char == 75 then applyPresetKaraoke()  -- K
     elseif char == 105 or char == 73 then applyPresetInstrumental()  -- I
     elseif char == 100 or char == 68 then applyPresetDrumsOnly()  -- D
     elseif char == 118 or char == 86 then applyPresetVocalsOnly()  -- V
     elseif char == 97 or char == 65 then applyPresetAll()  -- A
+    elseif char == 43 or char == 61 then  -- + or = to grow window
+        local newW = math.min(GUI.maxW, gfx.w + 76)
+        local newH = math.min(GUI.maxH, gfx.h + 68)
+        gfx.init(SCRIPT_NAME, newW, newH)
+    elseif char == 45 then  -- - to shrink window
+        local newW = math.max(GUI.minW, gfx.w - 76)
+        local newH = math.max(GUI.minH, gfx.h - 68)
+        gfx.init(SCRIPT_NAME, newW, newH)
     end
 
     gfx.update()
@@ -474,6 +547,39 @@ local function dialogLoop()
             reaper.defer(runSeparationWorkflow)
         end
     end
+end
+
+-- Track if we've made window resizable
+local windowResizableSet = false
+
+-- Make window resizable using JS_ReaScriptAPI (if available)
+local function makeWindowResizable()
+    if windowResizableSet then return true end
+    if not reaper.JS_Window_Find then return false end
+
+    -- Find the gfx window
+    local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
+    if not hwnd then return false end
+
+    -- On Linux/X11, use different approach - set window hints
+    if OS == "Linux" then
+        -- For Linux, we need to modify GDK window properties
+        -- js_ReaScriptAPI doesn't directly support this, but we can try
+        local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
+        if style then
+            -- Try to add resize style bits
+            reaper.JS_Window_SetLong(hwnd, "STYLE", style | 0x00040000 | 0x00010000)
+        end
+    else
+        -- Windows: add WS_THICKFRAME and WS_MAXIMIZEBOX
+        local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
+        local WS_THICKFRAME = 0x00040000
+        local WS_MAXIMIZEBOX = 0x00010000
+        reaper.JS_Window_SetLong(hwnd, "STYLE", style | WS_THICKFRAME | WS_MAXIMIZEBOX)
+    end
+
+    windowResizableSet = true
+    return true
 end
 
 -- Show stem selection dialog
@@ -492,13 +598,23 @@ local function showStemSelectionDialog()
         end
     end
 
-    local dialogW, dialogH = 380, 340
+    -- Use saved size if available, otherwise use default
+    local dialogW = GUI.savedW or GUI.baseW
+    local dialogH = GUI.savedH or GUI.baseH
+    -- Clamp to min/max
+    dialogW = math.max(GUI.minW, math.min(GUI.maxW, dialogW))
+    dialogH = math.max(GUI.minH, math.min(GUI.maxH, dialogH))
+
     local mouseX, mouseY = reaper.GetMousePosition()
     local posX = math.max(50, math.min(mouseX - dialogW / 2, screenW - dialogW - 50))
     local posY = math.max(50, math.min(mouseY - 20, screenH - dialogH - 50))
 
     gfx.init(SCRIPT_NAME, dialogW, dialogH, 0, posX, posY)
-    gfx.setfont(1, "Arial", 13)
+
+    -- Make window resizable (requires js_ReaScriptAPI extension)
+    makeWindowResizable()
+
+    gfx.setfont(1, "Arial", S(13))
     dialogLoop()
 end
 

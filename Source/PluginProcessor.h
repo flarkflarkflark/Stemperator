@@ -1,16 +1,27 @@
 #pragma once
 
 #include <JuceHeader.h>
-#include "DSP/StemSeparator.h"
+#include "AI/DemucsProcessor.h"
+
+// Use GPU-accelerated separator when available
+#if USE_HIP || USE_OPENCL
+    #include "GPU/GPUStemSeparator.h"
+    using StemSeparatorImpl = GPUStemSeparator;
+#else
+    #include "DSP/StemSeparator.h"
+    using StemSeparatorImpl = StemSeparator;
+#endif
 
 /**
  * Stemperator - AI-Powered Stem Separation Plugin
  *
- * Multi-output VST3 plugin that separates audio into 4 stems:
+ * Multi-output VST3 plugin that separates audio into 4-6 stems:
  * - Vocals (center channel extraction + harmonic analysis)
  * - Drums (transient detection + spectral percussion)
  * - Bass (low frequency isolation)
  * - Other (residual - everything else)
+ * - Guitar (6-stem model only)
+ * - Piano (6-stem model only)
  *
  * Each stem is output on a separate stereo bus for flexible DAW routing.
  */
@@ -53,9 +64,16 @@ public:
     void parameterChanged (const juce::String& parameterID, float newValue) override;
 
     //==============================================================================
-    // Stem enumeration
-    enum Stem { Vocals = 0, Drums, Bass, Other, NumStems };
-    static constexpr const char* stemNames[NumStems] = { "Vocals", "Drums", "Bass", "Other" };
+    // Stem enumeration - supports up to 6 stems (htdemucs_6s model)
+    static constexpr int MaxStems = 6;
+    static constexpr int NumStems4 = 4;  // Standard 4-stem models
+    static constexpr int NumStems6 = 6;  // 6-stem model (htdemucs_6s)
+    enum Stem { Vocals = 0, Drums, Bass, Other, Guitar, Piano };
+    static constexpr const char* stemNames[MaxStems] = { "Vocals", "Drums", "Bass", "Other", "Guitar", "Piano" };
+
+    // Get number of active stems based on current model
+    int getNumStems() const { return demucsProcessor.is6StemModel() ? NumStems6 : NumStems4; }
+    bool is6StemModel() const { return demucsProcessor.is6StemModel(); }
 
     // Get stem levels for visualization
     float getStemLevel (Stem stem) const { return stemLevels[stem].load(); }
@@ -67,26 +85,49 @@ public:
     juce::AudioProcessorValueTreeState& getParameters() { return parameters; }
 
     // Separator access for advanced features
-    StemSeparator& getSeparator() { return separator; }
+    StemSeparatorImpl& getSeparator() { return separator; }
+
+    // GPU status (only available with GPU build)
+    bool isUsingGPU() const { return separator.isUsingGPU(); }
+    juce::String getGPUInfo() const { return separator.getGPUInfo(); }
+
+    // AI/Demucs status
+    bool isDemucsAvailable() const { return demucsProcessor.isAvailable(); }
+    juce::String getDemucsStatus() const { return demucsProcessor.getStatusMessage(); }
+    DemucsProcessor& getDemucsProcessor() { return demucsProcessor; }
+
+    // Standalone playback support - set an audio source to play through processor
+    void setPlaybackSource (juce::AudioSource* source);
+    juce::AudioSource* getPlaybackSource() const { return playbackSource; }
+
+    // Skip spectral separation (when playing pre-separated stems)
+    void setSkipSeparation (bool skip) { skipSeparation = skip; }
+    bool getSkipSeparation() const { return skipSeparation; }
 
 private:
     //==============================================================================
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
 
     juce::AudioProcessorValueTreeState parameters;
-    StemSeparator separator;
+    StemSeparatorImpl separator;
+    DemucsProcessor demucsProcessor;
 
     // Atomic levels for thread-safe GUI updates
-    std::array<std::atomic<float>, NumStems> stemLevels;
+    std::array<std::atomic<float>, MaxStems> stemLevels;
     std::atomic<float> inputLevel { 0.0f };
 
     // Smoothed parameters
-    juce::LinearSmoothedValue<float> stemGains[NumStems];
+    juce::LinearSmoothedValue<float> stemGains[MaxStems];
     juce::LinearSmoothedValue<float> masterGain;
 
     // Processing state
     double currentSampleRate = 44100.0;
     int currentBlockSize = 512;
+
+    // Standalone playback source (set by editor)
+    juce::AudioSource* playbackSource = nullptr;
+    juce::AudioBuffer<float> playbackBuffer;
+    bool skipSeparation = false;  // Skip GPU processing when playing pre-separated stems
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorProcessor)
 };

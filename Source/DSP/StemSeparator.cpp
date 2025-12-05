@@ -195,31 +195,49 @@ void StemSeparator::separateStems()
     }
 
     // Apply masks and create stem spectra
+    // IMPORTANT: Use soft masks that sum to 1.0 to preserve original level
+    // When stems are summed, they should reconstruct the original signal
     for (int bin = 0; bin < numBins; ++bin)
     {
-        // Normalize masks to sum to ~1
-        float totalMask = bassMask[bin] + vocalsMask[bin] + drumsMask[bin];
-        float otherMask = std::max (0.0f, 1.0f - totalMask);
+        // Calculate raw mask values
+        float rawBass = bassMask[bin];
+        float rawVocals = vocalsMask[bin];
+        float rawDrums = drumsMask[bin];
 
-        // Bass (from mid channel mostly - bass is mono)
-        float bassGain = bassMask[bin];
-        stemSpectraL[Bass][bin] = spectrumMid[bin] * bassGain;
-        stemSpectraR[Bass][bin] = spectrumMid[bin] * bassGain;
+        // Normalize masks to sum to 1.0
+        float totalMask = rawBass + rawVocals + rawDrums;
+        float normFactor = (totalMask > 0.01f) ? (1.0f / totalMask) : 1.0f;
 
-        // Vocals (from mid channel)
-        float vocalsGain = vocalsMask[bin] * (1.0f - bassMask[bin]);
-        stemSpectraL[Vocals][bin] = spectrumMid[bin] * vocalsGain;
-        stemSpectraR[Vocals][bin] = spectrumMid[bin] * vocalsGain;
+        // If total < 1, the remainder goes to "other"
+        float bassGain = rawBass * std::min(normFactor, 1.0f);
+        float vocalsGain = rawVocals * std::min(normFactor, 1.0f);
+        float drumsGain = rawDrums * std::min(normFactor, 1.0f);
 
-        // Drums (transient content from both L+R)
-        float drumsGain = drumsMask[bin] * (1.0f - bassMask[bin]) * (1.0f - vocalsMask[bin]);
+        // Clamp total to 1.0
+        float usedGain = bassGain + vocalsGain + drumsGain;
+        if (usedGain > 1.0f)
+        {
+            float scale = 1.0f / usedGain;
+            bassGain *= scale;
+            vocalsGain *= scale;
+            drumsGain *= scale;
+            usedGain = 1.0f;
+        }
+        float otherGain = 1.0f - usedGain;
+
+        // Apply masks directly to L/R channels (not mid/side)
+        // This preserves the original stereo image and energy
+        stemSpectraL[Bass][bin] = spectrumL[bin] * bassGain;
+        stemSpectraR[Bass][bin] = spectrumR[bin] * bassGain;
+
+        stemSpectraL[Vocals][bin] = spectrumL[bin] * vocalsGain;
+        stemSpectraR[Vocals][bin] = spectrumR[bin] * vocalsGain;
+
         stemSpectraL[Drums][bin] = spectrumL[bin] * drumsGain;
         stemSpectraR[Drums][bin] = spectrumR[bin] * drumsGain;
 
-        // Other (residual - everything that's left)
-        float otherGain = std::max (0.0f, 1.0f - bassGain - vocalsGain - drumsGain);
-        stemSpectraL[Other][bin] = spectrumL[bin] * otherGain + spectrumSide[bin] * (1.0f - vocalsMask[bin]);
-        stemSpectraR[Other][bin] = spectrumR[bin] * otherGain - spectrumSide[bin] * (1.0f - vocalsMask[bin]);
+        stemSpectraL[Other][bin] = spectrumL[bin] * otherGain;
+        stemSpectraR[Other][bin] = spectrumR[bin] * otherGain;
     }
 }
 

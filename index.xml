@@ -1,0 +1,33 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="Stemperator">
+  <category name="Scripts">
+    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation">
+      <version name="1.3.0" author="flarkAUDIO" time="2025-12-05T11:00:00Z">
+        <changelog><![CDATA[v1.3.0: 6-stem model support with Guitar/Piano
+- Guitar and Piano checkboxes appear when 6-stem model selected
+- Keys 5/6 toggle Guitar/Piano stems
+- Presets updated to include Guitar/Piano when using 6-stem model
+
+v1.2.0: Scalable/resizable GUI
+- Window is now resizable (drag edges/corners)
+- All elements scale proportionally with window size
+- Minimum size: 380x340, Maximum: 760x680
+- Window size persists between sessions
+
+v1.1.1: Cross-platform support
+- Full Windows, Linux, and macOS compatibility
+- Auto-detect Python and ffmpeg paths per platform
+
+v1.1.0: Major update
+- Persist settings between sessions
+- Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental
+- Added 6-stem model (htdemucs_6s)
+- Quick preset buttons
+
+v1.0.0: Initial release]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_AI_Separate.lua</source>
+        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Source/AI/audio_separator_process.py</source>
+      </version>
+    </reapack>
+  </category>
+</index>

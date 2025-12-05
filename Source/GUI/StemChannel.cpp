@@ -1,14 +1,18 @@
 #include "StemChannel.h"
 #include "PremiumLookAndFeel.h"
+#include <cmath>
 
 StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
     : stemName (name), stemColour (colour)
 {
+    // Optimize rendering - cache to reduce GPU load when idle
+    setBufferedToImage (true);
+    setOpaque (false);  // StemChannels have rounded corners and transparency
+
     // Gain slider (vertical fader)
+    // Note: Don't set range/value here - the attachment will do it from the parameter
     gainSlider.setSliderStyle (juce::Slider::LinearVertical);
     gainSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 55, 18);
-    gainSlider.setRange (-60.0, 12.0, 0.1);
-    gainSlider.setValue (0.0);
     gainSlider.setTextValueSuffix (" dB");
     gainSlider.setColour (juce::Slider::thumbColourId, stemColour);
     gainSlider.setColour (juce::Slider::trackColourId, stemColour.darker (0.3f));
@@ -42,7 +46,7 @@ StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
     nameLabel.setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
     addAndMakeVisible (nameLabel);
 
-    startTimerHz (30);
+    // Note: No timer needed - the parent editor updates levels via setLevel() which triggers repaint
 }
 
 void StemChannel::paint (juce::Graphics& g)
@@ -171,6 +175,12 @@ void StemChannel::attachToParameters (juce::AudioProcessorValueTreeState& apvts,
 
 void StemChannel::setLevel (float level)
 {
+    // Only update if level changed significantly
+    constexpr float threshold = 0.001f;
+    if (std::abs (level - currentLevel) < threshold &&
+        std::abs (displayLevel - currentLevel) < threshold)
+        return;  // No significant change, skip repaint
+
     currentLevel = level;
     updateMeter();
     repaint();
