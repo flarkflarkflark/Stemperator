@@ -33,7 +33,7 @@ jobs:
     - uses: actions/checkout@v4
 
     - name: Clone JUCE
-      run: git clone --depth 1 --branch 7.0.12 https://github.com/juce-framework/JUCE.git JUCE
+      run: git clone --depth 1 https://github.com/juce-framework/JUCE.git JUCE
 
     - name: Install Linux dependencies
       if: matrix.os == 'ubuntu-latest'
