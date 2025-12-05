@@ -1,7 +1,11 @@
 -- @description Stemperator - AI Stem Separation
 -- @author flarkAUDIO
--- @version 1.1.0
+-- @version 1.1.1
 -- @changelog
+--   v1.1.1: Cross-platform support
+--   - Full Windows, Linux, and macOS compatibility
+--   - Auto-detect Python and ffmpeg paths per platform
+--   - Use correct temp directories and shell commands
 --   v1.1.0: Major update
 --   - Persist settings between sessions (REAPER ExtState)
 --   - Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental, D=Drums Only
@@ -53,30 +57,54 @@ local info = debug.getinfo(1, "S")
 local script_path = info.source:match("@?(.*/)")
 if not script_path then script_path = "" end
 
--- Configuration - Auto-detect paths with known working paths first
+-- Detect OS
+local function getOS()
+    local sep = package.config:sub(1,1)
+    if sep == "\\" then return "Windows"
+    elseif reaper.GetOS():match("OSX") or reaper.GetOS():match("macOS") then return "macOS"
+    else return "Linux"
+    end
+end
+
+local OS = getOS()
+local PATH_SEP = OS == "Windows" and "\\" or "/"
+
+-- Configuration - Auto-detect paths (cross-platform)
 local function findPython()
-    local paths = {
-        "/home/flark/GIT/Stemperator/.venv/bin/python",
-        script_path .. ".venv/bin/python",
-        script_path .. "../.venv/bin/python",
-        os.getenv("HOME") .. "/.local/bin/python3",
-        "/usr/bin/python3",
-        "python3",
-        "python",
-    }
+    local paths = {}
+
+    if OS == "Windows" then
+        -- Windows paths
+        table.insert(paths, script_path .. ".venv\\Scripts\\python.exe")
+        table.insert(paths, script_path .. "..\\..\\..\\venv\\Scripts\\python.exe")
+        table.insert(paths, os.getenv("LOCALAPPDATA") .. "\\Programs\\Python\\Python311\\python.exe")
+        table.insert(paths, os.getenv("LOCALAPPDATA") .. "\\Programs\\Python\\Python310\\python.exe")
+        table.insert(paths, "python")
+    else
+        -- Linux/macOS paths
+        table.insert(paths, script_path .. ".venv/bin/python")
+        table.insert(paths, script_path .. "../.venv/bin/python")
+        if os.getenv("HOME") then
+            table.insert(paths, os.getenv("HOME") .. "/.local/bin/python3")
+        end
+        table.insert(paths, "/usr/local/bin/python3")
+        table.insert(paths, "/usr/bin/python3")
+        table.insert(paths, "python3")
+        table.insert(paths, "python")
+    end
+
     for _, p in ipairs(paths) do
         local f = io.open(p, "r")
         if f then f:close(); return p end
     end
-    return "python3"
+    return OS == "Windows" and "python" or "python3"
 end
 
 local function findSeparatorScript()
     local paths = {
-        "/home/flark/GIT/Stemperator/Source/AI/audio_separator_process.py",
         script_path .. "audio_separator_process.py",
-        script_path .. "../AI/audio_separator_process.py",
-        script_path .. "../../Source/AI/audio_separator_process.py",
+        script_path .. ".." .. PATH_SEP .. "AI" .. PATH_SEP .. "audio_separator_process.py",
+        script_path .. ".." .. PATH_SEP .. ".." .. PATH_SEP .. "Source" .. PATH_SEP .. "AI" .. PATH_SEP .. "audio_separator_process.py",
     }
     for _, p in ipairs(paths) do
         local f = io.open(p, "r")
@@ -474,6 +502,29 @@ local function showStemSelectionDialog()
     dialogLoop()
 end
 
+-- Get temp directory (cross-platform)
+local function getTempDir()
+    if OS == "Windows" then
+        return os.getenv("TEMP") or os.getenv("TMP") or "C:\\Temp"
+    else
+        return os.getenv("TMPDIR") or "/tmp"
+    end
+end
+
+-- Create directory (cross-platform)
+local function makeDir(path)
+    if OS == "Windows" then
+        os.execute('mkdir "' .. path .. '" 2>nul')
+    else
+        os.execute('mkdir -p "' .. path .. '"')
+    end
+end
+
+-- Suppress stderr (cross-platform)
+local function suppressStderr()
+    return OS == "Windows" and " 2>nul" or " 2>/dev/null"
+end
+
 -- Render selected item to a temporary WAV file
 local function renderItemToWav(item, outputPath)
     local take = reaper.GetActiveTake(item)
@@ -491,7 +542,7 @@ local function renderItemToWav(item, outputPath)
     local duration = itemLen * playrate
 
     local ffmpegCmd = string.format(
-        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s" 2>/dev/null',
+        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"' .. suppressStderr(),
         sourceFile, takeOffset, duration, outputPath
     )
 
@@ -505,7 +556,7 @@ end
 -- Run AI separation
 local function runSeparation(inputFile, outputDir, model)
     local cmd = string.format(
-        '"%s" -u "%s" "%s" "%s" --model %s 2>/dev/null',
+        '"%s" -u "%s" "%s" "%s" --model %s' .. suppressStderr(),
         PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model
     )
 
@@ -517,7 +568,7 @@ local function runSeparation(inputFile, outputDir, model)
     local stems = {}
     for _, stem in ipairs(STEMS) do
         if stem.selected then
-            local stemPath = outputDir .. "/" .. stem.file
+            local stemPath = outputDir .. PATH_SEP .. stem.file
             local f = io.open(stemPath, "r")
             if f then f:close(); stems[stem.name:lower()] = stemPath end
         end
@@ -658,9 +709,9 @@ local itemLen = 0
 function runSeparationWorkflow()
     if not selectedItem then return end
 
-    local tempDir = "/tmp/stemperator_" .. os.time()
-    os.execute('mkdir -p "' .. tempDir .. '"')
-    local tempInput = tempDir .. "/input.wav"
+    local tempDir = getTempDir() .. PATH_SEP .. "stemperator_" .. os.time()
+    makeDir(tempDir)
+    local tempInput = tempDir .. PATH_SEP .. "input.wav"
 
     local extracted, err = renderItemToWav(selectedItem, tempInput)
     if not extracted then
