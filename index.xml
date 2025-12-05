@@ -25,8 +25,8 @@ v1.1.0: Major update
 - Quick preset buttons
 
 v1.0.0: Initial release]]></changelog>
-        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_AI_Separate.lua</source>
-        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Source/AI/audio_separator_process.py</source>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/fix-linux-fontconfig-dependency/scripts/reaper/Stemperator_AI_Separate.lua</source>
+        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/fix-linux-fontconfig-dependency/Source/AI/audio_separator_process.py</source>
       </version>
     </reapack>
   </category>
