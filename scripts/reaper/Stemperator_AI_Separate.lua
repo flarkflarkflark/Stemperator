@@ -268,6 +268,39 @@ local function updateScale()
     GUI.scale = math.max(1.0, math.min(4.0, GUI.scale))
 end
 
+-- Track if we've made window resizable
+local windowResizableSet = false
+
+-- Make window resizable using JS_ReaScriptAPI (if available)
+local function makeWindowResizable()
+    if windowResizableSet then return true end
+    if not reaper.JS_Window_Find then return false end
+
+    -- Find the gfx window
+    local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
+    if not hwnd then return false end
+
+    -- On Linux/X11, use different approach - set window hints
+    if OS == "Linux" then
+        -- For Linux, we need to modify GDK window properties
+        -- js_ReaScriptAPI doesn't directly support this, but we can try
+        local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
+        if style then
+            -- Try to add resize style bits
+            reaper.JS_Window_SetLong(hwnd, "STYLE", style | 0x00040000 | 0x00010000)
+        end
+    else
+        -- Windows: add WS_THICKFRAME and WS_MAXIMIZEBOX
+        local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
+        local WS_THICKFRAME = 0x00040000
+        local WS_MAXIMIZEBOX = 0x00010000
+        reaper.JS_Window_SetLong(hwnd, "STYLE", style | WS_THICKFRAME | WS_MAXIMIZEBOX)
+    end
+
+    windowResizableSet = true
+    return true
+end
+
 -- Draw a checkbox and return if it was clicked (scaled)
 local function drawCheckbox(x, y, checked, label, r, g, b)
     local boxSize = S(18)
@@ -547,39 +580,6 @@ local function dialogLoop()
             reaper.defer(runSeparationWorkflow)
         end
     end
-end
-
--- Track if we've made window resizable
-local windowResizableSet = false
-
--- Make window resizable using JS_ReaScriptAPI (if available)
-local function makeWindowResizable()
-    if windowResizableSet then return true end
-    if not reaper.JS_Window_Find then return false end
-
-    -- Find the gfx window
-    local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
-    if not hwnd then return false end
-
-    -- On Linux/X11, use different approach - set window hints
-    if OS == "Linux" then
-        -- For Linux, we need to modify GDK window properties
-        -- js_ReaScriptAPI doesn't directly support this, but we can try
-        local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
-        if style then
-            -- Try to add resize style bits
-            reaper.JS_Window_SetLong(hwnd, "STYLE", style | 0x00040000 | 0x00010000)
-        end
-    else
-        -- Windows: add WS_THICKFRAME and WS_MAXIMIZEBOX
-        local style = reaper.JS_Window_GetLong(hwnd, "STYLE")
-        local WS_THICKFRAME = 0x00040000
-        local WS_MAXIMIZEBOX = 0x00010000
-        reaper.JS_Window_SetLong(hwnd, "STYLE", style | WS_THICKFRAME | WS_MAXIMIZEBOX)
-    end
-
-    windowResizableSet = true
-    return true
 end
 
 -- Show stem selection dialog
