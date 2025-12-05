@@ -14,7 +14,7 @@
 |---------|--------|----------------|
 | Multi-output VST3 | ✅ Done | 4 stereo outputs routable in DAW |
 | Premium Scalable GUI | ✅ Done | FabFilter-style, 600x400 to 1600x1000 |
-| GPU Spectral Separation | ✅ Done | rocFFT on AMD, OpenCL fallback |
+| GPU Spectral Separation | ✅ Done | cuFFT (NVIDIA), rocFFT (AMD), OpenCL fallback |
 | Demucs AI Integration | ✅ Done | Python subprocess, PyTorch backend |
 | Real-time Demucs | ❌ Future | Complex, requires streaming inference |
 
@@ -44,6 +44,7 @@ cmake --build . --config Release -j8
 ### Build Options
 
 ```bash
+cmake -DGPU_BACKEND=CUDA ..     # Force NVIDIA CUDA
 cmake -DGPU_BACKEND=HIP ..      # Force AMD ROCm
 cmake -DGPU_BACKEND=OPENCL ..   # Force OpenCL (universal)
 cmake -DGPU_BACKEND=NONE ..     # CPU only

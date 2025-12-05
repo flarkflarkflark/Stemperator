@@ -12,13 +12,26 @@ add_subdirectory(JUCE)
 # GPU Acceleration Detection
 # =============================================================================
 option(ENABLE_GPU "Enable GPU acceleration" ON)
-set(GPU_BACKEND "AUTO" CACHE STRING "GPU backend: AUTO, HIP, OPENCL, NONE")
+set(GPU_BACKEND "AUTO" CACHE STRING "GPU backend: AUTO, CUDA, HIP, OPENCL, NONE")
 
+set(USE_CUDA OFF)
 set(USE_HIP OFF)
 set(USE_OPENCL OFF)
 
 if(ENABLE_GPU)
-    if(GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "HIP")
+    # Try CUDA first (NVIDIA GPUs)
+    if(GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "CUDA")
+        find_package(CUDAToolkit QUIET)
+        if(CUDAToolkit_FOUND)
+            message(STATUS "✓ CUDA found - GPU acceleration enabled for NVIDIA GPUs")
+            message(STATUS "  CUDA version: ${CUDAToolkit_VERSION}")
+            set(USE_CUDA ON)
+        elseif(GPU_BACKEND STREQUAL "CUDA")
+            message(FATAL_ERROR "CUDA requested but not found. Install CUDA toolkit or set GPU_BACKEND=AUTO")
+        endif()
+    endif()
+
+    if(NOT USE_CUDA AND (GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "HIP"))
         # Try to find HIP/ROCm first (AMD GPUs)
         list(APPEND CMAKE_PREFIX_PATH "/opt/rocm" "/opt/rocm/hip")
 
@@ -34,7 +47,7 @@ if(ENABLE_GPU)
         endif()
     endif()
 
-    if(NOT USE_HIP AND (GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "OPENCL"))
+    if(NOT USE_CUDA AND NOT USE_HIP AND (GPU_BACKEND STREQUAL "AUTO" OR GPU_BACKEND STREQUAL "OPENCL"))
         # Fall back to OpenCL (works on all GPUs)
         find_package(OpenCL QUIET)
         if(OpenCL_FOUND)
@@ -45,7 +58,7 @@ if(ENABLE_GPU)
         endif()
     endif()
 
-    if(NOT USE_HIP AND NOT USE_OPENCL)
+    if(NOT USE_CUDA AND NOT USE_HIP AND NOT USE_OPENCL)
         message(STATUS "✗ No GPU backend found - using CPU only")
     endif()
 endif()
@@ -110,7 +123,7 @@ set(STEMPERATOR_SOURCES
 )
 
 # Add GPU sources if available
-if(USE_HIP OR USE_OPENCL)
+if(USE_CUDA OR USE_HIP OR USE_OPENCL)
     list(APPEND STEMPERATOR_SOURCES
         Source/GPU/GPUStemSeparator.cpp
         Source/GPU/GPUStemSeparator.h
@@ -137,7 +150,9 @@ target_compile_definitions(Stemperator
         JucePlugin_ProducesMidiOutput=0
 )
 
-if(USE_HIP)
+if(USE_CUDA)
+    target_compile_definitions(Stemperator PUBLIC USE_CUDA=1)
+elseif(USE_HIP)
     target_compile_definitions(Stemperator PUBLIC USE_HIP=1)
 elseif(USE_OPENCL)
     target_compile_definitions(Stemperator PUBLIC USE_OPENCL=1)
@@ -168,7 +183,9 @@ target_link_libraries(Stemperator
 )
 
 # Link GPU libraries
-if(USE_HIP)
+if(USE_CUDA)
+    target_link_libraries(Stemperator PRIVATE CUDA::cufft CUDA::cudart)
+elseif(USE_HIP)
     target_link_libraries(Stemperator PRIVATE hip::host roc::rocfft)
     target_include_directories(Stemperator PRIVATE /opt/rocm/include)
 elseif(USE_OPENCL)
@@ -200,7 +217,10 @@ add_custom_command(TARGET Stemperator_VST3 POST_BUILD
 message(STATUS "")
 message(STATUS "=== Stemperator Build Configuration ===")
 message(STATUS "  Version: ${PROJECT_VERSION}")
-if(USE_HIP)
+if(USE_CUDA)
+    message(STATUS "  GPU Backend: CUDA (NVIDIA optimized)")
+    message(STATUS "  cuFFT: Enabled")
+elseif(USE_HIP)
     message(STATUS "  GPU Backend: HIP/ROCm (AMD optimized)")
     message(STATUS "  rocFFT: Enabled")
 elseif(USE_OPENCL)
