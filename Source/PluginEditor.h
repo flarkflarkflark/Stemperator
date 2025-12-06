@@ -65,6 +65,7 @@ public:
 private:
     StemperatorProcessor& processor;
     PremiumLookAndFeel premiumLookAndFeel;
+    juce::TooltipWindow tooltipWindow { this, 500 };  // 500ms delay before showing
 
     // Base dimensions for scaling calculations (100% = 1920x1080)
     static constexpr int baseWidth = 1920;
