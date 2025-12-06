@@ -104,13 +104,22 @@ juce::AudioProcessorValueTreeState::ParameterLayout StemperatorProcessor::create
     params.push_back (std::make_unique<juce::AudioParameterChoice> (
         "quality", "Quality", juce::StringArray { "Fast", "Balanced", "Best" }, 1));
 
-    // Focus controls for fine-tuning separation
+    // Focus controls for fine-tuning separation (with units for clarity)
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "vocalsFocus", "Vocals Focus", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f));
+        juce::ParameterID { "vocalsFocus", 1 }, "Vocals Focus",
+        juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (static_cast<int> (v)) + " %"; }));
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "bassCutoff", "Bass Cutoff", juce::NormalisableRange<float> (60.0f, 300.0f, 1.0f), 150.0f));
+        juce::ParameterID { "bassCutoff", 1 }, "Bass Cutoff",
+        juce::NormalisableRange<float> (60.0f, 300.0f, 1.0f), 150.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (static_cast<int> (v)) + " Hz"; }));
     params.push_back (std::make_unique<juce::AudioParameterFloat> (
-        "drumSensitivity", "Drum Sensitivity", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f));
+        juce::ParameterID { "drumSensitivity", 1 }, "Drum Sensitivity",
+        juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (static_cast<int> (v)) + " %"; }));
 
     return { params.begin(), params.end() };
 }
@@ -197,18 +206,19 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         bool anySolo = solos[0] || solos[1] || solos[2] || solos[3];
         bool anyMute = mutes[0] || mutes[1] || mutes[2] || mutes[3];
 
-        // If no mutes and no solos, just pass through the original audio
-        // This avoids the level increase from summing spectral stems
+        // Get gain values (convert from dB)
+        float gains[NumStems4] = {
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("vocalsGain")->load()),
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("drumsGain")->load()),
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("bassGain")->load()),
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("otherGain")->load())
+        };
+
+        // Master gain
         float master = juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("masterGain")->load());
-        if (!anySolo && !anyMute)
-        {
-            // Just apply master gain and return - no spectral processing needed
-            buffer.applyGain (master);
-            // Set all stem levels to input level for visualization
-            for (int i = 0; i < NumStems4; ++i)
-                stemLevels[i].store (inLevel * master);
-            return;
-        }
+
+        // ALWAYS run spectral processing for consistent sound
+        // (No bypass mode - this ensures no audible difference when adjusting faders)
 
         // Get parameters for spectral separation
         float bassCutoff = parameters.getRawParameterValue ("bassCutoff")->load();
@@ -224,37 +234,17 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         separator.process (buffer);
         auto& stems = separator.getStems();
 
-        // Get gain values (convert from dB)
-        float gains[NumStems4] = {
-            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("vocalsGain")->load()),
-            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("drumsGain")->load()),
-            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("bassGain")->load()),
-            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("otherGain")->load())
-        };
-
         // Mix stems to output based on mute/solo/gain
         buffer.clear();
         const int numSamples = buffer.getNumSamples();
         const int numChannels = std::min (buffer.getNumChannels(), 2);
 
-        // Count how many stems are playing (for level compensation)
-        int stemCount = 0;
-        for (int stem = 0; stem < NumStems4; ++stem)
-        {
-            bool shouldPlay = anySolo ? solos[stem] : !mutes[stem];
-            if (shouldPlay) stemCount++;
-        }
-
-        // Apply compensation: spectral separation introduces ~2x level gain
-        // When muting stems, reduce the remaining stems proportionally
-        // to prevent clipping. Scale factor is based on how many stems are playing.
-        float stemCompensation = 1.0f;
-        if (stemCount > 0 && stemCount < NumStems4)
-        {
-            // Reduce level when not all stems are playing
-            // This prevents the level from increasing when stems are muted
-            stemCompensation = 0.7f;  // ~3dB reduction to compensate for spectral gain
-        }
+        // Spectral separation always needs compensation to match original level
+        // The separation + reconstruction process adds gain, so we compensate here
+        // This compensation is CONSTANT regardless of how many stems are playing
+        // to ensure consistent levels when toggling solo/mute
+        // Lower value = more headroom, less clipping when all stems play together
+        constexpr float stemCompensation = 0.5f;  // ~6dB reduction for headroom
 
         for (int stem = 0; stem < NumStems4; ++stem)
         {
@@ -280,17 +270,23 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
 
         // Apply soft limiting to prevent clipping from stem summing
-        // Using tanh soft clipper scaled to preserve level until ~0.9
+        // Use a smooth limiter that starts compressing earlier for a more transparent sound
         for (int ch = 0; ch < numChannels; ++ch)
         {
             auto* data = buffer.getWritePointer (ch);
             for (int i = 0; i < numSamples; ++i)
             {
                 float x = data[i];
-                // Soft clip using tanh - sounds better than hard clipping
-                // tanh(x) provides gentle saturation above ~0.8
-                if (x > 0.8f || x < -0.8f)
-                    data[i] = std::tanh (x);
+                // Soft knee limiter: starts gentle compression at 0.5, full limiting by 1.0
+                // This prevents harsh clipping while maintaining dynamics
+                float absX = std::abs (x);
+                if (absX > 0.5f)
+                {
+                    // Soft knee compression from 0.5 to 1.0, then hard tanh limiting
+                    // Maps 0.5->0.5, 1.0->0.85, >1.0->asymptotic to 1.0
+                    float compressed = 0.5f + 0.35f * std::tanh ((absX - 0.5f) * 2.0f);
+                    data[i] = (x > 0) ? compressed : -compressed;
+                }
             }
         }
 
@@ -410,9 +406,15 @@ void StemperatorProcessor::getStateInformation (juce::MemoryBlock& destData)
 
 void StemperatorProcessor::setStateInformation (const void* data, int sizeInBytes)
 {
+#if JucePlugin_Build_Standalone
+    // In standalone mode, don't restore state - always start with default values (0 dB)
+    juce::ignoreUnused (data, sizeInBytes);
+#else
+    // In plugin mode, restore saved state for DAW recall
     std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
     if (xml && xml->hasTagName (parameters.state.getType()))
         parameters.replaceState (juce::ValueTree::fromXml (*xml));
+#endif
 }
 
 void StemperatorProcessor::parameterChanged (const juce::String& parameterID, float newValue)

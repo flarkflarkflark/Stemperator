@@ -12,7 +12,8 @@
  * - Clean typography and spacing
  */
 class StemChannel : public juce::Component,
-                    public juce::Button::Listener
+                    public juce::Button::Listener,
+                    public juce::SettableTooltipClient
 {
 public:
     StemChannel (const juce::String& name, juce::Colour colour);
@@ -30,9 +31,27 @@ public:
     // Level meter
     void setLevel (float level);
 
-    // Callbacks
-    std::function<void (bool)> onMuteChanged;
-    std::function<void (bool)> onSoloChanged;
+    // Set whether this channel needs AI separation (shows "AI" badge when true and no levels)
+    void setNeedsAISeparation (bool needsAI)
+    {
+        needsAISeparation = needsAI;
+        if (needsAI)
+            juce::SettableTooltipClient::setTooltip (stemName + " (6-stem mode only) - requires AI processing to separate");
+        else
+            juce::SettableTooltipClient::setTooltip (stemName + " stem");
+        repaint();
+    }
+    bool getNeedsAISeparation() const { return needsAISeparation; }
+
+    // Callbacks - with modifier keys for Reaper-style behavior
+    // bool state, bool ctrlDown, bool shiftDown
+    std::function<void (bool, bool, bool)> onMuteChanged;
+    std::function<void (bool, bool, bool)> onSoloChanged;
+
+    // Direct access to buttons for external control
+    juce::TextButton& getMuteButton() { return muteButton; }
+    juce::TextButton& getSoloButton() { return soloButton; }
+    juce::Slider& getGainSlider() { return gainSlider; }
 
 private:
     juce::String stemName;
@@ -55,6 +74,9 @@ private:
     float peakLevel = 0.0f;
     int peakHoldCount = 0;
     static constexpr int peakHoldTime = 30;  // ~1 second at 30fps
+
+    // Whether this channel needs AI separation (Guitar/Piano channels)
+    bool needsAISeparation = false;
 
     void updateMeter();
 

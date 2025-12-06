@@ -1,5 +1,6 @@
 #include "StemSeparator.h"
 #include <cmath>
+#include <algorithm>
 
 StemSeparator::StemSeparator()
 {
@@ -9,7 +10,6 @@ StemSeparator::StemSeparator()
     spectrumR.resize (numBins);
     spectrumMid.resize (numBins);
     spectrumSide.resize (numBins);
-    prevMagnitude.resize (numBins, 0.0f);
 
     for (int stem = 0; stem < NumStems; ++stem)
     {
@@ -22,6 +22,14 @@ StemSeparator::StemSeparator()
         inputBuffer[ch].resize (fftSize, 0.0f);
         for (int stem = 0; stem < NumStems; ++stem)
             outputBuffers[stem][ch].resize (fftSize, 0.0f);
+    }
+
+    // Initialize HPSS history with empty frames
+    for (int i = 0; i < hpssFrames; ++i)
+    {
+        spectrogramHistory.push_back (std::vector<float> (numBins, 0.0f));
+        spectrumHistoryL.push_back (std::vector<std::complex<float>> (numBins, std::complex<float> (0.0f, 0.0f)));
+        spectrumHistoryR.push_back (std::vector<std::complex<float>> (numBins, std::complex<float> (0.0f, 0.0f)));
     }
 }
 
@@ -51,7 +59,13 @@ void StemSeparator::reset()
             std::fill (outputBuffers[stem][ch].begin(), outputBuffers[stem][ch].end(), 0.0f);
     }
 
-    std::fill (prevMagnitude.begin(), prevMagnitude.end(), 0.0f);
+    // Reset HPSS history
+    for (auto& frame : spectrogramHistory)
+        std::fill (frame.begin(), frame.end(), 0.0f);
+    for (auto& frame : spectrumHistoryL)
+        std::fill (frame.begin(), frame.end(), std::complex<float> (0.0f, 0.0f));
+    for (auto& frame : spectrumHistoryR)
+        std::fill (frame.begin(), frame.end(), std::complex<float> (0.0f, 0.0f));
 
     for (auto& stem : stems)
         stem.clear();
@@ -133,25 +147,141 @@ void StemSeparator::processFFTFrame (int channel)
     }
 }
 
-void StemSeparator::separateStems()
+// Helper: compute median of a vector (modifies input order)
+float StemSeparator::medianOfVector (std::vector<float>& values)
 {
-    // Calculate Mid/Side
+    if (values.empty())
+        return 0.0f;
+
+    size_t n = values.size();
+    size_t mid = n / 2;
+
+    std::nth_element (values.begin(), values.begin() + mid, values.end());
+
+    if (n % 2 == 0)
+    {
+        float median1 = values[mid];
+        std::nth_element (values.begin(), values.begin() + mid - 1, values.end());
+        return (values[mid - 1] + median1) / 2.0f;
+    }
+    return values[mid];
+}
+
+// Compute HPSS masks using median filtering
+void StemSeparator::computeHPSSMasks (std::vector<float>& harmonicMask, std::vector<float>& percussiveMask)
+{
+    harmonicMask.resize (numBins);
+    percussiveMask.resize (numBins);
+
+    std::vector<float> tempValues;
+
     for (int bin = 0; bin < numBins; ++bin)
     {
-        spectrumMid[bin] = (spectrumL[bin] + spectrumR[bin]) * 0.5f;
-        spectrumSide[bin] = (spectrumL[bin] - spectrumR[bin]) * 0.5f;
+        // ============================================================
+        // HARMONIC: Median filter along TIME axis
+        // Horizontal lines in spectrogram = sustained tones
+        // ============================================================
+        tempValues.clear();
+        tempValues.reserve (hpssFrames);
+        for (int frame = 0; frame < hpssFrames; ++frame)
+            tempValues.push_back (spectrogramHistory[frame][bin]);
+
+        float harmonicMedian = medianOfVector (tempValues);
+
+        // ============================================================
+        // PERCUSSIVE: Median filter along FREQUENCY axis
+        // Vertical lines in spectrogram = broadband transients (drums!)
+        // ============================================================
+        tempValues.clear();
+        int halfFreqSize = freqMedianSize / 2;
+
+        // Get center frame magnitude
+        auto& centerFrame = spectrogramHistory[hpssCenter];
+
+        for (int freqOffset = -halfFreqSize; freqOffset <= halfFreqSize; ++freqOffset)
+        {
+            int neighborBin = bin + freqOffset;
+            if (neighborBin >= 0 && neighborBin < numBins)
+                tempValues.push_back (centerFrame[neighborBin]);
+        }
+
+        float percussiveMedian = medianOfVector (tempValues);
+
+        // ============================================================
+        // SOFT MASKS using Wiener-like filtering
+        // ============================================================
+        // Original magnitude from center frame
+        float originalMag = centerFrame[bin];
+        float epsilon = 1e-10f;
+
+        // Square the medians for power-based masking (more selective)
+        float harmonicPower = harmonicMedian * harmonicMedian;
+        float percussivePower = percussiveMedian * percussiveMedian;
+        float totalPower = harmonicPower + percussivePower + epsilon;
+
+        // Wiener-style soft masks
+        harmonicMask[bin] = harmonicPower / totalPower;
+        percussiveMask[bin] = percussivePower / totalPower;
+
+        // Apply drum sensitivity as a bias toward percussive content
+        // Higher sensitivity = more content goes to drums
+        float sensitivityBias = (drumSensitivity - 0.5f) * 0.4f;  // -0.2 to +0.2
+        percussiveMask[bin] = juce::jlimit (0.0f, 1.0f, percussiveMask[bin] + sensitivityBias);
+        harmonicMask[bin] = juce::jlimit (0.0f, 1.0f, 1.0f - percussiveMask[bin]);
+    }
+}
+
+void StemSeparator::separateStems()
+{
+    // ========================================================================
+    // UPDATE HPSS HISTORY
+    // ========================================================================
+    // Calculate combined magnitude spectrum (L+R) for HPSS
+    std::vector<float> currentMagnitude (numBins);
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        currentMagnitude[bin] = std::abs (spectrumL[bin]) + std::abs (spectrumR[bin]);
     }
 
-    // Frequency boundaries
+    // Push current frame to history, remove oldest
+    spectrogramHistory.pop_front();
+    spectrogramHistory.push_back (currentMagnitude);
+
+    spectrumHistoryL.pop_front();
+    spectrumHistoryL.push_back (spectrumL);
+
+    spectrumHistoryR.pop_front();
+    spectrumHistoryR.push_back (spectrumR);
+
+    // ========================================================================
+    // COMPUTE HPSS MASKS
+    // ========================================================================
+    std::vector<float> harmonicMask, percussiveMask;
+    computeHPSSMasks (harmonicMask, percussiveMask);
+
+    // ========================================================================
+    // GET CENTER FRAME SPECTRA (delayed by hpssCenter frames for proper HPSS)
+    // ========================================================================
+    auto& centerSpectrumL = spectrumHistoryL[hpssCenter];
+    auto& centerSpectrumR = spectrumHistoryR[hpssCenter];
+
+    // Calculate Mid/Side from center frame
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        spectrumMid[bin] = (centerSpectrumL[bin] + centerSpectrumR[bin]) * 0.5f;
+        spectrumSide[bin] = (centerSpectrumL[bin] - centerSpectrumR[bin]) * 0.5f;
+    }
+
+    // ========================================================================
+    // FREQUENCY BOUNDARIES
+    // ========================================================================
     int bassBin = freqToBin (bassCutoffHz);
     int vocalLowBin = freqToBin (200.0f);
     int vocalHighBin = freqToBin (4000.0f);
 
-    // Separation masks
-    std::vector<float> bassMask (numBins, 0.0f);
-    std::vector<float> vocalsMask (numBins, 0.0f);
-    std::vector<float> drumsMask (numBins, 0.0f);
-
+    // ========================================================================
+    // APPLY SEPARATION MASKS
+    // ========================================================================
     for (int bin = 0; bin < numBins; ++bin)
     {
         float freq = binToFreq (bin);
@@ -159,85 +289,112 @@ void StemSeparator::separateStems()
         float sideMag = std::abs (spectrumSide[bin]);
         float totalMag = midMag + sideMag + 1e-10f;
 
-        // Bass mask: low-pass with smooth rolloff
+        // ====================================================================
+        // BASS MASK: Low-pass with smooth rolloff
+        // ====================================================================
+        float bassMask = 0.0f;
         if (bin <= bassBin)
         {
             float rolloff = 1.0f - (float) bin / (float) bassBin * 0.3f;
-            bassMask[bin] = rolloff;
+            bassMask = rolloff;
         }
         else if (bin < bassBin * 1.5f)
         {
             float t = (float) (bin - bassBin) / (float) (bassBin * 0.5f);
-            bassMask[bin] = 1.0f - t;
+            bassMask = 1.0f - t;
         }
 
-        // Vocals mask: center-panned content in vocal frequency range
-        float centerWeight = midMag / totalMag;  // How centered is this bin?
+        // ====================================================================
+        // VOCALS MASK: Center-panned content in vocal frequency range
+        // ====================================================================
+        float vocalsMask = 0.0f;
+        float centerWeight = midMag / totalMag;
         if (bin >= vocalLowBin && bin <= vocalHighBin)
         {
-            // Vocals are typically centered (high mid, low side)
             float vocalWeight = centerWeight * vocalsFocus + (1.0f - vocalsFocus) * 0.5f;
-            vocalsMask[bin] = vocalWeight;
+            vocalsMask = vocalWeight * harmonicMask[bin];  // Vocals are harmonic!
         }
 
-        // Drums mask: transient detection
-        float currentMag = std::abs (spectrumL[bin]) + std::abs (spectrumR[bin]);
-        float prevMag = prevMagnitude[bin];
-        float transient = std::max (0.0f, currentMag - prevMag * 1.2f);
-        float steadyState = std::min (currentMag, prevMag);
-
-        // Drums are more transient, less harmonic
-        float transientRatio = transient / (currentMag + 1e-10f);
-        drumsMask[bin] = transientRatio * drumSensitivity;
-
-        // Update previous magnitude
-        prevMagnitude[bin] = currentMag * 0.9f + prevMag * 0.1f;  // Smooth
-    }
-
-    // Apply masks and create stem spectra
-    // IMPORTANT: Use soft masks that sum to 1.0 to preserve original level
-    // When stems are summed, they should reconstruct the original signal
-    for (int bin = 0; bin < numBins; ++bin)
-    {
-        // Calculate raw mask values
-        float rawBass = bassMask[bin];
-        float rawVocals = vocalsMask[bin];
-        float rawDrums = drumsMask[bin];
-
-        // Normalize masks to sum to 1.0
-        float totalMask = rawBass + rawVocals + rawDrums;
-        float normFactor = (totalMask > 0.01f) ? (1.0f / totalMask) : 1.0f;
-
-        // If total < 1, the remainder goes to "other"
-        float bassGain = rawBass * std::min(normFactor, 1.0f);
-        float vocalsGain = rawVocals * std::min(normFactor, 1.0f);
-        float drumsGain = rawDrums * std::min(normFactor, 1.0f);
-
-        // Clamp total to 1.0
-        float usedGain = bassGain + vocalsGain + drumsGain;
-        if (usedGain > 1.0f)
+        // ====================================================================
+        // DRUMS MASK: Use HPSS percussive mask with frequency weighting
+        // ====================================================================
+        float drumFreqWeight = 0.0f;
+        if (freq >= 30.0f && freq <= 150.0f)
         {
-            float scale = 1.0f / usedGain;
-            bassGain *= scale;
-            vocalsGain *= scale;
-            drumsGain *= scale;
-            usedGain = 1.0f;
+            // Kick drum region - full weight
+            drumFreqWeight = 1.0f;
         }
-        float otherGain = 1.0f - usedGain;
+        else if (freq >= 150.0f && freq <= 400.0f)
+        {
+            // Snare body / tom region
+            drumFreqWeight = 0.95f;
+        }
+        else if (freq >= 400.0f && freq <= 2000.0f)
+        {
+            // Snare crack region
+            drumFreqWeight = 0.85f;
+        }
+        else if (freq >= 2000.0f && freq <= 8000.0f)
+        {
+            // Hi-hat / cymbal attack region
+            drumFreqWeight = 0.75f;
+        }
+        else if (freq >= 8000.0f && freq <= 16000.0f)
+        {
+            // Cymbal shimmer region
+            drumFreqWeight = 0.5f;
+        }
 
-        // Apply masks directly to L/R channels (not mid/side)
-        // This preserves the original stereo image and energy
-        stemSpectraL[Bass][bin] = spectrumL[bin] * bassGain;
-        stemSpectraR[Bass][bin] = spectrumR[bin] * bassGain;
+        float drumsMask = percussiveMask[bin] * drumFreqWeight;
 
-        stemSpectraL[Vocals][bin] = spectrumL[bin] * vocalsGain;
-        stemSpectraR[Vocals][bin] = spectrumR[bin] * vocalsGain;
+        // ====================================================================
+        // ENERGY-PRESERVING STEM SEPARATION
+        // ====================================================================
+        // Goal: When all stems are summed, output = input (unity gain)
+        //       When one stem is solo'd, it should sound at natural level
+        //
+        // The masks represent "how much of this bin belongs to each stem"
+        // We normalize so they sum to 1.0, preserving total energy.
 
-        stemSpectraL[Drums][bin] = spectrumL[bin] * drumsGain;
-        stemSpectraR[Drums][bin] = spectrumR[bin] * drumsGain;
+        float totalMask = bassMask + vocalsMask + drumsMask;
 
-        stemSpectraL[Other][bin] = spectrumL[bin] * otherGain;
-        stemSpectraR[Other][bin] = spectrumR[bin] * otherGain;
+        // Calculate "other" as remainder
+        float otherMask = std::max (0.0f, 1.0f - totalMask);
+
+        // Now we have 4 masks that should sum to ~1.0
+        // But due to masking overlaps, we need to renormalize
+        float sumMasks = bassMask + vocalsMask + drumsMask + otherMask;
+
+        // Normalize all masks to sum exactly to 1.0 (energy preservation)
+        float normFactor = (sumMasks > 0.001f) ? (1.0f / sumMasks) : 1.0f;
+
+        float bassGain = bassMask * normFactor;
+        float vocalsGain = vocalsMask * normFactor;
+        float drumsGain = drumsMask * normFactor;
+        float otherGain = otherMask * normFactor;
+
+        // ====================================================================
+        // APPLY MASKS TO CENTER FRAME SPECTRA
+        // ====================================================================
+        // Per-stem level compensation based on empirical calibration
+        // These values ensure stems are balanced when all faders are at 0 dB
+        // Calibration: Drums -7.5dB, Vocals -2dB, Bass -8.2dB, Other 0dB (reference)
+        constexpr float drumsComp = 0.422f;   // -7.5 dB
+        constexpr float vocalsComp = 0.794f;  // -2.0 dB
+        constexpr float bassComp = 0.389f;    // -8.2 dB
+        constexpr float otherComp = 1.0f;     // 0 dB (reference)
+
+        stemSpectraL[Bass][bin] = centerSpectrumL[bin] * bassGain * bassComp;
+        stemSpectraR[Bass][bin] = centerSpectrumR[bin] * bassGain * bassComp;
+
+        stemSpectraL[Vocals][bin] = centerSpectrumL[bin] * vocalsGain * vocalsComp;
+        stemSpectraR[Vocals][bin] = centerSpectrumR[bin] * vocalsGain * vocalsComp;
+
+        stemSpectraL[Drums][bin] = centerSpectrumL[bin] * drumsGain * drumsComp;
+        stemSpectraR[Drums][bin] = centerSpectrumR[bin] * drumsGain * drumsComp;
+
+        stemSpectraL[Other][bin] = centerSpectrumL[bin] * otherGain * otherComp;
+        stemSpectraR[Other][bin] = centerSpectrumR[bin] * otherGain * otherComp;
     }
 }
 
@@ -261,7 +418,10 @@ void StemSeparator::reconstructStems (int channel)
         window.multiplyWithWindowingTable (fftBuffer.data(), fftSize);
 
         int writePos = (outputReadPos) % fftSize;
-        float normalization = 1.0f / (float) (fftSize / hopSize) * 0.5f;  // Overlap-add normalization
+        // With 75% overlap (hopSize = fftSize/4) and Hann window, COLA sum ≈ 1.5
+        // Normalization should be 1/COLA_sum = 1/1.5 ≈ 0.667
+        // Boost slightly to compensate for mask-based energy distribution
+        float normalization = 0.75f;
 
         for (int i = 0; i < fftSize; ++i)
         {

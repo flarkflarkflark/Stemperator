@@ -3,6 +3,7 @@
 #include <JuceHeader.h>
 #include <array>
 #include <complex>
+#include <deque>
 
 /**
  * StemSeparator - Real-time spectral stem separation
@@ -10,9 +11,14 @@
  * Uses multiple techniques for separation:
  * 1. Stereo Mid/Side for center (vocals) extraction
  * 2. Low-pass filtering for bass isolation
- * 3. Transient/Steady-state decomposition for drums
- * 4. Harmonic/Percussive separation (HPSS)
- * 5. Residual calculation for "other"
+ * 3. TRUE HPSS (Harmonic-Percussive Source Separation) with median filtering
+ * 4. Residual calculation for "other"
+ *
+ * HPSS works by:
+ * - Buffering multiple spectrogram frames
+ * - Median filtering along TIME axis → Harmonic (horizontal lines in spectrogram)
+ * - Median filtering along FREQUENCY axis → Percussive (vertical lines in spectrogram)
+ * - Using soft masks derived from these filtered spectrograms
  *
  * All processing happens in the frequency domain using overlap-add FFT.
  */
@@ -41,7 +47,7 @@ public:
 
     /** GPU status (CPU version always returns false) */
     bool isUsingGPU() const { return false; }
-    juce::String getGPUInfo() const { return "CPU Processing"; }
+    juce::String getGPUInfo() const { return "Preview: CPU | Export: GPU"; }
 
 private:
     double sampleRate = 44100.0;
@@ -52,6 +58,11 @@ private:
     static constexpr int fftSize = 1 << fftOrder;
     static constexpr int hopSize = fftSize / 4;  // 75% overlap
     static constexpr int numBins = fftSize / 2 + 1;
+
+    // HPSS configuration - number of frames for median filtering
+    static constexpr int hpssFrames = 17;  // Must be odd for median (17 frames ≈ 200ms at 44.1kHz)
+    static constexpr int hpssCenter = hpssFrames / 2;  // Center frame index
+    static constexpr int freqMedianSize = 17;  // Frequency bins for percussive median (must be odd)
 
     juce::dsp::FFT fft { fftOrder };
     juce::dsp::WindowingFunction<float> window { fftSize, juce::dsp::WindowingFunction<float>::hann };
@@ -67,6 +78,12 @@ private:
     std::vector<std::complex<float>> spectrumL, spectrumR;
     std::vector<std::complex<float>> spectrumMid, spectrumSide;
 
+    // HPSS spectrogram buffer - stores magnitude spectrograms for median filtering
+    // Each frame is numBins magnitudes, we keep hpssFrames history
+    std::deque<std::vector<float>> spectrogramHistory;  // Magnitude history for HPSS
+    std::deque<std::vector<std::complex<float>>> spectrumHistoryL;  // Complex spectrum history L
+    std::deque<std::vector<std::complex<float>>> spectrumHistoryR;  // Complex spectrum history R
+
     // Stem spectra
     std::array<std::vector<std::complex<float>>, NumStems> stemSpectraL;
     std::array<std::vector<std::complex<float>>, NumStems> stemSpectraR;
@@ -79,13 +96,14 @@ private:
     float vocalsFocus = 0.5f;
     float drumSensitivity = 0.5f;
 
-    // Previous frame for transient detection
-    std::vector<float> prevMagnitude;
-
     // Internal processing
     void processFFTFrame (int channel);
     void separateStems();
     void reconstructStems (int channel);
+
+    // HPSS helpers
+    float medianOfVector (std::vector<float>& values);
+    void computeHPSSMasks (std::vector<float>& harmonicMask, std::vector<float>& percussiveMask);
 
     // Frequency helpers
     int freqToBin (float freq) const { return (int) (freq * fftSize / sampleRate); }

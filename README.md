@@ -1,6 +1,6 @@
 # Stemperator
 
-**AI-Powered Stem Separation for REAPER**
+**An AI-powered stem separator by flarkAUDIO**
 
 ![flarkAUDIO](https://img.shields.io/badge/flarkAUDIO-Stemperator-blue)
 ![ReaPack](https://img.shields.io/badge/ReaPack-compatible-green)

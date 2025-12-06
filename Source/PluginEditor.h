@@ -3,8 +3,8 @@
 #include <JuceHeader.h>
 #include "PluginProcessor.h"
 #include "GUI/StemChannel.h"
-#include "GUI/Visualizer.h"
 #include "GUI/PremiumLookAndFeel.h"
+#include "GUI/StyledDialogWindow.h"
 
 /**
  * StemperatorEditor - Premium plugin GUI with scalable layout
@@ -40,6 +40,9 @@ public:
     // KeyListener - for Escape to cancel
     bool keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent) override;
 
+    // Mouse click to grab keyboard focus
+    void mouseDown (const juce::MouseEvent& event) override;
+
     // FileDragAndDropTarget - for drag & drop audio files
     bool isInterestedInFileDrag (const juce::StringArray& files) override;
     void filesDropped (const juce::StringArray& files, int x, int y) override;
@@ -62,9 +65,9 @@ private:
     StemperatorProcessor& processor;
     PremiumLookAndFeel premiumLookAndFeel;
 
-    // Base dimensions for scaling calculations
-    static constexpr int baseWidth = 850;
-    static constexpr int baseHeight = 550;
+    // Base dimensions for scaling calculations (100% = 1920x1080)
+    static constexpr int baseWidth = 1920;
+    static constexpr int baseHeight = 1080;
 
     // Get current scale factor
     float getScaleFactor() const
@@ -81,12 +84,12 @@ private:
     // Stem channels (supports up to 6 for htdemucs_6s model)
     std::array<std::unique_ptr<StemChannel>, 6> stemChannels;
 
-    // Visualizer
-    Visualizer visualizer;
-
     // Master section
     juce::Slider masterSlider;
     juce::Label masterLabel { {}, "MASTER" };
+    juce::TextButton masterMuteButton { "M" };
+    juce::TextButton masterSoloButton { "S" };
+    juce::TextButton resetAllButton { "RESET" };  // Reset all stem faders to 0 dB
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
 
     // Focus controls
@@ -101,10 +104,20 @@ private:
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bassCutoffAttachment;
     std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> drumSensAttachment;
 
-    // Quality selector
-    juce::ComboBox qualityBox;
-    juce::Label qualityLabel { {}, "QUALITY" };
-    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityAttachment;
+    // Quality selector (three-way toggle button: Fast/Balanced/Best)
+    juce::TextButton qualityButton { "Balanced" };
+    juce::Label qualityLabel { {}, "QUALITY/MODEL" };  // Combined label
+    int currentQuality = 1;  // 0=Fast, 1=Balanced, 2=Best
+    void onQualityButtonClicked();
+
+    // Model selector (4-stem vs 6-stem)
+    juce::ComboBox modelBox;
+    void onModelChanged();
+
+    // Scale selector (25% to 400%) - ComboBox
+    juce::ComboBox scaleBox;
+    juce::Label scaleLabel { {}, "SCALE" };
+    void onScaleChanged();
 
     // Header components
     juce::Label titleLabel { {}, "STEMPERATOR" };
@@ -137,11 +150,14 @@ private:
         cmdExportDrums,
         cmdExportBass,
         cmdExportOther,
+        cmdExportGuitar,     // Guitar stem (6-stem model only)
+        cmdExportPiano,      // Piano stem (6-stem model only)
         cmdExportMix,        // Export mixed stems with current volume/mute settings
         cmdPlay,
         cmdStop,
         cmdPlayStems,        // Play separated stems (with mute/solo applied)
         cmdOpenStemFolder,   // Open folder containing stems
+        cmdSetDefaultStemFolder,  // Set default folder for stem export
         cmdAbout,
         cmdQuit              // Exit the application
     };
@@ -174,6 +190,16 @@ private:
     std::array<juce::AudioBuffer<float>, 6> separatedStems;  // Vocals, Drums, Bass, Other, Guitar, Piano
     bool hasSeparatedStems = false;
     juce::File lastStemFolder;  // Remember where stems were exported
+    juce::File lastAudioFolder;  // Remember where audio files were loaded from
+    juce::File defaultStemFolder;  // User-configurable default folder for stem export
+    juce::StringArray recentStemFolders;  // Recently stemmed folders (max 10)
+    static constexpr int maxRecentFolders = 10;
+
+    // Persistent settings
+    std::unique_ptr<juce::PropertiesFile> appSettings;
+    void loadSettings();
+    void saveSettings();
+    void addToRecentStems (const juce::File& folder);  // Add folder to recent list
 
     // Stem mixer for playback
     class StemMixerSource;
@@ -194,14 +220,22 @@ private:
     std::unique_ptr<juce::TextButton> playButton;
     std::unique_ptr<juce::TextButton> stopButton;
     std::unique_ptr<juce::Slider> positionSlider;
-    std::unique_ptr<juce::Slider> volumeSlider;
     std::unique_ptr<juce::Label> fileNameLabel;
     std::unique_ptr<juce::Label> timeLabel;
-    std::unique_ptr<juce::Label> volumeLabel;
+    std::unique_ptr<juce::Label> modeLabel;  // Shows "STEMS" or "LIVE" mode
     bool wasPlayingBeforeSeek = false;
+    double previousMasterGain = 0.0;  // For mute/unmute restoration
+
+    // Master VU meter
+    float masterCurrentLevel = 0.0f;
+    float masterDisplayLevel = 0.0f;
+    float masterPeakLevel = 0.0f;
+    int masterPeakHoldCount = 0;
+    static constexpr int masterPeakHoldTime = 30;  // ~1 second at 30fps
 
     void setupTransportControls();
     void updateTransportDisplay();
+    void updateModeIndicator();  // Update mode label based on current playback mode
     void setStemsLoadedMessage();  // Set colorful "STEMS" message
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorEditor)

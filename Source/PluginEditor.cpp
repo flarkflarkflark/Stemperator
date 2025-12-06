@@ -160,6 +160,567 @@ private:
     std::array<std::atomic<float>, 6> stemLevels;  // For visualizer (6-stem support)
 };
 
+//==============================================================================
+// AboutOverlay - Custom borderless About screen that closes on click
+class AboutOverlay : public juce::Component
+{
+public:
+    AboutOverlay (StemperatorProcessor& proc)
+        : processor (proc)
+    {
+        setOpaque (false);
+        setWantsKeyboardFocus (true);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Semi-transparent dark overlay
+        g.setColour (juce::Colour (0xcc000008));
+        g.fillAll();
+
+        // Center panel dimensions
+        float panelWidth = juce::jmin (600.0f, bounds.getWidth() * 0.7f);
+        float panelHeight = juce::jmin (500.0f, bounds.getHeight() * 0.8f);
+        auto panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        // Panel background with gradient
+        juce::ColourGradient bgGradient (
+            juce::Colour (0xff151522), panelBounds.getCentreX(), panelBounds.getY(),
+            juce::Colour (0xff0a0a10), panelBounds.getCentreX(), panelBounds.getBottom(), false);
+        g.setGradientFill (bgGradient);
+        g.fillRoundedRectangle (panelBounds, 16.0f);
+
+        // Panel border with accent glow
+        g.setColour (juce::Colour (0xff7b68ee).withAlpha (0.6f));
+        g.drawRoundedRectangle (panelBounds.reduced (1), 16.0f, 2.0f);
+
+        // Content area
+        auto contentArea = panelBounds.reduced (40);
+        float y = contentArea.getY();
+
+        // Title: STEMPERATOR with colorful letters matching stem colors
+        // Cycle through: Vocals(red), Drums(blue), Bass(green), Other(orange)
+        const juce::Colour letterColors[] = {
+            juce::Colour (0xffff5555), // S - Vocals red
+            juce::Colour (0xff5599ff), // T - Drums blue
+            juce::Colour (0xff55ff99), // E - Bass green
+            juce::Colour (0xffffaa33), // M - Other orange
+            juce::Colour (0xffff5555), // P - Vocals red
+            juce::Colour (0xff5599ff), // E - Drums blue
+            juce::Colour (0xff55ff99), // R - Bass green
+            juce::Colour (0xffffaa33), // A - Other orange
+            juce::Colour (0xffff5555), // T - Vocals red
+            juce::Colour (0xff5599ff), // O - Drums blue
+            juce::Colour (0xff55ff99)  // R - Bass green
+        };
+        const char* letters = "STEMPERATOR";
+        g.setFont (juce::FontOptions (48.0f).withStyle ("Bold"));
+
+        // Calculate total width for centering
+        float totalWidth = 0;
+        for (int i = 0; letters[i] != '\0'; ++i)
+        {
+            juce::String letter = juce::String::charToString (letters[i]);
+            totalWidth += g.getCurrentFont().getStringWidthFloat (letter);
+        }
+
+        // Draw each letter with its color
+        float letterX = contentArea.getCentreX() - totalWidth / 2;
+        for (int i = 0; letters[i] != '\0'; ++i)
+        {
+            juce::String letter = juce::String::charToString (letters[i]);
+            float letterWidth = g.getCurrentFont().getStringWidthFloat (letter);
+            g.setColour (letterColors[i]);
+            g.drawText (letter, (int) letterX, (int) y, (int) letterWidth + 2, 60,
+                        juce::Justification::centredLeft);
+            letterX += letterWidth;
+        }
+        y += 55;
+
+        // Subtitle
+        g.setColour (juce::Colour (0xffaaaacc));
+        g.setFont (juce::FontOptions (16.0f));
+        g.drawText ("AI-POWERED STEM SEPARATION", contentArea.getX(), y, contentArea.getWidth(), 25,
+                    juce::Justification::centred);
+        y += 40;
+
+        // Version
+        g.setColour (juce::Colour (0xff7b68ee));
+        g.setFont (juce::FontOptions (14.0f));
+        g.drawText ("Version 1.0.0", contentArea.getX(), y, contentArea.getWidth(), 22,
+                    juce::Justification::centred);
+        y += 35;
+
+        // Divider line
+        g.setColour (juce::Colour (0xff7b68ee).withAlpha (0.4f));
+        g.fillRect (contentArea.getCentreX() - 100, y, 200.0f, 2.0f);
+        y += 25;
+
+        // Stem icons/colors with labels
+        float stemY = y;
+        float stemSpacing = 35.0f;
+        float iconSize = 12.0f;
+        float iconX = contentArea.getCentreX() - 60;
+        float textX = contentArea.getCentreX() - 40;
+
+        const juce::Colour stemColors[] = {
+            juce::Colour (0xffff5555), // Vocals - red
+            juce::Colour (0xff5599ff), // Drums - blue
+            juce::Colour (0xff55ff99), // Bass - green
+            juce::Colour (0xffffaa33), // Other - orange
+            juce::Colour (0xffffb450), // Guitar - golden
+            juce::Colour (0xffff78c8)  // Piano - pink
+        };
+        const char* stemNames[] = { "Vocals", "Drums", "Bass", "Other", "Guitar", "Piano" };
+        int numStems = processor.is6StemModel() ? 6 : 4;
+
+        for (int i = 0; i < numStems; ++i)
+        {
+            // Color dot
+            g.setColour (stemColors[i]);
+            g.fillEllipse (iconX, stemY + (stemSpacing - iconSize) / 2, iconSize, iconSize);
+
+            // Label
+            g.setColour (juce::Colour (0xffccccdd));
+            g.setFont (juce::FontOptions (15.0f));
+            g.drawText (stemNames[i], textX, stemY, 100, (int) stemSpacing - 5,
+                        juce::Justification::centredLeft);
+            stemY += stemSpacing;
+        }
+        y = stemY + 15;
+
+        // GPU/AI status
+        g.setColour (juce::Colour (0xff666688));
+        g.setFont (juce::FontOptions (12.0f));
+        juce::String status = processor.getGPUInfo();
+        if (processor.isDemucsAvailable())
+            status += " | Demucs Ready";
+        else
+            status += " | Demucs Not Found";
+        g.drawText (status, contentArea.getX(), y, contentArea.getWidth(), 20,
+                    juce::Justification::centred);
+        y += 30;
+
+        // Brand
+        g.setColour (juce::Colour (0xff7b68ee));
+        g.setFont (juce::FontOptions (20.0f).withStyle ("Bold"));
+        g.drawText ("flarkAUDIO", contentArea.getX(), y, contentArea.getWidth(), 30,
+                    juce::Justification::centred);
+
+        // "Click anywhere to close" hint at bottom
+        g.setColour (juce::Colour (0xff555566));
+        g.setFont (juce::FontOptions (11.0f));
+        g.drawText ("Click anywhere to close", panelBounds.getX(),
+                    panelBounds.getBottom() - 30, panelBounds.getWidth(), 20,
+                    juce::Justification::centred);
+    }
+
+    void mouseDown (const juce::MouseEvent&) override
+    {
+        // Close overlay when clicked
+        if (auto* parent = getParentComponent())
+        {
+            parent->removeChildComponent (this);
+            delete this;
+        }
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        // Close on Escape or any key
+        if (key == juce::KeyPress::escapeKey || key == juce::KeyPress::spaceKey)
+        {
+            if (auto* parent = getParentComponent())
+            {
+                parent->removeChildComponent (this);
+                delete this;
+            }
+            return true;
+        }
+        return false;
+    }
+
+private:
+    StemperatorProcessor& processor;
+};
+
+//==============================================================================
+// Colorful Mode Label - draws "STEMS" with stem colors
+class ColorfulModeLabel : public juce::Label
+{
+public:
+    ColorfulModeLabel() { setOpaque (false); }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Draw background if set
+        auto bgColour = findColour (juce::Label::backgroundColourId);
+        if (! bgColour.isTransparent())
+        {
+            g.setColour (bgColour);
+            g.fillRoundedRectangle (bounds, 4.0f);
+        }
+
+        juce::String text = getText();
+        if (text.isEmpty())
+            return;
+
+        g.setFont (getFont());
+
+        // Check if this is "Mode: STEMS" - draw STEMS in colorful letters
+        if (text == "Mode: STEMS")
+        {
+            // Draw "Mode: " in normal color
+            juce::String prefix = "Mode: ";
+            float prefixWidth = g.getCurrentFont().getStringWidthFloat (prefix);
+            g.setColour (findColour (juce::Label::textColourId));
+            g.drawText (prefix, bounds.reduced (4, 0), juce::Justification::centredLeft);
+
+            // Draw "STEMS" with stem colors
+            const juce::Colour stemColors[] = {
+                juce::Colour (0xffff5555), // S - Vocals red
+                juce::Colour (0xff5599ff), // T - Drums blue
+                juce::Colour (0xff55ff99), // E - Bass green
+                juce::Colour (0xffffaa33), // M - Other orange
+                juce::Colour (0xffff5555)  // S - Vocals red
+            };
+            const char* letters = "STEMS";
+
+            float x = bounds.getX() + 4 + prefixWidth;
+            for (int i = 0; letters[i] != '\0'; ++i)
+            {
+                juce::String letter = juce::String::charToString (letters[i]);
+                float letterWidth = g.getCurrentFont().getStringWidthFloat (letter);
+                g.setColour (stemColors[i]);
+                g.drawText (letter, (int) x, (int) bounds.getY(), (int) letterWidth + 1,
+                            (int) bounds.getHeight(), juce::Justification::centredLeft);
+                x += letterWidth;
+            }
+        }
+        else
+        {
+            // Normal text rendering
+            g.setColour (findColour (juce::Label::textColourId));
+            g.drawText (text, bounds.reduced (4, 0), getJustificationType());
+        }
+    }
+};
+
+//==============================================================================
+// Cancelled overlay - styled notification for cancelled operations
+class CancelledOverlay : public juce::Component
+{
+public:
+    CancelledOverlay (const juce::String& message, std::function<void()> onDismiss)
+        : messageText (message), dismissCallback (onDismiss)
+    {
+        setOpaque (false);
+        setWantsKeyboardFocus (true);
+
+        okButton.setButtonText ("OK");
+        okButton.onClick = [this]() { dismiss(); };
+        addAndMakeVisible (okButton);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Semi-transparent dark overlay
+        g.setColour (juce::Colour (0xcc000008));
+        g.fillAll();
+
+        // Center panel - smaller for simple message
+        float panelWidth = juce::jmin (400.0f, bounds.getWidth() * 0.7f);
+        float panelHeight = 200.0f;
+        panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        // Panel background with gradient
+        juce::ColourGradient bgGradient (
+            juce::Colour (0xff151522), panelBounds.getCentreX(), panelBounds.getY(),
+            juce::Colour (0xff0a0a10), panelBounds.getCentreX(), panelBounds.getBottom(), false);
+        g.setGradientFill (bgGradient);
+        g.fillRoundedRectangle (panelBounds, 16.0f);
+
+        // Panel border with orange/amber glow (cancelled = warning color)
+        g.setColour (juce::Colour (0xffffaa33).withAlpha (0.6f));
+        g.drawRoundedRectangle (panelBounds.reduced (1), 16.0f, 2.0f);
+
+        auto contentArea = panelBounds.reduced (30);
+        float y = contentArea.getY();
+
+        // X icon
+        g.setColour (juce::Colour (0xffffaa33));
+        float iconSize = 50.0f;
+        float iconX = contentArea.getCentreX() - iconSize / 2;
+        juce::Path xPath;
+        xPath.startNewSubPath (iconX + 10, y + 10);
+        xPath.lineTo (iconX + iconSize - 10, y + iconSize - 10);
+        xPath.startNewSubPath (iconX + iconSize - 10, y + 10);
+        xPath.lineTo (iconX + 10, y + iconSize - 10);
+        g.strokePath (xPath, juce::PathStrokeType (5.0f, juce::PathStrokeType::curved,
+                                                    juce::PathStrokeType::rounded));
+        y += 60;
+
+        // Title: "Cancelled" in orange
+        g.setColour (juce::Colour (0xffffaa33));
+        g.setFont (juce::FontOptions (28.0f).withStyle ("Bold"));
+        g.drawText ("Cancelled", contentArea.getX(), (int) y, (int) contentArea.getWidth(), 35,
+                    juce::Justification::centred);
+        y += 40;
+
+        // Message text
+        g.setColour (juce::Colour (0xffccccdd));
+        g.setFont (juce::FontOptions (14.0f));
+        g.drawText (messageText, contentArea.getX(), (int) y, (int) contentArea.getWidth(), 30,
+                    juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        float panelWidth = juce::jmin (400.0f, bounds.getWidth() * 0.7f);
+        float panelHeight = 200.0f;
+        panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        float buttonY = panelBounds.getBottom() - 50;
+        float buttonWidth = 100.0f;
+        float buttonX = panelBounds.getCentreX() - buttonWidth / 2;
+        okButton.setBounds ((int) buttonX, (int) buttonY, (int) buttonWidth, 35);
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey || key == juce::KeyPress::returnKey)
+        {
+            dismiss();
+            return true;
+        }
+        return false;
+    }
+
+private:
+    juce::String messageText;
+    std::function<void()> dismissCallback;
+    juce::Rectangle<float> panelBounds;
+    juce::TextButton okButton;
+
+    void dismiss()
+    {
+        if (dismissCallback)
+            dismissCallback();
+
+        if (auto* parent = getParentComponent())
+        {
+            parent->removeChildComponent (this);
+            delete this;
+        }
+    }
+};
+
+//==============================================================================
+// Export Complete overlay - styled like About screen
+class ExportCompleteOverlay : public juce::Component
+{
+public:
+    ExportCompleteOverlay (const juce::String& stats, const juce::File& stemFolder,
+                           std::function<void(int)> onAction)
+        : statsText (stats), folder (stemFolder), actionCallback (onAction)
+    {
+        setOpaque (false);
+        setWantsKeyboardFocus (true);
+
+        // Create styled buttons
+        playButton.setButtonText ("Play Stems");
+        playButton.onClick = [this]() { handleAction (1); };
+        addAndMakeVisible (playButton);
+
+        openButton.setButtonText ("Open Folder");
+        openButton.onClick = [this]() { handleAction (2); };
+        addAndMakeVisible (openButton);
+
+        okButton.setButtonText ("OK");
+        okButton.onClick = [this]() { handleAction (3); };
+        addAndMakeVisible (okButton);
+
+        quitButton.setButtonText ("Quit");
+        quitButton.onClick = [this]() { handleAction (4); };
+        addAndMakeVisible (quitButton);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Semi-transparent dark overlay
+        g.setColour (juce::Colour (0xcc000008));
+        g.fillAll();
+
+        // Center panel dimensions - 2x larger for better readability
+        float panelWidth = juce::jmin (750.0f, bounds.getWidth() * 0.85f);
+        float panelHeight = juce::jmin (550.0f, bounds.getHeight() * 0.85f);
+        panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        // Panel background with gradient
+        juce::ColourGradient bgGradient (
+            juce::Colour (0xff151522), panelBounds.getCentreX(), panelBounds.getY(),
+            juce::Colour (0xff0a0a10), panelBounds.getCentreX(), panelBounds.getBottom(), false);
+        g.setGradientFill (bgGradient);
+        g.fillRoundedRectangle (panelBounds, 16.0f);
+
+        // Panel border with success green glow
+        g.setColour (juce::Colour (0xff55ff99).withAlpha (0.6f));
+        g.drawRoundedRectangle (panelBounds.reduced (1), 16.0f, 2.0f);
+
+        // Content area
+        auto contentArea = panelBounds.reduced (40);
+        float y = contentArea.getY();
+
+        // Checkmark icon - larger
+        g.setColour (juce::Colour (0xff55ff99));
+        float checkSize = 70.0f;
+        float checkX = contentArea.getCentreX() - checkSize / 2;
+        juce::Path checkPath;
+        checkPath.startNewSubPath (checkX + 14, y + 40);
+        checkPath.lineTo (checkX + 30, y + 56);
+        checkPath.lineTo (checkX + 58, y + 20);
+        g.strokePath (checkPath, juce::PathStrokeType (7.0f, juce::PathStrokeType::curved,
+                                                        juce::PathStrokeType::rounded));
+        y += 75;
+
+        // Title: "Export Complete" with colorful letters
+        const juce::Colour letterColors[] = {
+            juce::Colour (0xff55ff99), // E - green
+            juce::Colour (0xff5599ff), // x - blue
+            juce::Colour (0xffffaa33), // p - orange
+            juce::Colour (0xffff5555), // o - red
+            juce::Colour (0xff55ff99), // r - green
+            juce::Colour (0xff5599ff), // t - blue
+            juce::Colour (0xffffffff), // (space)
+            juce::Colour (0xff55ff99), // C - green
+            juce::Colour (0xffffaa33), // o - orange
+            juce::Colour (0xff5599ff), // m - blue
+            juce::Colour (0xffff5555), // p - red
+            juce::Colour (0xff55ff99), // l - green
+            juce::Colour (0xffffaa33), // e - orange
+            juce::Colour (0xff5599ff), // t - blue
+            juce::Colour (0xffff5555)  // e - red
+        };
+        const char* title = "Export Complete";
+        g.setFont (juce::FontOptions (42.0f).withStyle ("Bold"));
+
+        // Calculate total width for centering
+        float totalWidth = 0;
+        for (int i = 0; title[i] != '\0'; ++i)
+        {
+            juce::String letter = juce::String::charToString (title[i]);
+            totalWidth += g.getCurrentFont().getStringWidthFloat (letter);
+        }
+
+        // Draw each letter with its color
+        float letterX = contentArea.getCentreX() - totalWidth / 2;
+        for (int i = 0; title[i] != '\0'; ++i)
+        {
+            juce::String letter = juce::String::charToString (title[i]);
+            float letterWidth = g.getCurrentFont().getStringWidthFloat (letter);
+            g.setColour (letterColors[i]);
+            g.drawText (letter, (int) letterX, (int) y, (int) letterWidth + 2, 50,
+                        juce::Justification::centredLeft);
+            letterX += letterWidth;
+        }
+        y += 60;
+
+        // Stats text - larger and more space
+        g.setColour (juce::Colour (0xffccccdd));
+        g.setFont (juce::FontOptions (16.0f));
+        g.drawFittedText (statsText, (int) contentArea.getX(), (int) y,
+                          (int) contentArea.getWidth(), 180,
+                          juce::Justification::centred, 10);
+        y += 190;
+
+        // Divider line
+        g.setColour (juce::Colour (0xff55ff99).withAlpha (0.4f));
+        g.fillRect (contentArea.getCentreX() - 150, y, 300.0f, 2.0f);
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Calculate panel bounds (same as in paint)
+        float panelWidth = juce::jmin (750.0f, bounds.getWidth() * 0.85f);
+        float panelHeight = juce::jmin (550.0f, bounds.getHeight() * 0.85f);
+        panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        auto contentArea = panelBounds.reduced (40);
+        float buttonY = panelBounds.getBottom() - 70;
+        float buttonWidth = 130.0f;
+        float buttonHeight = 40.0f;
+        float spacing = 15.0f;
+        float totalButtonWidth = buttonWidth * 4 + spacing * 3;
+        float startX = contentArea.getCentreX() - totalButtonWidth / 2;
+
+        playButton.setBounds ((int) startX, (int) buttonY, (int) buttonWidth, (int) buttonHeight);
+        openButton.setBounds ((int) (startX + buttonWidth + spacing), (int) buttonY, (int) buttonWidth, (int) buttonHeight);
+        okButton.setBounds ((int) (startX + (buttonWidth + spacing) * 2), (int) buttonY, (int) buttonWidth, (int) buttonHeight);
+        quitButton.setBounds ((int) (startX + (buttonWidth + spacing) * 3), (int) buttonY, (int) buttonWidth, (int) buttonHeight);
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            handleAction (3);  // Same as OK
+            return true;
+        }
+        if (key == juce::KeyPress::returnKey)
+        {
+            handleAction (1);  // Play Stems
+            return true;
+        }
+        return false;
+    }
+
+private:
+    juce::String statsText;
+    juce::File folder;
+    std::function<void(int)> actionCallback;
+    juce::Rectangle<float> panelBounds;
+
+    juce::TextButton playButton, openButton, okButton, quitButton;
+
+    void handleAction (int action)
+    {
+        if (actionCallback)
+            actionCallback (action);
+
+        if (auto* parent = getParentComponent())
+        {
+            parent->removeChildComponent (this);
+            delete this;
+        }
+    }
+};
+
 StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     : AudioProcessorEditor (&p), processor (p)
 {
@@ -198,16 +759,49 @@ StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
         addAndMakeVisible (*stemChannels[i]);
         // Hide Guitar/Piano channels initially (shown when 6-stem model is selected)
         if (i >= 4)
+        {
             stemChannels[i]->setVisible (processor.is6StemModel());
+            // Mark Guitar/Piano as needing AI separation (not available in real-time preview)
+            stemChannels[i]->setNeedsAISeparation (true);
+        }
+
+        // Setup Reaper-style mute/solo callbacks with modifier keys
+        stemChannels[i]->onMuteChanged = [this, i] (bool state, bool ctrlDown, bool /*shiftDown*/) {
+            if (ctrlDown)
+            {
+                // Ctrl+Click: Mute/Unmute ALL stems
+                int numStems = processor.is6StemModel() ? 6 : 4;
+                for (int j = 0; j < numStems; ++j)
+                {
+                    stemChannels[static_cast<size_t> (j)]->getMuteButton().setToggleState (state, juce::sendNotification);
+                }
+            }
+            // Normal click: just toggle this stem (already handled by button)
+        };
+
+        stemChannels[i]->onSoloChanged = [this, i] (bool state, bool /*ctrlDown*/, bool shiftDown) {
+            if (shiftDown && state)
+            {
+                // Shift+Click: Exclusive solo - solo only this, unsolo all others
+                int numStems = processor.is6StemModel() ? 6 : 4;
+                for (int j = 0; j < numStems; ++j)
+                {
+                    bool shouldSolo = (j == i);
+                    stemChannels[static_cast<size_t> (j)]->getSoloButton().setToggleState (shouldSolo, juce::sendNotification);
+                }
+            }
+            // Normal click: just toggle this stem (already handled by button)
+        };
     }
 
-    // Visualizer
-    addAndMakeVisible (visualizer);
+    // Visualizer removed - stem channels have individual level meters
 
-    // Master slider - vertical fader style
-    setupSlider (masterSlider, PremiumLookAndFeel::Colours::accent);
+    // Master slider - vertical fader style (white for uniformity)
+    setupSlider (masterSlider, juce::Colours::white);
     masterSlider.setSliderStyle (juce::Slider::LinearVertical);
-    masterSlider.setTextValueSuffix (" dB");
+    // Note: Don't set suffix - the parameter's stringFromValue already adds " dB"
+    masterSlider.setTooltip ("Master output volume (double-click to reset to 0 dB)");
+    masterSlider.setDoubleClickReturnValue (true, 0.0);  // Double-click resets to 0 dB
 
     // Create attachment BEFORE setting other properties - it sets range and default value
     masterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
@@ -217,10 +811,68 @@ StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     masterLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
     addAndMakeVisible (masterLabel);
 
+    // Master mute button (for visual consistency with stem channels)
+    masterMuteButton.setClickingTogglesState (true);
+    masterMuteButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    masterMuteButton.setColour (juce::TextButton::buttonOnColourId, PremiumLookAndFeel::Colours::mute);
+    masterMuteButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    masterMuteButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    masterMuteButton.setTooltip ("Mute master output");
+    masterMuteButton.onClick = [this] {
+        // When master mute is toggled
+        if (masterMuteButton.getToggleState())
+        {
+            // Store current value before muting
+            previousMasterGain = masterSlider.getValue();
+            masterSlider.setValue (-60.0, juce::sendNotification);
+        }
+        else
+        {
+            // Restore previous value when unmuting
+            masterSlider.setValue (previousMasterGain, juce::sendNotification);
+        }
+    };
+    addAndMakeVisible (masterMuteButton);
+
+    // Master solo button (for visual consistency - functionally a bypass/solo-all)
+    masterSoloButton.setClickingTogglesState (true);
+    masterSoloButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    masterSoloButton.setColour (juce::TextButton::buttonOnColourId, PremiumLookAndFeel::Colours::solo);
+    masterSoloButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    masterSoloButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    masterSoloButton.setTooltip ("Solo master (bypass stem separation)");
+    addAndMakeVisible (masterSoloButton);
+
+    // Reset All button - resets all stem faders to 0 dB and clears mute/solo
+    resetAllButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    resetAllButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::accent);
+    resetAllButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    resetAllButton.setTooltip ("Reset all stem faders to 0 dB and clear mute/solo states");
+    resetAllButton.onClick = [this] {
+        // Reset all stem faders to 0 dB and clear mute/solo
+        int numStems = processor.is6StemModel() ? 6 : 4;
+        for (int i = 0; i < numStems; ++i)
+        {
+            stemChannels[static_cast<size_t> (i)]->getGainSlider().setValue (0.0, juce::sendNotification);
+            stemChannels[static_cast<size_t> (i)]->getMuteButton().setToggleState (false, juce::sendNotification);
+            stemChannels[static_cast<size_t> (i)]->getSoloButton().setToggleState (false, juce::sendNotification);
+        }
+        // Also reset master to 0 dB and clear master mute
+        masterSlider.setValue (0.0, juce::sendNotification);
+        masterMuteButton.setToggleState (false, juce::sendNotification);
+        masterSoloButton.setToggleState (false, juce::sendNotification);
+    };
+    addAndMakeVisible (resetAllButton);
+
     // Focus controls - rotary knobs
     setupKnob (vocalsFocusSlider, vocalsFocusLabel, "VOCAL FOCUS", stemColours[0]);
     setupKnob (bassCutoffSlider, bassCutoffLabel, "BASS CUTOFF", stemColours[2]);
     setupKnob (drumSensSlider, drumSensLabel, "DRUM SENS", stemColours[1]);
+
+    // Tooltips for focus controls
+    vocalsFocusSlider.setTooltip ("Adjust how much center-channel content goes to vocals (real-time preview only)");
+    bassCutoffSlider.setTooltip ("Set the frequency cutoff for bass separation (real-time preview only)");
+    drumSensSlider.setTooltip ("Adjust drum/transient detection sensitivity (real-time preview only)");
 
     vocalsFocusAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         processor.getParameters(), "vocalsFocus", vocalsFocusSlider);
@@ -229,18 +881,27 @@ StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     drumSensAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
         processor.getParameters(), "drumSensitivity", drumSensSlider);
 
-    // Quality selector
-    qualityBox.addItem ("Fast", 1);
-    qualityBox.addItem ("Balanced", 2);
-    qualityBox.addItem ("Best", 3);
-    addAndMakeVisible (qualityBox);
+    // Quality selector (three-way toggle button)
+    qualityButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    qualityButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+    qualityButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+    qualityButton.setTooltip ("Click to cycle: Fast -> Balanced -> Best");
+    qualityButton.onClick = [this] { onQualityButtonClicked(); };
+    addAndMakeVisible (qualityButton);
 
     qualityLabel.setJustificationType (juce::Justification::centred);
     qualityLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
     addAndMakeVisible (qualityLabel);
 
-    qualityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
-        processor.getParameters(), "quality", qualityBox);
+    // Quality button doesn't use attachment - controlled by currentQuality member
+
+    // Model selector (4-stem vs 6-stem)
+    modelBox.addItem ("4 Stems", 1);
+    modelBox.addItem ("6 Stems", 2);
+    modelBox.setSelectedId (1);  // Default to 4-stem
+    modelBox.onChange = [this] { onModelChanged(); };
+    modelBox.setTooltip ("4 Stems: Vocals, Drums, Bass, Other | 6 Stems: adds Guitar, Piano (uses htdemucs_6s model)");
+    addAndMakeVisible (modelBox);
 
     // Title - large and prominent
     titleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
@@ -268,9 +929,9 @@ StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     for (auto& level : exportStemLevels)
         level.store (0.0f);
 
-    // Register keyboard listener for Escape to cancel
-    // Note: We listen at parent level but don't grab focus immediately
-    // to allow menu bar clicks to work on Linux
+    // Register keyboard listener for Escape to cancel and Space to play
+    // Enable keyboard focus so we can receive key events
+    setWantsKeyboardFocus (true);
     addKeyListener (this);
 
     // Start timer for level updates - very slow at idle, will speed up when playing
@@ -280,17 +941,124 @@ StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     setBufferedToImage (true);
     setOpaque (true);  // Don't need transparency, enables faster rendering
 
+    // Scale selector (ComboBox) - 25% to 400% in 25% steps
+    scaleBox.addItem ("25%", 1);
+    scaleBox.addItem ("50%", 2);
+    scaleBox.addItem ("75%", 3);
+    scaleBox.addItem ("100%", 4);
+    scaleBox.addItem ("125%", 5);
+    scaleBox.addItem ("150%", 6);
+    scaleBox.addItem ("200%", 7);
+    scaleBox.addItem ("300%", 8);
+    scaleBox.addItem ("400%", 9);
+    scaleBox.setSelectedId (4);  // Default to 100%
+    scaleBox.onChange = [this] { onScaleChanged(); };
+    scaleBox.setTooltip ("Window scale: 25% (480x270) to 400% (3840x2160)");
+    addAndMakeVisible (scaleBox);
+
+    scaleLabel.setJustificationType (juce::Justification::centred);
+    scaleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+    addAndMakeVisible (scaleLabel);
+
     // Resizable with wide range for small laptops to 4K monitors
     setResizable (true, true);
-    setResizeLimits (600, 400, 3840, 2160);
-    setSize (850, 550);
+    setResizeLimits (480, 270, 3840, 2160);  // 25% to 400% of 1920x1080
+    setSize (1920, 1080);  // Default to 100% = 1920x1080
+
+    // Load persistent settings
+    loadSettings();
 }
 
 StemperatorEditor::~StemperatorEditor()
 {
+    // Save settings before exit
+    saveSettings();
+
     setLookAndFeel (nullptr);
     stopTimer();
     transportSource.setSource (nullptr);
+}
+
+//==============================================================================
+// Persistent settings
+void StemperatorEditor::loadSettings()
+{
+    juce::PropertiesFile::Options options;
+    options.applicationName = "Stemperator";
+    options.folderName = "flarkAUDIO";
+    options.filenameSuffix = ".settings";
+    options.osxLibrarySubFolder = "Application Support";
+
+    appSettings = std::make_unique<juce::PropertiesFile> (options);
+
+    // Load last used folders
+    juce::String stemFolderPath = appSettings->getValue ("lastStemFolder", "");
+    if (stemFolderPath.isNotEmpty())
+        lastStemFolder = juce::File (stemFolderPath);
+
+    juce::String audioFolderPath = appSettings->getValue ("lastAudioFolder", "");
+    if (audioFolderPath.isNotEmpty())
+        lastAudioFolder = juce::File (audioFolderPath);
+
+    // Load default stem folder setting
+    juce::String defaultFolderPath = appSettings->getValue ("defaultStemFolder", "");
+    if (defaultFolderPath.isNotEmpty())
+        defaultStemFolder = juce::File (defaultFolderPath);
+
+    // Load recent stem folders
+    juce::String recentFoldersStr = appSettings->getValue ("recentStemFolders", "");
+    if (recentFoldersStr.isNotEmpty())
+    {
+        recentStemFolders.clear();
+        recentStemFolders.addTokens (recentFoldersStr, "|", "");
+        // Remove any non-existing folders
+        for (int i = recentStemFolders.size() - 1; i >= 0; --i)
+        {
+            if (! juce::File (recentStemFolders[i]).isDirectory())
+                recentStemFolders.remove (i);
+        }
+    }
+}
+
+void StemperatorEditor::saveSettings()
+{
+    if (appSettings)
+    {
+        if (lastStemFolder.exists())
+            appSettings->setValue ("lastStemFolder", lastStemFolder.getFullPathName());
+
+        if (lastAudioFolder.exists())
+            appSettings->setValue ("lastAudioFolder", lastAudioFolder.getFullPathName());
+
+        if (defaultStemFolder.exists())
+            appSettings->setValue ("defaultStemFolder", defaultStemFolder.getFullPathName());
+
+        // Save recent stem folders as pipe-separated string
+        if (recentStemFolders.size() > 0)
+            appSettings->setValue ("recentStemFolders", recentStemFolders.joinIntoString ("|"));
+
+        appSettings->saveIfNeeded();
+    }
+}
+
+void StemperatorEditor::addToRecentStems (const juce::File& folder)
+{
+    if (! folder.isDirectory())
+        return;
+
+    juce::String folderPath = folder.getFullPathName();
+
+    // Remove if already exists (we'll add at front)
+    recentStemFolders.removeString (folderPath);
+
+    // Add to front
+    recentStemFolders.insert (0, folderPath);
+
+    // Keep only max items
+    while (recentStemFolders.size() > maxRecentFolders)
+        recentStemFolders.remove (recentStemFolders.size() - 1);
+
+    saveSettings();
 }
 
 //==============================================================================
@@ -343,6 +1111,25 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
         menu.addCommandItem (&commandManager, cmdLoadFile);
         menu.addCommandItem (&commandManager, cmdLoadStems);
         menu.addCommandItem (&commandManager, cmdOpenStemFolder);
+
+        // Recently Stemmed submenu
+        if (recentStemFolders.size() > 0)
+        {
+            juce::PopupMenu recentMenu;
+            for (int i = 0; i < recentStemFolders.size(); ++i)
+            {
+                juce::File folder (recentStemFolders[i]);
+                juce::String displayName = folder.getFileName();
+                // Show parent folder for context if name is generic like "stems"
+                if (displayName.endsWithIgnoreCase ("_stems") || displayName.equalsIgnoreCase ("stems"))
+                    displayName = folder.getParentDirectory().getFileName() + "/" + displayName;
+                recentMenu.addItem (1000 + i, displayName);
+            }
+            recentMenu.addSeparator();
+            recentMenu.addItem (999, "Clear Recent List");
+            menu.addSubMenu ("Recently Stemmed", recentMenu, true);
+        }
+
         menu.addSeparator();
         menu.addCommandItem (&commandManager, cmdSeparate);
         menu.addCommandItem (&commandManager, cmdBatchProcess);
@@ -362,6 +1149,13 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
         menu.addCommandItem (&commandManager, cmdExportDrums);
         menu.addCommandItem (&commandManager, cmdExportBass);
         menu.addCommandItem (&commandManager, cmdExportOther);
+        if (processor.getNumStems() == 6)
+        {
+            menu.addCommandItem (&commandManager, cmdExportGuitar);
+            menu.addCommandItem (&commandManager, cmdExportPiano);
+        }
+        menu.addSeparator();
+        menu.addCommandItem (&commandManager, cmdSetDefaultStemFolder);
     }
     else if (menuIndex == 2)  // Help menu
     {
@@ -371,9 +1165,72 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
     return menu;
 }
 
-void StemperatorEditor::menuItemSelected (int, int)
+void StemperatorEditor::menuItemSelected (int menuItemID, int /*topLevelMenuIndex*/)
 {
-    // Handled by command manager
+    // Handle recently stemmed items (IDs 1000+)
+    if (menuItemID >= 1000 && menuItemID < 1000 + recentStemFolders.size())
+    {
+        int index = menuItemID - 1000;
+        juce::File folder (recentStemFolders[index]);
+        if (folder.isDirectory())
+            loadStemsAfterExport (folder);
+        return;
+    }
+
+    // Handle clear recent list
+    if (menuItemID == 999)
+    {
+        recentStemFolders.clear();
+        saveSettings();
+        return;
+    }
+
+    // Other items handled by command manager
+}
+
+void StemperatorEditor::onModelChanged()
+{
+    // Set model based on selection (1 = 4 stems, 2 = 6 stems)
+    int selected = modelBox.getSelectedId();
+    if (selected == 1)
+        processor.getDemucsProcessor().setModel (DemucsProcessor::HTDemucs);
+    else
+        processor.getDemucsProcessor().setModel (DemucsProcessor::HTDemucs_6S);
+
+    // Trigger layout update to show/hide Guitar and Piano channels
+    resized();
+}
+
+void StemperatorEditor::onScaleChanged()
+{
+    // Map ComboBox ID to scale percentage
+    int scalePercents[] = { 25, 50, 75, 100, 125, 150, 200, 300, 400 };
+    int selectedIndex = scaleBox.getSelectedId() - 1;  // 0-based index
+
+    if (selectedIndex < 0 || selectedIndex >= 9)
+        return;
+
+    float scaleFactor = static_cast<float> (scalePercents[selectedIndex]) / 100.0f;
+
+    // Base size is 1920x1080
+    int newWidth = juce::roundToInt (1920 * scaleFactor);
+    int newHeight = juce::roundToInt (1080 * scaleFactor);
+
+    // Set the new size
+    setSize (newWidth, newHeight);
+}
+
+void StemperatorEditor::onQualityButtonClicked()
+{
+    // Cycle through: Fast (0) -> Balanced (1) -> Best (2) -> Fast (0) ...
+    currentQuality = (currentQuality + 1) % 3;
+
+    const char* qualityNames[] = { "Fast", "Balanced", "Best" };
+    qualityButton.setButtonText (qualityNames[currentQuality]);
+
+    // Update processor parameter
+    if (auto* param = processor.getParameters().getParameter ("quality"))
+        param->setValueNotifyingHost (static_cast<float> (currentQuality) / 2.0f);  // Normalize to 0-1
 }
 
 //==============================================================================
@@ -391,10 +1248,13 @@ void StemperatorEditor::getAllCommands (juce::Array<juce::CommandID>& commands)
         cmdExportDrums,
         cmdExportBass,
         cmdExportOther,
+        cmdExportGuitar,
+        cmdExportPiano,
         cmdPlay,
         cmdStop,
         cmdPlayStems,
         cmdOpenStemFolder,
+        cmdSetDefaultStemFolder,
         cmdAbout,
         cmdQuit
     });
@@ -443,6 +1303,14 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
             result.setInfo ("Export Other...", "Export other/instruments stem", "Export", 0);
             result.setActive (hasLoadedFile);
             break;
+        case cmdExportGuitar:
+            result.setInfo ("Export Guitar...", "Export guitar stem (6-stem model)", "Export", 0);
+            result.setActive (hasLoadedFile && processor.getNumStems() == 6);
+            break;
+        case cmdExportPiano:
+            result.setInfo ("Export Piano...", "Export piano stem (6-stem model)", "Export", 0);
+            result.setActive (hasLoadedFile && processor.getNumStems() == 6);
+            break;
         case cmdExportMix:
             result.setInfo ("Export Mix...", "Export stems merged with current volume/mute settings", "Export", 0);
             result.addDefaultKeypress ('m', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
@@ -451,6 +1319,14 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
         case cmdOpenStemFolder:
             result.setInfo ("Load Created Stems", "Load previously exported stems for playback", "File", 0);
             result.setActive (lastStemFolder.exists());
+            break;
+        case cmdSetDefaultStemFolder:
+            {
+                juce::String folderInfo = defaultStemFolder.exists()
+                    ? "Current: " + defaultStemFolder.getFileName()
+                    : "Set Default Stem Folder...";
+                result.setInfo (folderInfo, "Set the default folder for stem export", "Export", 0);
+            }
             break;
         case cmdQuit:
             result.setInfo ("Quit", "Exit the application", "File", 0);
@@ -522,11 +1398,39 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
         case cmdExportOther:
             exportStems (3);
             return true;
+        case cmdExportGuitar:
+            exportStems (4);  // Guitar is stem index 4 in 6-stem model
+            return true;
+        case cmdExportPiano:
+            exportStems (5);  // Piano is stem index 5 in 6-stem model
+            return true;
         case cmdExportMix:
             exportMixedStems();
             return true;
         case cmdOpenStemFolder:
             openStemFolder();
+            return true;
+        case cmdSetDefaultStemFolder:
+            {
+                fileChooser = std::make_unique<juce::FileChooser> (
+                    "Select default folder for stem export...",
+                    defaultStemFolder.exists() ? defaultStemFolder : juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                    "",
+                    true);
+
+                fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                    [this] (const juce::FileChooser& c)
+                    {
+                        auto folder = c.getResult();
+                        if (folder != juce::File() && folder.isDirectory())
+                        {
+                            defaultStemFolder = folder;
+                            saveSettings();
+                            // Update menu to show new folder name
+                            commandManager.commandStatusChanged();
+                        }
+                    });
+            }
             return true;
         case cmdQuit:
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
@@ -566,20 +1470,15 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
             transportSource.setPosition (0.0);
             return true;
         case cmdAbout:
-            juce::AlertWindow::showMessageBoxAsync (
-                juce::MessageBoxIconType::InfoIcon,
-                "About Stemperator",
-                "Stemperator v1.0\n\n"
-                "AI-Powered Stem Separation\n"
-                "by flarkAUDIO\n\n"
-                "Separates audio into:\n"
-                "- Vocals\n"
-                "- Drums\n"
-                "- Bass\n"
-                "- Other instruments\n\n"
-                "Use File > Separate to process,\n"
-                "then Play Stems with mute/solo/volume.");
+        {
+            // Show custom borderless About overlay
+            auto* aboutOverlay = new AboutOverlay (processor);
+            addAndMakeVisible (aboutOverlay);
+            aboutOverlay->setBounds (getLocalBounds());
+            aboutOverlay->toFront (true);
+            aboutOverlay->grabKeyboardFocus();
             return true;
+        }
         default:
             return false;
     }
@@ -677,6 +1576,9 @@ void StemperatorEditor::loadAudioFile (const juce::File& file)
         // Clear any previous separated stems
         hasSeparatedStems = false;
         processor.setSkipSeparation (false);  // Enable spectral separation for original audio
+
+        // Grab keyboard focus so Space works for play/pause
+        grabKeyboardFocus();
     }
     else
     {
@@ -705,10 +1607,20 @@ void StemperatorEditor::exportStems (int stemIndex)
     if (stemIndex < 0)
     {
         // Export all stems - choose folder
+        // Priority: defaultStemFolder (user setting) → lastStemFolder → audio file directory
+        juce::File baseFolder;
+        if (defaultStemFolder.exists())
+            baseFolder = defaultStemFolder;
+        else if (lastStemFolder.exists())
+            baseFolder = lastStemFolder.getParentDirectory();  // Go up from /tmp/song_stems to /tmp
+        else
+            baseFolder = currentAudioFile.getParentDirectory();
+        juce::File startFolder = baseFolder.getChildFile (defaultName + "_stems");
+
         // Use openMode for directory selection (more compatible on Linux)
         fileChooser = std::make_unique<juce::FileChooser> (
             title,
-            currentAudioFile.getParentDirectory().getChildFile (defaultName + "_stems"),
+            startFolder,
             "",
             true);  // useNativeDialogs
 
@@ -733,8 +1645,9 @@ void StemperatorEditor::exportStems (int stemIndex)
                 auto inputFile = currentAudioFile;
 
                 // Get quality setting - maps to model selection
-                int qualityIndex = qualityBox.getSelectedItemIndex();
-                juce::String qualityName = qualityBox.getItemText (qualityBox.getSelectedId() - 1);
+                int qualityIndex = currentQuality;
+                const char* qualityNames[] = { "Fast", "Balanced", "Best" };
+                juce::String qualityName = qualityNames[qualityIndex];
 
                 // Map quality to Demucs model
                 juce::String modelName;
@@ -1211,10 +2124,11 @@ void StemperatorEditor::exportStems (int stemIndex)
                                 if (fileNameLabel)
                                     fileNameLabel->setText ("Export cancelled", juce::dontSendNotification);
 
-                                juce::AlertWindow::showMessageBoxAsync (
-                                    juce::MessageBoxIconType::InfoIcon,
-                                    "Cancelled",
-                                    "Export was cancelled by user.");
+                                // Show styled cancelled overlay
+                                auto* overlay = new CancelledOverlay ("Export was cancelled by user.", nullptr);
+                                addAndMakeVisible (overlay);
+                                overlay->setBounds (getLocalBounds());
+                                overlay->grabKeyboardFocus();
                             });
                             return;
                         }
@@ -1251,28 +2165,20 @@ void StemperatorEditor::exportStems (int stemIndex)
                         for (auto& level : exportStemLevels)
                             level.store (0.0f);
 
+                        // Remember the actual stems folder (not parent!) for Load Created Stems
+                        lastStemFolder = folder;
+                        saveSettings();
+
                         juce::MessageManager::callAsync ([this, folder, savedCount, statsStr]()
                         {
                             if (fileNameLabel)
                                 fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
 
-                            // Show completion dialog with 4 custom buttons
-                            // Note: JUCE's MessageBoxOptions only supports 3 buttons, so we use AlertWindow directly
-                            auto* alertWindow = new juce::AlertWindow ("Export Complete",
-                                                                        statsStr + "\n\nChoose an action:",
-                                                                        juce::MessageBoxIconType::InfoIcon);
-                            alertWindow->addButton ("Play Stems", 1);
-                            alertWindow->addButton ("Open Folder", 2);
-                            alertWindow->addButton ("OK", 3);
-                            alertWindow->addButton ("Quit", 4);
-
-                            // Store folder path for use in callback
+                            // Show styled Export Complete overlay (matching About screen style)
                             auto folderCopy = folder;
-
-                            alertWindow->enterModalState (true, juce::ModalCallbackFunction::create (
+                            auto* overlay = new ExportCompleteOverlay (statsStr, folder,
                                 [this, folderCopy] (int result)
                                 {
-                                    std::cerr << "Dialog result: " << result << std::endl;
                                     if (result == 1)  // "Play Stems" button
                                     {
                                         loadStemsAfterExport (folderCopy);
@@ -1289,8 +2195,12 @@ void StemperatorEditor::exportStems (int stemIndex)
                                     {
                                         juce::JUCEApplication::getInstance()->systemRequestedQuit();
                                     }
-                                    // result == 3 is "OK" - do nothing, result == 0 is dialog closed
-                                }), true);  // deleteWhenDismissed = true
+                                    // result == 3 is "OK" - do nothing
+                                });
+                            addAndMakeVisible (overlay);
+                            overlay->setBounds (getLocalBounds());
+                            overlay->toFront (true);
+                            overlay->grabKeyboardFocus();
                         });
                     }
                     catch (...)
@@ -1321,7 +2231,7 @@ void StemperatorEditor::exportStems (int stemIndex)
             true);  // useNativeDialogs
 
         // Get quality setting for model selection
-        int qualityIndex = qualityBox.getSelectedItemIndex();
+        int qualityIndex = currentQuality;
         juce::String modelName;
         if (qualityIndex == 0)
             modelName = "htdemucs";       // Fast
@@ -1593,10 +2503,12 @@ void StemperatorEditor::setupTransportControls()
 {
     playButton = std::make_unique<juce::TextButton> ("Play");
     playButton->onClick = [this]() { commandManager.invokeDirectly (cmdPlay, false); };
+    playButton->setTooltip ("Play audio (Space to toggle play/pause)");
     addAndMakeVisible (*playButton);
 
     stopButton = std::make_unique<juce::TextButton> ("Stop");
     stopButton->onClick = [this]() { commandManager.invokeDirectly (cmdStop, false); };
+    stopButton->setTooltip ("Stop playback and return to start");
     addAndMakeVisible (*stopButton);
 
     fileNameLabel = std::make_unique<juce::Label> ("", "No file loaded - drag & drop audio or use File menu");
@@ -1607,11 +2519,19 @@ void StemperatorEditor::setupTransportControls()
 
     timeLabel = std::make_unique<juce::Label> ("", "0:00 / 0:00");
     timeLabel->setJustificationType (juce::Justification::centredRight);
-    timeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+    timeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+    timeLabel->setFont (juce::FontOptions (24.0f).withStyle ("Bold"));  // BIGGER font
     addAndMakeVisible (*timeLabel);
+
+    // Mode indicator label - shows STEMS (colorful) or LIVE
+    modeLabel = std::make_unique<ColorfulModeLabel>();
+    modeLabel->setJustificationType (juce::Justification::centred);
+    modeLabel->setFont (juce::FontOptions (14.0f).withStyle ("Bold"));
+    addAndMakeVisible (*modeLabel);
 
     positionSlider = std::make_unique<juce::Slider> (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
     positionSlider->setRange (0.0, 1.0);
+    positionSlider->setTooltip ("Playback position - drag to seek");
     positionSlider->onDragStart = [this]()
     {
         // Remember if we were playing when drag started
@@ -1628,27 +2548,7 @@ void StemperatorEditor::setupTransportControls()
     };
     addAndMakeVisible (*positionSlider);
 
-    // Volume slider for playback
-    volumeSlider = std::make_unique<juce::Slider> (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
-    volumeSlider->setRange (0.0, 1.5, 0.01);  // Allow up to 150% volume
-    volumeSlider->setValue (1.0);
-    volumeSlider->setSkewFactorFromMidPoint (1.0);  // Linear feel around 100%
-    volumeSlider->setDoubleClickReturnValue (true, 1.0);  // Double-click to reset
-    volumeSlider->setPopupDisplayEnabled (true, true, this);  // Show value popup on hover/drag
-    volumeSlider->setTextValueSuffix ("%");
-    volumeSlider->textFromValueFunction = [] (double value) { return juce::String (juce::roundToInt (value * 100)); };
-    volumeSlider->onValueChange = [this]()
-    {
-        transportSource.setGain ((float) volumeSlider->getValue());
-    };
-    volumeSlider->setColour (juce::Slider::thumbColourId, PremiumLookAndFeel::Colours::accent);
-    volumeSlider->setColour (juce::Slider::trackColourId, PremiumLookAndFeel::Colours::accent.darker (0.3f));
-    addAndMakeVisible (*volumeSlider);
-
-    volumeLabel = std::make_unique<juce::Label> ("", "VOL");
-    volumeLabel->setJustificationType (juce::Justification::centredRight);
-    volumeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
-    addAndMakeVisible (*volumeLabel);
+    // Volume is now controlled via the Master fader
 }
 
 void StemperatorEditor::updateTransportDisplay()
@@ -1673,6 +2573,35 @@ void StemperatorEditor::updateTransportDisplay()
     }
 }
 
+void StemperatorEditor::updateModeIndicator()
+{
+    if (! modeLabel)
+        return;
+
+    if (hasSeparatedStems)
+    {
+        // Mode: STEMS - AI-separated stems are playing (colorful STEMS text)
+        modeLabel->setText ("Mode: STEMS", juce::dontSendNotification);
+        modeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::accent);
+        modeLabel->setColour (juce::Label::backgroundColourId, PremiumLookAndFeel::Colours::accent.withAlpha (0.2f));
+        modeLabel->setTooltip ("Playing AI-separated stems - full quality separation");
+    }
+    else if (hasLoadedFile)
+    {
+        // Mode: LIVE - real-time spectral separation
+        modeLabel->setText ("Mode: LIVE", juce::dontSendNotification);
+        modeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::solo);
+        modeLabel->setColour (juce::Label::backgroundColourId, PremiumLookAndFeel::Colours::solo.withAlpha (0.2f));
+        modeLabel->setTooltip ("Real-time spectral separation - use File > Separate for better quality");
+    }
+    else
+    {
+        // No file loaded
+        modeLabel->setText ("", juce::dontSendNotification);
+        modeLabel->setColour (juce::Label::backgroundColourId, juce::Colours::transparentBlack);
+    }
+}
+
 void StemperatorEditor::setupSlider (juce::Slider& slider, juce::Colour colour)
 {
     slider.setColour (juce::Slider::thumbColourId, colour);
@@ -1685,7 +2614,9 @@ void StemperatorEditor::setupSlider (juce::Slider& slider, juce::Colour colour)
 
 void StemperatorEditor::setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text, juce::Colour colour)
 {
-    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    // Horizontal slider style (like Quality/Model/Scale controls)
+    slider.setSliderStyle (juce::Slider::LinearHorizontal);
+    slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 55, 20);
     setupSlider (slider, colour);
 
     label.setText (text, juce::dontSendNotification);
@@ -1701,32 +2632,48 @@ void StemperatorEditor::updateFontSizes()
     // Title fonts scale with window
     titleLabel.setFont (juce::FontOptions (32.0f * scale).withStyle ("Bold"));
     subtitleLabel.setFont (juce::FontOptions (11.0f * scale));
-    brandLabel.setFont (juce::FontOptions (14.0f * scale).withStyle ("Bold"));
-    masterLabel.setFont (juce::FontOptions (13.0f * scale).withStyle ("Bold"));
+    brandLabel.setFont (juce::FontOptions (20.0f * scale).withStyle ("Bold"));  // Larger brand label
+    masterLabel.setFont (juce::FontOptions (22.0f * scale).withStyle ("Bold"));  // Matches BIGGER stem channel labels
 
-    // Control labels
-    float labelSize = 10.0f * scale;
+    // Control labels - 50% larger (10 -> 15)
+    float labelSize = 15.0f * scale;
     vocalsFocusLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
     bassCutoffLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
     drumSensLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
-    qualityLabel.setFont (juce::FontOptions (11.0f * scale).withStyle ("Bold"));
 
-    // Slider text boxes scale
-    int textBoxWidth = scaled (60);
-    int textBoxHeight = scaled (20);
+    // Footer selector labels - BIGGER for better visibility
+    float selectorLabelSize = 16.0f * scale;
+    qualityLabel.setFont (juce::FontOptions (selectorLabelSize).withStyle ("Bold"));
+    scaleLabel.setFont (juce::FontOptions (selectorLabelSize).withStyle ("Bold"));
+
+    // Slider text boxes scale - use 65 to match StemChannel and fit " dB" suffix
+    int textBoxWidth = 65;  // Fixed width matching StemChannel
+    int textBoxHeight = 18;  // Fixed height matching StemChannel
     masterSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, textBoxHeight);
 
-    int knobTextHeight = scaled (16);
-    vocalsFocusSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
-    bassCutoffSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
-    drumSensSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+    // Horizontal sliders use TextBoxRight
+    int sliderTextWidth = scaled (55);
+    int sliderTextHeight = scaled (20);
+    int bassTextWidth = scaled (65);  // Wider for "150 Hz"
+    vocalsFocusSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, sliderTextWidth, sliderTextHeight);
+    bassCutoffSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, bassTextWidth, sliderTextHeight);
+    drumSensSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, sliderTextWidth, sliderTextHeight);
+    // scaleBox is a ComboBox, no text box style needed
 }
 
 void StemperatorEditor::paint (juce::Graphics& g)
 {
     float scale = getScaleFactor();
-    int headerHeight = scaled (65);
-    int footerHeight = scaled (95);
+    // COMPACT LAYOUT - maximize channel space
+    int headerHeight = scaled (10);   // Minimal header
+    int footerHeight = scaled (100);  // Compact footer
+    int margin = scaled (4);
+    int spacing = scaled (3);
+
+    // Calculate transport height for standalone mode
+    int transportHeight = 0;
+    if (isStandalone() && playButton)
+        transportHeight = scaled (72);
 
     // Premium gradient background
     juce::ColourGradient bgGradient (
@@ -1743,27 +2690,156 @@ void StemperatorEditor::paint (juce::Graphics& g)
     for (int y = 0; y < getHeight(); y += gridSpacing)
         g.drawHorizontalLine (y, 0, (float) getWidth());
 
-    // Header separator with accent glow
-    juce::ColourGradient separatorGradient (
-        PremiumLookAndFeel::Colours::accent.withAlpha (0.0f), 0, (float) headerHeight,
-        PremiumLookAndFeel::Colours::accent.withAlpha (0.5f), getWidth() * 0.5f, (float) headerHeight, false);
-    separatorGradient.addColour (1.0, PremiumLookAndFeel::Colours::accent.withAlpha (0.0f));
-    g.setGradientFill (separatorGradient);
-    g.fillRect (0, headerHeight, getWidth(), juce::jmax (1, scaled (2)));
-
-    // Footer separator
+    // Footer separator only (no header separator in compact mode)
     int footerTop = getHeight() - footerHeight;
+    juce::ColourGradient separatorGradient (
+        PremiumLookAndFeel::Colours::accent.withAlpha (0.0f), 0, (float) footerTop,
+        PremiumLookAndFeel::Colours::accent.withAlpha (0.5f), getWidth() * 0.5f, (float) footerTop, false);
+    separatorGradient.addColour (1.0, PremiumLookAndFeel::Colours::accent.withAlpha (0.0f));
     g.setGradientFill (separatorGradient);
     g.fillRect (0, footerTop, getWidth(), 1);
 
-    // Panel backgrounds for stem channels area
-    int margin = scaled (15);
-    int channelWidth = scaled (95);
-    auto channelsPanelArea = juce::Rectangle<int> (margin, headerHeight + scaled (8),
-                                                   channelWidth * 4 + scaled (20),
-                                                   getHeight() - headerHeight - footerHeight - scaled (16));
-    g.setColour (PremiumLookAndFeel::Colours::bgPanel.withAlpha (0.3f));
-    g.fillRoundedRectangle (channelsPanelArea.toFloat(), scaled (8.0f));
+    // Panel backgrounds for stem channels area (including Master)
+    // Must match resized() - COMPACT layout
+    int numVisibleStems = processor.getNumStems();
+    int numChannelsTotal = numVisibleStems + 1;  // +1 for Master
+    float stemAreaPercent = numVisibleStems == 6 ? 0.98f : 0.96f;  // Match resized()
+    int totalStemWidth = juce::roundToInt (getWidth() * stemAreaPercent);
+    int channelWidth = (totalStemWidth - scaled (4)) / numChannelsTotal;
+    int availableWidth = getWidth() - margin * 2;
+    int stemStartX = margin + (availableWidth - totalStemWidth) / 2;  // Center all channels
+    int channelTopY = headerHeight + transportHeight + spacing;
+    int channelHeight = getHeight() - channelTopY - footerHeight - spacing;
+
+    // No panel background - let channels have their own backgrounds
+
+    // Draw Master channel background panel (same style as stem channels)
+    // Master is at position numVisibleStems (right after the last stem)
+    auto masterPanelArea = juce::Rectangle<int> (
+        stemStartX + numVisibleStems * channelWidth + spacing / 2,
+        channelTopY,
+        channelWidth - spacing,
+        channelHeight);
+
+    // Master channel background with white accent at top (like stem channels)
+    juce::ColourGradient masterBgGradient (
+        PremiumLookAndFeel::Colours::bgLight.withAlpha (0.6f), masterPanelArea.toFloat().getX(), masterPanelArea.toFloat().getY(),
+        PremiumLookAndFeel::Colours::bgDark.withAlpha (0.8f), masterPanelArea.toFloat().getX(), masterPanelArea.toFloat().getBottom(), false);
+    g.setGradientFill (masterBgGradient);
+    g.fillRoundedRectangle (masterPanelArea.toFloat(), 8.0f);
+
+    // Border
+    g.setColour (juce::Colours::white.withAlpha (0.4f));
+    g.drawRoundedRectangle (masterPanelArea.toFloat().reduced (1.0f), 8.0f, 1.5f);
+
+    // Top accent line (white for Master) - same style as stem channels
+    g.setColour (juce::Colours::white);
+    g.fillRoundedRectangle (masterPanelArea.toFloat().getX() + 10, masterPanelArea.toFloat().getY() + 8,
+                            masterPanelArea.toFloat().getWidth() - 20, 3.0f, 1.5f);
+
+    // ==========================================================================
+    // MASTER VU METER - LED style meter (right side of Master channel)
+    // ==========================================================================
+    {
+        auto meterWidth = 14.0f;
+        auto meterX = masterPanelArea.toFloat().getRight() - meterWidth - 8.0f;
+        auto meterTop = masterPanelArea.toFloat().getY() + 40.0f;
+        auto meterBottom = masterPanelArea.toFloat().getBottom() - 85.0f;
+        auto meterHeight = meterBottom - meterTop;
+
+        // LED segment parameters
+        int numSegments = 24;
+        float segmentHeight = meterHeight / numSegments;
+        float segmentGap = 2.0f;
+        float ledHeight = segmentHeight - segmentGap;
+
+        // Meter background/housing
+        g.setColour (PremiumLookAndFeel::Colours::bgDark.darker (0.3f));
+        g.fillRoundedRectangle (meterX - 2, meterTop - 2, meterWidth + 4, meterHeight + 4, 4.0f);
+
+        // Draw LED segments from bottom to top
+        int litSegments = (int) (masterDisplayLevel * numSegments);
+        int peakSegment = (int) (masterPeakLevel * numSegments);
+
+        for (int i = 0; i < numSegments; ++i)
+        {
+            float segmentY = meterBottom - (i + 1) * segmentHeight + segmentGap / 2;
+            auto segmentRect = juce::Rectangle<float> (meterX, segmentY, meterWidth, ledHeight);
+
+            // Determine LED color based on position (white at bottom, yellow, red at top)
+            juce::Colour ledColour;
+            float segmentRatio = (float) i / numSegments;
+
+            if (segmentRatio > 0.9f)
+                ledColour = PremiumLookAndFeel::Colours::mute;  // Top 10% = red (clip)
+            else if (segmentRatio > 0.75f)
+                ledColour = juce::Colour (0xffffcc00);  // 75-90% = yellow (warning)
+            else
+                ledColour = juce::Colours::white;  // Rest = white (for uniformity with fader)
+
+            bool isLit = (i < litSegments);
+            bool isPeak = (i == peakSegment - 1) && (masterPeakLevel > 0.01f);
+
+            if (isLit || isPeak)
+            {
+                // Lit LED with glow effect
+                g.setColour (ledColour.withAlpha (0.4f));
+                g.fillRoundedRectangle (segmentRect.expanded (2.0f, 1.0f), 3.0f);
+
+                // Main LED body - bright
+                g.setColour (ledColour);
+                g.fillRoundedRectangle (segmentRect, 2.0f);
+
+                // LED highlight (top reflection)
+                g.setColour (juce::Colours::white.withAlpha (0.3f));
+                g.fillRoundedRectangle (segmentRect.getX() + 1, segmentRect.getY(),
+                                        segmentRect.getWidth() - 2, ledHeight * 0.3f, 1.0f);
+            }
+            else
+            {
+                // Unlit LED - dark with subtle color hint
+                g.setColour (ledColour.withAlpha (0.15f));
+                g.fillRoundedRectangle (segmentRect, 2.0f);
+
+                // Subtle inset shadow
+                g.setColour (juce::Colours::black.withAlpha (0.3f));
+                g.drawRoundedRectangle (segmentRect.reduced (0.5f), 2.0f, 0.5f);
+            }
+        }
+
+        // dB markings
+        g.setColour (PremiumLookAndFeel::Colours::textDim);
+        g.setFont (juce::FontOptions (8.0f));
+
+        const float dbMarks[] = { 0.0f, -6.0f, -12.0f, -24.0f, -48.0f };
+        for (float db : dbMarks)
+        {
+            float normalizedDb = (db + 60.0f) / 72.0f;  // -60 to +12 dB range
+            float y = meterBottom - (normalizedDb * meterHeight);
+            g.drawText (juce::String ((int) db), (int) (meterX - 26), (int) (y - 6), 22, 12,
+                        juce::Justification::centredRight, false);
+        }
+    }
+
+    // ==========================================================================
+    // SECTION DIVIDERS - subtle lines to separate content areas
+    // ==========================================================================
+
+    // Divider color - subtle but visible
+    auto dividerColor = PremiumLookAndFeel::Colours::textDim.withAlpha (0.15f);
+
+    // HORIZONTAL DIVIDER: In footer, separating knobs from selectors
+    // Position it between the knob area and the quality/model selectors
+    float footerDividerY = (float) footerTop + scaled (5.0f);
+    float dividerThickness = juce::jmax (1.0f, scaled (1.5f));
+
+    // Gradient horizontal divider (fades at edges)
+    juce::ColourGradient footerDividerGradient (
+        dividerColor.withAlpha (0.0f), (float) margin, footerDividerY,
+        dividerColor, (float) (getWidth() / 2), footerDividerY, false);
+    footerDividerGradient.addColour (1.0, dividerColor.withAlpha (0.0f));
+    g.setGradientFill (footerDividerGradient);
+    g.fillRect ((float) margin, footerDividerY, (float) (getWidth() - margin * 2), dividerThickness);
 }
 
 void StemperatorEditor::resized()
@@ -1782,99 +2858,89 @@ void StemperatorEditor::resized()
         menuBar->setBounds (bounds.removeFromTop (menuBarHeight));
     }
 
-    // Transport bar for standalone mode
+    // Transport bar for standalone mode - BIGGER for better visibility
     int transportHeight = 0;
     if (isStandalone() && playButton)
     {
-        transportHeight = scaled (52);  // Increased height for two rows
+        transportHeight = scaled (80);  // Larger height for bigger buttons
         auto transportArea = bounds.removeFromTop (transportHeight);
         transportArea = transportArea.reduced (scaled (10), scaled (4));
 
         // Split transport area into top row (controls) and bottom row (progress slider)
-        auto topRow = transportArea.removeFromTop (scaled (24));
+        auto topRow = transportArea.removeFromTop (scaled (42));  // Taller for bigger buttons
         auto bottomRow = transportArea;
 
-        // Top row: Play/Stop buttons, file name, time, volume
-        playButton->setBounds (topRow.removeFromLeft (scaled (60)));
-        topRow.removeFromLeft (scaled (5));
-        stopButton->setBounds (topRow.removeFromLeft (scaled (60)));
-        topRow.removeFromLeft (scaled (10));
+        // Top row: Play/Stop buttons - MUCH BIGGER
+        playButton->setBounds (topRow.removeFromLeft (scaled (120)));
+        topRow.removeFromLeft (scaled (6));
+        stopButton->setBounds (topRow.removeFromLeft (scaled (120)));
+        topRow.removeFromLeft (scaled (12));
 
-        // Volume control on the right
-        if (volumeSlider)
+        // Time label - BIGGER (wider for larger font)
+        timeLabel->setBounds (topRow.removeFromRight (scaled (180)));
+        topRow.removeFromRight (scaled (8));
+
+        // Mode indicator (STEM PLAYBACK / LIVE PROCESSING) - positioned right of filename
+        if (modeLabel)
         {
-            volumeLabel->setBounds (topRow.removeFromRight (scaled (30)));
-            volumeSlider->setBounds (topRow.removeFromRight (scaled (80)));
-            topRow.removeFromRight (scaled (10));
+            modeLabel->setBounds (topRow.removeFromRight (scaled (130)));
+            topRow.removeFromRight (scaled (8));
         }
-
-        // Time label
-        timeLabel->setBounds (topRow.removeFromRight (scaled (100)));
-        topRow.removeFromRight (scaled (10));
 
         // File name takes remaining top row space
         fileNameLabel->setBounds (topRow);
 
-        // Bottom row: position slider (playback progress)
+        // Bottom row: position slider (playback progress) - thicker and more visible
+        bottomRow.removeFromTop (scaled (6));  // Add padding above
         positionSlider->setBounds (bottomRow.reduced (0, scaled (2)));
     }
 
-    // Scaled dimensions
-    int headerHeight = scaled (65);
-    int footerHeight = scaled (95);
-    int margin = scaled (15);
-    int spacing = scaled (10);
+    // Scaled dimensions - COMPACT layout: minimize wasted space
+    int headerHeight = scaled (10);   // Minimal top spacing (no header content)
+    int footerHeight = scaled (100);  // Compact footer for controls
+    int margin = scaled (4);          // Tighter margins
+    int spacing = scaled (3);         // Minimal spacing
 
-    // Header area
-    auto header = bounds.removeFromTop (headerHeight);
-    auto headerLeft = header.removeFromLeft (header.getWidth() / 2).reduced (scaled (20), scaled (12));
-    titleLabel.setBounds (headerLeft.removeFromTop (scaled (32)));
-    subtitleLabel.setBounds (headerLeft);
+    // Hide title/subtitle labels (no header space)
+    titleLabel.setVisible (false);
+    subtitleLabel.setVisible (false);
 
-    auto headerRight = header.reduced (scaled (20), scaled (20));
-    brandLabel.setBounds (headerRight);
+    // Main content area FIRST to get stem channel positions
+    bounds.removeFromTop (headerHeight);
+    bounds.reduce (margin, spacing);
 
-    // Footer with focus controls
-    auto footer = bounds.removeFromBottom (footerHeight);
-    auto controlsArea = footer.reduced (scaled (20), scaled (10));
-
-    int knobWidth = scaled (80);
-
-    // Focus knobs on the left - ordered to match stem channels: Vocals, Drums, Bass, Other
-    auto knobArea = controlsArea.removeFromLeft (knobWidth * 3 + scaled (30));
-
-    // Vocal Focus - under Vocals stem
-    auto vocalKnob = knobArea.removeFromLeft (knobWidth);
-    vocalsFocusLabel.setBounds (vocalKnob.removeFromTop (scaled (14)));
-    vocalsFocusSlider.setBounds (vocalKnob.reduced (scaled (4), 0));
-
-    knobArea.removeFromLeft (scaled (5));
-    // Drum Sensitivity - under Drums stem
-    auto drumKnob = knobArea.removeFromLeft (knobWidth);
-    drumSensLabel.setBounds (drumKnob.removeFromTop (scaled (14)));
-    drumSensSlider.setBounds (drumKnob.reduced (scaled (4), 0));
-
-    knobArea.removeFromLeft (scaled (5));
-    // Bass Cutoff - under Bass stem
-    auto bassKnob = knobArea.removeFromLeft (knobWidth);
-    bassCutoffLabel.setBounds (bassKnob.removeFromTop (scaled (14)));
-    bassCutoffSlider.setBounds (bassKnob.reduced (scaled (4), 0));
-
-    // Quality selector
-    auto qualityArea = controlsArea.removeFromLeft (scaled (100)).reduced (scaled (10), scaled (12));
-    qualityLabel.setBounds (qualityArea.removeFromTop (scaled (14)));
-    qualityArea.removeFromTop (scaled (4));
-    qualityBox.setBounds (qualityArea.removeFromTop (scaled (28)));
-
-    // Main content area
-    bounds.reduce (margin, scaled (8));
-
-    // Stem channels (left section) - proportional width
-    // Adjust for 4 or 6 stems based on model
+    // Stem channels + Master - all same width, Master is last channel
     int numVisibleStems = processor.getNumStems();
-    int channelWidth = scaled (numVisibleStems == 6 ? 75 : 95);  // Narrower channels for 6-stem mode
-    auto channelsArea = bounds.removeFromLeft (channelWidth * numVisibleStems + scaled (20));
-    channelsArea.removeFromTop (scaled (5));
+    int numChannelsTotal = numVisibleStems + 1;  // +1 for Master
+    // Use nearly full screen width for channels (96% for 4-stem, 98% for 6-stem)
+    float stemAreaPercent = numVisibleStems == 6 ? 0.98f : 0.96f;
+    int totalStemWidth = juce::roundToInt (getWidth() * stemAreaPercent);
+    int channelWidth = (totalStemWidth - scaled (4)) / numChannelsTotal;  // Minimal padding
+
+    // Calculate stem channel positions - CENTERED in the available space
+    int availableWidth = getWidth() - margin * 2;
+    int stemStartX = margin + (availableWidth - totalStemWidth) / 2;  // Center all channels
+
+    // Channel vertical positioning - start near top, end above footer
+    int channelTopY = headerHeight + (isStandalone() ? transportHeight : 0) + spacing;
+    int channelHeight = getHeight() - channelTopY - footerHeight - spacing;
+
+    std::array<juce::Rectangle<int>, 6> stemBounds;
+    for (int i = 0; i < numVisibleStems; ++i)
+    {
+        stemBounds[static_cast<size_t> (i)] = juce::Rectangle<int> (
+            stemStartX + i * channelWidth + spacing / 2,
+            channelTopY,
+            channelWidth - spacing,
+            channelHeight);
+    }
+
+    // Master channel bounds - same size as stem channels, positioned right after last stem
+    auto masterBounds = juce::Rectangle<int> (
+        stemStartX + numVisibleStems * channelWidth + spacing / 2,
+        channelTopY,
+        channelWidth - spacing,
+        channelHeight);
 
     // Show/hide Guitar and Piano channels based on model
     for (int i = 0; i < 6; ++i)
@@ -1882,21 +2948,131 @@ void StemperatorEditor::resized()
         stemChannels[static_cast<size_t> (i)]->setVisible (i < numVisibleStems);
     }
 
+    // Position stem channels
     for (int i = 0; i < numVisibleStems; ++i)
     {
-        stemChannels[static_cast<size_t> (i)]->setBounds (channelsArea.removeFromLeft (channelWidth).reduced (scaled (2), 0));
+        stemChannels[static_cast<size_t> (i)]->setBounds (stemBounds[static_cast<size_t> (i)]);
     }
 
-    // Master fader
-    bounds.removeFromLeft (spacing);
-    int masterWidth = scaled (75);
-    auto masterArea = bounds.removeFromLeft (masterWidth).reduced (0, scaled (5));
-    masterLabel.setBounds (masterArea.removeFromTop (scaled (22)));
-    masterSlider.setBounds (masterArea);
+    // Footer with focus controls - NOW position knobs under their corresponding stems
+    auto footer = getLocalBounds().removeFromBottom (footerHeight);
+    auto controlsArea = footer.reduced (margin, spacing);
 
-    // Visualizer (remaining space - flexible)
-    bounds.removeFromLeft (margin);
-    visualizer.setBounds (bounds.reduced (0, scaled (5)));
+    // Knob size - full channel width, full height for compact layout
+    int knobWidth = channelWidth - spacing;
+    int knobHeight = controlsArea.getHeight();
+
+    // ========================================================================
+    // STEM CONTROL KNOBS - Positioned directly under corresponding stem channels
+    // ========================================================================
+
+    // Control height matching Quality/Model/Scale
+    int controlHeight = scaled (36);
+    int labelHeight = scaled (18);
+
+    // Vocal Focus - under Vocals stem (index 0)
+    auto vocalSliderArea = juce::Rectangle<int> (
+        stemBounds[0].getX(), controlsArea.getY(),
+        knobWidth, knobHeight).reduced (spacing / 2, spacing);
+    vocalsFocusLabel.setBounds (vocalSliderArea.removeFromTop (labelHeight));
+    vocalSliderArea.removeFromTop (spacing);
+    vocalsFocusSlider.setBounds (vocalSliderArea.removeFromTop (controlHeight));
+
+    // Drum Sensitivity - under Drums stem (index 1)
+    auto drumSliderArea = juce::Rectangle<int> (
+        stemBounds[1].getX(), controlsArea.getY(),
+        knobWidth, knobHeight).reduced (spacing / 2, spacing);
+    drumSensLabel.setBounds (drumSliderArea.removeFromTop (labelHeight));
+    drumSliderArea.removeFromTop (spacing);
+    drumSensSlider.setBounds (drumSliderArea.removeFromTop (controlHeight));
+
+    // Bass Cutoff - under Bass stem (index 2)
+    auto bassSliderArea = juce::Rectangle<int> (
+        stemBounds[2].getX(), controlsArea.getY(),
+        knobWidth, knobHeight).reduced (spacing / 2, spacing);
+    bassCutoffLabel.setBounds (bassSliderArea.removeFromTop (labelHeight));
+    bassSliderArea.removeFromTop (spacing);
+    bassCutoffSlider.setBounds (bassSliderArea.removeFromTop (controlHeight));
+
+    // ========================================================================
+    // QUALITY, MODEL, SCALE selectors - positioned under OTHER and MASTER
+    // ========================================================================
+    int selectorWidth = knobWidth;  // Use full channel width
+
+    // Quality + Model combined - spans OTHER stem area (wider for 2 controls)
+    // For 4-stem mode: spans from OTHER to before MASTER
+    // For 6-stem mode: spans OTHER and Guitar stems
+    int qualityModelX = stemBounds[3].getX();
+    int qualityModelWidth = numVisibleStems == 6
+        ? (stemBounds[4].getRight() - qualityModelX)  // OTHER + Guitar
+        : (masterBounds.getX() - qualityModelX - spacing);  // OTHER to Master gap
+
+    auto qualityModelArea = juce::Rectangle<int> (
+        qualityModelX, controlsArea.getY(),
+        qualityModelWidth, knobHeight).reduced (spacing / 2, spacing);
+
+    // Combined label at top
+    qualityLabel.setBounds (qualityModelArea.removeFromTop (scaled (18)));  // Taller label
+    qualityModelArea.removeFromTop (spacing);
+
+    // Quality button and Model box side by side - BIGGER (reuse controlHeight from above)
+    auto controlsRow = qualityModelArea.removeFromTop (controlHeight);
+    int halfWidth = (controlsRow.getWidth() - spacing) / 2;
+    qualityButton.setBounds (controlsRow.removeFromLeft (halfWidth));
+    controlsRow.removeFromLeft (spacing);
+    modelBox.setBounds (controlsRow);
+
+    // Scale selector - under MASTER channel - BIGGER
+    auto scaleArea = juce::Rectangle<int> (
+        masterBounds.getX(), controlsArea.getY(),
+        selectorWidth, knobHeight).reduced (spacing / 2, spacing);
+    scaleLabel.setBounds (scaleArea.removeFromTop (scaled (18)));  // Taller label
+    scaleArea.removeFromTop (spacing);
+    scaleBox.setBounds (scaleArea.removeFromTop (scaled (36)));  // Bigger control
+
+    // ========================================================================
+    // MASTER FADER - positioned next to stems (same size and style)
+    // ========================================================================
+    // Master label at same height as stem channel names
+    // StemChannel uses reduced(6) + 28px label, so we need to match that offset
+    auto masterLabelArea = masterBounds.reduced (6);  // Match StemChannel's fixed 6px
+    masterLabel.setBounds (masterLabelArea.removeFromTop (28));  // Match StemChannel's 28px
+    masterLabelArea.removeFromTop (3);
+
+    // M/S buttons positioned ABSOLUTELY at bottom to align with stem channels
+    // BIGGER buttons matching StemChannel's new sizes
+    int buttonHeight = 38;  // Matches StemChannel (was 32)
+    int buttonSpacing = 6;
+    int bottomMargin = 8;
+    int buttonWidth = juce::jmin (masterBounds.getWidth() - 12, 70);  // Wider buttons (was 60)
+    int buttonX = masterBounds.getX() + (masterBounds.getWidth() - buttonWidth) / 2;
+
+    // Solo button at very bottom (matches StemChannel: getHeight() - bottomMargin - buttonHeight - 6)
+    int soloY = masterBounds.getBottom() - bottomMargin - buttonHeight - 6;  // -6 for reduced(6) offset
+    masterSoloButton.setBounds (buttonX, soloY, buttonWidth, buttonHeight);
+
+    // Mute button above solo
+    int muteY = soloY - buttonSpacing - buttonHeight;
+    masterMuteButton.setBounds (buttonX, muteY, buttonWidth, buttonHeight);
+
+    // Reset button above mute (wider to fit "RESET" text)
+    int resetY = muteY - buttonSpacing - buttonHeight;
+    int resetWidth = juce::jmin (masterBounds.getWidth() - 8, 75);
+    int resetX = masterBounds.getX() + (masterBounds.getWidth() - resetWidth) / 2;
+    resetAllButton.setBounds (resetX, resetY, resetWidth, buttonHeight);
+
+    // Calculate slider area: between label and buttons (with dB text space)
+    int buttonAreaHeight = (buttonHeight * 3) + (buttonSpacing * 2) + 26;  // +26 for dB text, 3 buttons
+    auto sliderArea = masterLabelArea;
+    sliderArea.removeFromBottom (buttonAreaHeight);
+    // No top margin - fader uses all available space
+    sliderArea.removeFromBottom (3);
+    masterSlider.setBounds (sliderArea.reduced (6, 0));
+
+    // ========================================================================
+    // FLARKAUDIO BRAND - hidden in compact layout mode
+    // ========================================================================
+    brandLabel.setVisible (false);  // Hide in compact layout
 
     // Notify stem channels to update their internal scaling
     for (auto& channel : stemChannels)
@@ -1910,8 +3086,7 @@ void StemperatorEditor::timerCallback()
     bool exporting = isExporting.load();
     bool isActive = isPlaying || exporting;
 
-    // Control visualizer animation based on activity
-    visualizer.setActive (isActive);
+    // Visualizer removed - stem channels have individual level meters
 
     // Adjust timer frequency based on activity
     static bool wasActive = false;
@@ -1934,13 +3109,6 @@ void StemperatorEditor::timerCallback()
             stemChannels[static_cast<size_t> (i)]->setLevel (level);
         }
 
-        // Update visualizer with export levels (visualizer currently supports 4 stems)
-        visualizer.setStemLevels (
-            exportStemLevels[0].load(),
-            exportStemLevels[1].load(),
-            exportStemLevels[2].load(),
-            exportStemLevels[3].load());
-        visualizer.setInputLevel (exportProgress.load());
     }
     else if (isPlaying)
     {
@@ -1954,13 +3122,6 @@ void StemperatorEditor::timerCallback()
                 stemChannels[static_cast<size_t> (i)]->setLevel (level);
             }
 
-            // Update visualizer with stem mixer levels (visualizer currently supports 4 stems)
-            visualizer.setStemLevels (
-                stemMixerSource->getStemLevel (0),
-                stemMixerSource->getStemLevel (1),
-                stemMixerSource->getStemLevel (2),
-                stemMixerSource->getStemLevel (3));
-            visualizer.setInputLevel (0.5f);  // Fixed input level for stem playback
         }
         else
         {
@@ -1971,18 +3132,67 @@ void StemperatorEditor::timerCallback()
                 stemChannels[static_cast<size_t> (i)]->setLevel (level);
             }
 
-            // Update visualizer (visualizer currently supports 4 stems)
-            visualizer.setStemLevels (
-                processor.getStemLevel (StemperatorProcessor::Vocals),
-                processor.getStemLevel (StemperatorProcessor::Drums),
-                processor.getStemLevel (StemperatorProcessor::Bass),
-                processor.getStemLevel (StemperatorProcessor::Other));
-            visualizer.setInputLevel (processor.getInputLevel());
         }
     }
 
+    // Update master VU meter - calculate from sum of stem levels
+    if (isPlaying || exporting)
+    {
+        float maxLevel = 0.0f;
+        for (int i = 0; i < numStems; ++i)
+        {
+            float stemLevel = 0.0f;
+            if (exporting)
+                stemLevel = exportStemLevels[static_cast<size_t> (i)].load();
+            else if (hasSeparatedStems && stemMixerSource)
+                stemLevel = stemMixerSource->getStemLevel (i);
+            else
+                stemLevel = processor.getStemLevel (static_cast<StemperatorProcessor::Stem> (i));
+            maxLevel = std::max (maxLevel, stemLevel);
+        }
+
+        // Apply master gain to the level (convert from dB)
+        float masterGainDb = static_cast<float> (masterSlider.getValue());
+        float masterGain = juce::Decibels::decibelsToGain (masterGainDb);
+        masterCurrentLevel = maxLevel * masterGain;
+
+        // Smooth level display with faster attack, slower release
+        if (masterCurrentLevel > masterDisplayLevel)
+            masterDisplayLevel = masterCurrentLevel;  // Fast attack
+        else
+            masterDisplayLevel = masterDisplayLevel * 0.92f + masterCurrentLevel * 0.08f;  // Slow release
+
+        // Peak hold
+        if (masterCurrentLevel >= masterPeakLevel)
+        {
+            masterPeakLevel = masterCurrentLevel;
+            masterPeakHoldCount = 0;
+        }
+        else
+        {
+            masterPeakHoldCount++;
+            if (masterPeakHoldCount > masterPeakHoldTime)
+                masterPeakLevel *= 0.95f;  // Decay peak
+        }
+    }
+    else
+    {
+        // Decay when not playing
+        masterDisplayLevel *= 0.9f;
+        masterPeakLevel *= 0.95f;
+    }
+
+    // Repaint master meter area (right side of the UI where master panel is)
+    // The master meter is in the rightmost 120px + padding area
+    auto bounds = getLocalBounds();
+    int masterWidth = scaled (120);
+    repaint (bounds.getWidth() - masterWidth - scaled (8), 0, masterWidth + scaled (8), bounds.getHeight());
+
     // Update transport display in standalone mode
     updateTransportDisplay();
+
+    // Update mode indicator (STEMS vs LIVE)
+    updateModeIndicator();
 
     // Enable/disable focus controls based on whether we're playing pre-separated stems
     // These controls only affect real-time spectral separation, not pre-separated AI stems
@@ -1995,14 +3205,14 @@ void StemperatorEditor::timerCallback()
         vocalsFocusSlider.setEnabled (controlsEnabled);
         bassCutoffSlider.setEnabled (controlsEnabled);
         drumSensSlider.setEnabled (controlsEnabled);
-        qualityBox.setEnabled (controlsEnabled);
+        qualityButton.setEnabled (controlsEnabled);
 
         // Update visual appearance to show greyed-out state
         float alpha = controlsEnabled ? 1.0f : 0.35f;
         vocalsFocusSlider.setAlpha (alpha);
         bassCutoffSlider.setAlpha (alpha);
         drumSensSlider.setAlpha (alpha);
-        qualityBox.setAlpha (alpha);
+        qualityButton.setAlpha (alpha);
         vocalsFocusLabel.setAlpha (alpha);
         bassCutoffLabel.setAlpha (alpha);
         drumSensLabel.setAlpha (alpha);
@@ -2052,7 +3262,53 @@ bool StemperatorEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
         return true;
     }
 
+    // Arrow keys for seeking
+    if (key == juce::KeyPress::leftKey || key == juce::KeyPress::rightKey)
+    {
+        auto totalLength = transportSource.getTotalLength();
+        if (totalLength > 0)
+        {
+            auto currentPos = transportSource.getCurrentPosition();
+            auto sampleRate = transportSource.getLengthInSeconds() > 0
+                                  ? totalLength / transportSource.getLengthInSeconds()
+                                  : 44100.0;
+
+            // Seek amount: 5 seconds, or 1 second with Ctrl/Cmd, or 30 seconds with Shift
+            double seekSeconds = 5.0;
+            auto mods = juce::ModifierKeys::currentModifiers;
+            if (mods.isCtrlDown() || mods.isCommandDown())
+                seekSeconds = 1.0;
+            else if (mods.isShiftDown())
+                seekSeconds = 30.0;
+
+            auto seekSamples = static_cast<juce::int64> (seekSeconds * sampleRate);
+
+            juce::int64 newPos;
+            if (key == juce::KeyPress::leftKey)
+                newPos = juce::jmax (juce::int64 (0), static_cast<juce::int64> (currentPos) - seekSamples);
+            else
+                newPos = juce::jmin (static_cast<juce::int64> (totalLength), static_cast<juce::int64> (currentPos) + seekSamples);
+
+            transportSource.setPosition (newPos / sampleRate);
+
+            // Also update StemMixerSource position if playing stems
+            if (hasSeparatedStems && stemMixerSource)
+                stemMixerSource->setNextReadPosition (newPos);
+        }
+        return true;
+    }
+
     return false;
+}
+
+//==============================================================================
+// Mouse click handler - grab keyboard focus
+void StemperatorEditor::mouseDown (const juce::MouseEvent& event)
+{
+    juce::ignoreUnused (event);
+    // Grab keyboard focus when user clicks anywhere in the editor
+    // This ensures Space works for play/pause after clicking
+    grabKeyboardFocus();
 }
 
 //==============================================================================
@@ -2101,7 +3357,7 @@ void StemperatorEditor::separateCurrentFile()
     }
 
     // Get quality setting for model selection
-    int qualityIndex = qualityBox.getSelectedItemIndex();
+    int qualityIndex = currentQuality;
     juce::String modelName = (qualityIndex >= 2) ? "htdemucs_ft" : "htdemucs";
 
     auto bufferCopy = std::make_shared<juce::AudioBuffer<float>> (loadedAudioBuffer);
@@ -2300,6 +3556,7 @@ void StemperatorEditor::separateCurrentFile()
                     {
                         hasSeparatedStems = true;
                         lastStemFolder = tempDir;
+                        addToRecentStems (tempDir);
 
                         double processingTime = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
 
@@ -2480,6 +3737,14 @@ void StemperatorEditor::loadStemsWithPrefix (const juce::File& folder, const juc
         hasSeparatedStems = true;
         lastStemFolder = folder;
         loadedSampleRate = sampleRate;
+        addToRecentStems (folder);
+
+        // Clear AI separation badge for channels that have stems loaded
+        for (int i = 0; i < 6; ++i)
+        {
+            if (separatedStems[static_cast<size_t> (i)].getNumSamples() > 0)
+                stemChannels[static_cast<size_t> (i)]->setNeedsAISeparation (false);
+        }
 
         // Stop current playback
         transportSource.stop();
@@ -2504,6 +3769,9 @@ void StemperatorEditor::loadStemsWithPrefix (const juce::File& folder, const juc
 
         // Update window title to show we're in stem playback mode
         updateWindowTitle (this, "Stemperator - " + displayName + " (STEMS)");
+
+        // Save the folder for next time
+        saveSettings();
 
         commandManager.commandStatusChanged();
     }
@@ -2539,13 +3807,17 @@ void StemperatorEditor::batchProcessFiles()
     }
 
     // Get quality setting for model selection
-    int qualityIndex = qualityBox.getSelectedItemIndex();
+    int qualityIndex = currentQuality;
     juce::String modelName = (qualityIndex >= 2) ? "htdemucs_ft" : "htdemucs";
 
-    // First, choose input files
+    // First, choose input files - start in last audio folder or Music directory
+    juce::File startFolder = lastAudioFolder.exists()
+        ? lastAudioFolder
+        : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+
     fileChooser = std::make_unique<juce::FileChooser> (
         "Select Audio Files for Batch Processing",
-        juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+        startFolder,
         "*.wav;*.mp3;*.flac;*.aiff;*.ogg;*.m4a",
         true);  // Use native dialog
 
@@ -2557,10 +3829,14 @@ void StemperatorEditor::batchProcessFiles()
             if (results.isEmpty())
                 return;
 
-            // Now choose output directory
+            // Now choose output directory - use defaultStemFolder if set
+            juce::File outputStartFolder = defaultStemFolder.exists()
+                ? defaultStemFolder
+                : results[0].getParentDirectory();
+
             fileChooser = std::make_unique<juce::FileChooser> (
                 "Select Output Directory for Stems",
-                results[0].getParentDirectory(),
+                outputStartFolder,
                 "",
                 true);
 
@@ -2792,13 +4068,15 @@ void StemperatorEditor::batchProcessFiles()
                                 if (fileNameLabel)
                                     fileNameLabel->setText (summary, juce::dontSendNotification);
 
-                                // Show completion dialog
-                                juce::AlertWindow::showMessageBoxAsync (
-                                    juce::MessageBoxIconType::InfoIcon,
-                                    "Batch Processing Complete",
-                                    "Processed " + juce::String (successCount) + " of " + juce::String (totalFiles) + " files.\n\n"
-                                    "Output location:\n" + outputDir.getFullPathName() +
-                                    (failedFiles > 0 ? "\n\n" + juce::String (failedFiles) + " file(s) failed to process." : ""));
+                                // Show styled completion dialog
+                                auto outputPath = outputDir.getFullPathName();
+                                new BatchCompleteDialog (
+                                    successCount, totalFiles, failedFiles, outputPath, totalTime,
+                                    [outputPath]()
+                                    {
+                                        // Open folder callback
+                                        juce::File (outputPath).revealToUser();
+                                    });
                             }
 
                             commandManager.commandStatusChanged();
@@ -2926,6 +4204,7 @@ void StemperatorEditor::loadStemsAfterExport (const juce::File& folder)
         hasSeparatedStems = true;
         lastStemFolder = folder;
         loadedSampleRate = sampleRate;
+        addToRecentStems (folder);
 
         std::cerr << "  Step 1: Stopping transport" << std::endl;
         // Stop current playback

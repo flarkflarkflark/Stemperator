@@ -65,6 +65,10 @@ public:
         setColour (juce::PopupMenu::backgroundColourId, Colours::bgPanel);
         setColour (juce::PopupMenu::textColourId, Colours::textBright);
         setColour (juce::PopupMenu::highlightedBackgroundColourId, Colours::accent);
+
+        // Window title bar colors - match the dark interface
+        setColour (juce::ResizableWindow::backgroundColourId, Colours::bgDark);
+        setColour (juce::DocumentWindow::textColourId, Colours::textBright);
     }
 
     //==============================================================================
@@ -216,7 +220,7 @@ public:
     }
 
     //==============================================================================
-    // BUTTONS - Modern with glow on hover/toggle
+    // BUTTONS - 3D push-button style with bevel effect
     //==============================================================================
     void drawButtonBackground (juce::Graphics& g, juce::Button& button,
                                const juce::Colour& backgroundColour,
@@ -225,62 +229,130 @@ public:
     {
         auto bounds = button.getLocalBounds().toFloat().reduced (1.0f);
         auto baseColour = backgroundColour;
+        bool isToggled = false;
 
-        if (shouldDrawButtonAsDown)
-            baseColour = baseColour.brighter (0.2f);
-        else if (shouldDrawButtonAsHighlighted)
-            baseColour = baseColour.brighter (0.1f);
-
-        // Check if toggled
+        // Check if toggled (for M/S buttons)
         if (auto* toggle = dynamic_cast<juce::ToggleButton*> (&button))
-        {
-            if (toggle->getToggleState())
-            {
-                auto onColour = button.findColour (juce::TextButton::buttonOnColourId);
-                baseColour = onColour;
-
-                // Glow effect for active state
-                g.setColour (onColour.withAlpha (0.3f));
-                g.fillRoundedRectangle (bounds.expanded (2.0f), 6.0f);
-            }
-        }
+            isToggled = toggle->getToggleState();
         else if (auto* textBtn = dynamic_cast<juce::TextButton*> (&button))
-        {
-            if (textBtn->getToggleState())
-            {
-                auto onColour = button.findColour (juce::TextButton::buttonOnColourId);
-                baseColour = onColour;
+            isToggled = textBtn->getToggleState();
 
-                g.setColour (onColour.withAlpha (0.3f));
-                g.fillRoundedRectangle (bounds.expanded (2.0f), 6.0f);
-            }
+        if (isToggled)
+        {
+            auto onColour = button.findColour (juce::TextButton::buttonOnColourId);
+            baseColour = onColour;
+
+            // Glow effect for active state
+            g.setColour (onColour.withAlpha (0.3f));
+            g.fillRoundedRectangle (bounds.expanded (2.0f), 6.0f);
         }
 
-        // Button body
-        g.setColour (baseColour);
-        g.fillRoundedRectangle (bounds, 4.0f);
+        // Check if this is a Play/Stop button (by checking button text)
+        auto buttonText = button.getButtonText().toLowerCase();
+        bool isTransportButton = buttonText == "play" || buttonText == "stop";
 
-        // Subtle border
-        g.setColour (Colours::accent.withAlpha (0.3f));
-        g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
+        if (isTransportButton)
+        {
+            // 3D Push-button style for Play/Stop
+            float cornerSize = 6.0f;
+
+            if (shouldDrawButtonAsDown)
+            {
+                // Pressed state - inset look
+                g.setColour (baseColour.darker (0.3f));
+                g.fillRoundedRectangle (bounds, cornerSize);
+
+                // Inner shadow (top-left darker)
+                g.setColour (juce::Colours::black.withAlpha (0.3f));
+                g.drawRoundedRectangle (bounds.reduced (1), cornerSize, 1.5f);
+            }
+            else
+            {
+                // Normal/hover state - raised 3D look
+
+                // Shadow underneath
+                g.setColour (juce::Colours::black.withAlpha (0.4f));
+                g.fillRoundedRectangle (bounds.translated (0, 2), cornerSize);
+
+                // Main button body with gradient
+                juce::ColourGradient gradient (
+                    baseColour.brighter (shouldDrawButtonAsHighlighted ? 0.3f : 0.15f),
+                    bounds.getX(), bounds.getY(),
+                    baseColour.darker (0.1f),
+                    bounds.getX(), bounds.getBottom(), false);
+                g.setGradientFill (gradient);
+                g.fillRoundedRectangle (bounds, cornerSize);
+
+                // Top highlight
+                g.setColour (juce::Colours::white.withAlpha (0.15f));
+                g.fillRoundedRectangle (bounds.getX() + 2, bounds.getY() + 1,
+                                        bounds.getWidth() - 4, bounds.getHeight() * 0.4f, cornerSize);
+
+                // Border
+                g.setColour (baseColour.darker (0.4f));
+                g.drawRoundedRectangle (bounds, cornerSize, 1.0f);
+            }
+        }
+        else
+        {
+            // Standard flat button style for M/S and other buttons
+            if (shouldDrawButtonAsDown)
+                baseColour = baseColour.brighter (0.2f);
+            else if (shouldDrawButtonAsHighlighted)
+                baseColour = baseColour.brighter (0.1f);
+
+            g.setColour (baseColour);
+            g.fillRoundedRectangle (bounds, 4.0f);
+
+            g.setColour (Colours::accent.withAlpha (0.3f));
+            g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
+        }
     }
 
     void drawButtonText (juce::Graphics& g, juce::TextButton& button,
                          bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
     {
-        auto font = juce::FontOptions (14.0f);
+        // Check if this is a Play/Stop button or M/S button
+        auto buttonText = button.getButtonText().toLowerCase();
+        bool isTransportButton = buttonText == "play" || buttonText == "stop";
+        bool isMuteOrSolo = buttonText == "m" || buttonText == "s";
+
+        // Bigger font for transport buttons and M/S buttons
+        juce::Font font;
+        if (isTransportButton)
+            font = juce::FontOptions (22.0f).withStyle ("Bold");
+        else if (isMuteOrSolo)
+            font = juce::FontOptions (18.0f).withStyle ("Bold");  // Bigger M/S text
+        else
+            font = juce::FontOptions (14.0f);
         g.setFont (font);
 
-        auto textColour = button.getToggleState()
+        juce::Colour textColour;
+        if (isTransportButton)
+        {
+            // Always white text for transport buttons
+            textColour = Colours::textBright;
+            if (shouldDrawButtonAsDown)
+                textColour = textColour.darker (0.2f);
+        }
+        else
+        {
+            textColour = button.getToggleState()
                               ? button.findColour (juce::TextButton::textColourOnId)
                               : button.findColour (juce::TextButton::textColourOffId);
 
-        if (shouldDrawButtonAsHighlighted)
-            textColour = textColour.brighter (0.2f);
+            if (shouldDrawButtonAsHighlighted)
+                textColour = textColour.brighter (0.2f);
+        }
 
         g.setColour (textColour);
-        g.drawText (button.getButtonText(), button.getLocalBounds(),
-                    juce::Justification::centred, false);
+
+        // Offset text slightly when pressed for 3D effect
+        auto textBounds = button.getLocalBounds();
+        if (isTransportButton && shouldDrawButtonAsDown)
+            textBounds.translate (0, 1);
+
+        g.drawText (button.getButtonText(), textBounds, juce::Justification::centred, false);
     }
 
     //==============================================================================
@@ -341,6 +413,81 @@ public:
         g.setColour (Colours::textBright);
         g.setFont (juce::FontOptions (13.0f));
         g.drawText (text, bounds.reduced (6.0f, 4.0f), juce::Justification::centred, true);
+    }
+
+    //==============================================================================
+    // DOCUMENT WINDOW - Dark title bar matching interface with colorful title
+    //==============================================================================
+    void drawDocumentWindowTitleBar (juce::DocumentWindow& window, juce::Graphics& g,
+                                     int w, int h, int titleSpaceX, int titleSpaceW,
+                                     const juce::Image* icon, bool drawTitleTextOnLeft) override
+    {
+        // Fill title bar with SAME dark background as main app area
+        g.fillAll (juce::Colour (0xff0a0a12));  // Very dark, matching app background
+
+        // Draw a subtle gradient matching the app's premium look
+        juce::ColourGradient gradient (
+            juce::Colour (0xff12121a), 0, 0,  // Slightly lighter at top
+            juce::Colour (0xff0a0a12), 0, (float) h, false);  // Dark at bottom
+        g.setGradientFill (gradient);
+        g.fillRect (0, 0, w, h);
+
+        // Bottom accent line - subtle cyan glow
+        g.setColour (Colours::accent.withAlpha (0.5f));
+        g.fillRect (0, h - 2, w, 2);
+
+        // Title text with colorful "STEMPERATOR" letters - bigger font
+        auto title = window.getName();
+        g.setFont (juce::FontOptions ((float) h * 0.55f).withStyle ("Bold"));
+
+        // Check if title starts with "Stemperator"
+        if (title.startsWithIgnoreCase ("Stemperator"))
+        {
+            // Colorful letters for "STEMPERATOR" cycling through stem colors
+            const juce::Colour letterColors[] = {
+                Colours::vocals,  // S - red
+                Colours::drums,   // T - blue
+                Colours::bass,    // E - green
+                Colours::other,   // M - orange
+                Colours::vocals,  // P - red
+                Colours::drums,   // E - blue
+                Colours::bass,    // R - green
+                Colours::other,   // A - orange
+                Colours::vocals,  // T - red
+                Colours::drums,   // O - blue
+                Colours::bass     // R - green
+            };
+
+            // Calculate total width for centering
+            float totalWidth = g.getCurrentFont().getStringWidthFloat (title);
+            float startX = drawTitleTextOnLeft ? (float) titleSpaceX
+                                                : (float) titleSpaceX + ((float) titleSpaceW - totalWidth) / 2.0f;
+
+            // Draw each character
+            float x = startX;
+            for (int i = 0; i < title.length(); ++i)
+            {
+                juce::String ch = title.substring (i, i + 1);
+                float charWidth = g.getCurrentFont().getStringWidthFloat (ch);
+
+                // Use stem colors for first 11 chars ("Stemperator"), white for rest
+                if (i < 11)
+                    g.setColour (letterColors[i]);
+                else
+                    g.setColour (Colours::textMid);
+
+                g.drawText (ch, (int) x, 0, (int) charWidth + 2, h, juce::Justification::centredLeft, false);
+                x += charWidth;
+            }
+        }
+        else
+        {
+            // Normal title drawing
+            g.setColour (Colours::textBright);
+            auto textBounds = juce::Rectangle<int> (titleSpaceX, 0, titleSpaceW, h);
+            g.drawText (title, textBounds, drawTitleTextOnLeft ? juce::Justification::centredLeft
+                                                               : juce::Justification::centred, true);
+        }
     }
 
     //==============================================================================
