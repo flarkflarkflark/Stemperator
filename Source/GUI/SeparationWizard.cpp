@@ -1,5 +1,6 @@
 #include "SeparationWizard.h"
 #include "PremiumLookAndFeel.h"
+#include "StyledDialogWindow.h"
 
 //==============================================================================
 // GoalButton implementation
@@ -542,7 +543,7 @@ void SeparationWizard::handleCompletion (const SeparationWorkflow::SeparationRes
     }
     else
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "Separation Failed",
             result.errorMessage);

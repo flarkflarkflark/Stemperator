@@ -53,31 +53,35 @@ public:
         if (closeCallback)
             closeCallback();
         setVisible (false);
+        // Self-destruct
+        juce::MessageManager::callAsync ([this]() { delete this; });
     }
 
     // Static helper for showing a message box
     static void showMessageBox (const juce::String& title,
                                 const juce::String& message,
                                 IconType iconType = IconType::Info,
-                                juce::Component* parent = nullptr)
+                                juce::Component* /*parent*/ = nullptr)
     {
-        auto* dialog = new StyledDialogWindow (title, message, iconType, "OK", [=]()
-        {
-            // Self-destruct after close
-            juce::MessageManager::callAsync ([=]()
-            {
-                // Note: The dialog deletes itself when closed
-            });
-        });
+        auto* dialog = new StyledDialogWindow (title, message, iconType, "OK", nullptr);
+        // Dialog self-destructs when closed via closeButtonPressed
+        juce::ignoreUnused (dialog);
+    }
 
-        // Make dialog delete itself when closed
-        dialog->setConstrainer (nullptr);
-
-        if (parent)
+    // Compatibility helper - maps JUCE MessageBoxIconType to our IconType
+    static void showMessageBoxAsync (juce::MessageBoxIconType juceIcon,
+                                     const juce::String& title,
+                                     const juce::String& message)
+    {
+        IconType icon = IconType::Info;
+        switch (juceIcon)
         {
-            auto parentBounds = parent->getScreenBounds();
-            dialog->setCentrePosition (parentBounds.getCentreX(), parentBounds.getCentreY());
+            case juce::MessageBoxIconType::WarningIcon: icon = IconType::Warning; break;
+            case juce::MessageBoxIconType::InfoIcon:    icon = IconType::Info; break;
+            case juce::MessageBoxIconType::QuestionIcon: icon = IconType::Info; break;
+            case juce::MessageBoxIconType::NoIcon:      icon = IconType::Info; break;
         }
+        showMessageBox (title, message, icon);
     }
 
 private:

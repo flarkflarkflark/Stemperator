@@ -1565,7 +1565,7 @@ void StemperatorEditor::loadAudioFile (const juce::File& file)
     }
     else
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "Load Failed",
             "Could not load: " + file.getFileName() + "\n\n"
@@ -1577,7 +1577,7 @@ void StemperatorEditor::exportStems (int stemIndex)
 {
     if (! hasLoadedFile)
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "No File Loaded",
             "Please load an audio file first using File > Load Audio File");
@@ -1925,7 +1925,7 @@ void StemperatorEditor::exportStems (int stemIndex)
                                                     juce::String debugInfo = "Expected stems: vocals.wav, drums.wav, bass.wav, other.wav\n";
                                                     debugInfo += "Files found in temp dir: " + tempFiles.joinIntoString (", ") + "\n\n";
                                                     debugInfo += "Python output:\n" + output.substring (0, 500);
-                                                    juce::AlertWindow::showMessageBoxAsync (
+                                                    StyledDialogWindow::showMessageBoxAsync (
                                                         juce::MessageBoxIconType::WarningIcon,
                                                         "AI Separation Failed",
                                                         "AI reported success but no stem files were created.\n\n" + debugInfo);
@@ -1939,7 +1939,7 @@ void StemperatorEditor::exportStems (int stemIndex)
 
                                             juce::MessageManager::callAsync ([this, output, exitCode]()
                                             {
-                                                juce::AlertWindow::showMessageBoxAsync (
+                                                StyledDialogWindow::showMessageBoxAsync (
                                                     juce::MessageBoxIconType::WarningIcon,
                                                     "AI Separation Failed",
                                                     "The AI model returned an error (exit code " + juce::String (exitCode) + ").\n\n"
@@ -1954,7 +1954,7 @@ void StemperatorEditor::exportStems (int stemIndex)
                                     // Failed to start process
                                     juce::MessageManager::callAsync ([this]()
                                     {
-                                        juce::AlertWindow::showMessageBoxAsync (
+                                        StyledDialogWindow::showMessageBoxAsync (
                                             juce::MessageBoxIconType::WarningIcon,
                                             "AI Separation Unavailable",
                                             "Could not start the AI separation process.\n\n"
@@ -2194,7 +2194,7 @@ void StemperatorEditor::exportStems (int stemIndex)
                             if (fileNameLabel)
                                 fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
 
-                            juce::AlertWindow::showMessageBoxAsync (
+                            StyledDialogWindow::showMessageBoxAsync (
                                 juce::MessageBoxIconType::WarningIcon,
                                 "Export Failed",
                                 "An error occurred during stem separation.");
@@ -2449,7 +2449,7 @@ void StemperatorEditor::exportStems (int stemIndex)
                             if (fileNameLabel)
                                 fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
 
-                            juce::AlertWindow::showMessageBoxAsync (
+                            StyledDialogWindow::showMessageBoxAsync (
                                 juce::MessageBoxIconType::InfoIcon,
                                 "Export Complete",
                                 "Stem exported to:\n" + file.getFullPathName());
@@ -2463,7 +2463,7 @@ void StemperatorEditor::exportStems (int stemIndex)
                             if (fileNameLabel)
                                 fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
 
-                            juce::AlertWindow::showMessageBoxAsync (
+                            StyledDialogWindow::showMessageBoxAsync (
                                 juce::MessageBoxIconType::WarningIcon,
                                 "Export Failed",
                                 "An error occurred during export.");
@@ -3327,7 +3327,7 @@ void StemperatorEditor::separateCurrentFile()
 {
     if (! hasLoadedFile)
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "No File Loaded",
             "Please load an audio file first using File > Load Audio File");
@@ -3362,7 +3362,7 @@ void StemperatorEditor::separateCurrentFile()
             {
                 juce::MessageManager::callAsync ([this]()
                 {
-                    juce::AlertWindow::showMessageBoxAsync (
+                    StyledDialogWindow::showMessageBoxAsync (
                         juce::MessageBoxIconType::WarningIcon,
                         "AI Not Available",
                         "Could not find the Python environment.\n\n"
@@ -3581,7 +3581,7 @@ void StemperatorEditor::separateCurrentFile()
                 if (fileNameLabel)
                     fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
 
-                juce::AlertWindow::showMessageBoxAsync (
+                StyledDialogWindow::showMessageBoxAsync (
                     juce::MessageBoxIconType::WarningIcon,
                     "Separation Failed",
                     "An error occurred during separation.");
@@ -3621,7 +3621,7 @@ void StemperatorEditor::loadStemsFromFolder (const juce::File& folder)
 
     if (songPrefixes.isEmpty())
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "No Stems Found",
             "Could not find any stem files in this folder.\n\n"
@@ -3755,7 +3755,7 @@ void StemperatorEditor::loadStemsWithPrefix (const juce::File& folder, const juc
     }
     else
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "Load Failed",
             "Could not load all stem files for: " + displayName + "\n\n"
@@ -3777,7 +3777,7 @@ void StemperatorEditor::batchProcessFiles()
 {
     if (isExporting.load())
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "Busy",
             "Already processing. Please wait for current operation to complete.");
@@ -3808,7 +3808,7 @@ void StemperatorEditor::batchProcessFiles()
                         {
                             juce::MessageManager::callAsync ([this]()
                             {
-                                juce::AlertWindow::showMessageBoxAsync (
+                                StyledDialogWindow::showMessageBoxAsync (
                                     juce::MessageBoxIconType::WarningIcon,
                                     "AI Not Available",
                                     "Could not find the Python environment.");
@@ -4186,7 +4186,7 @@ void StemperatorEditor::loadStemsAfterExport (const juce::File& folder)
     else
     {
         std::cerr << "loadStemsAfterExport: Failed to load all stems" << std::endl;
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "Load Failed",
             "Could not find all stem files in folder.\n\n"
@@ -4201,7 +4201,7 @@ void StemperatorEditor::exportMixedStems()
 {
     if (! hasSeparatedStems)
     {
-        juce::AlertWindow::showMessageBoxAsync (
+        StyledDialogWindow::showMessageBoxAsync (
             juce::MessageBoxIconType::WarningIcon,
             "No Stems Available",
             "Please separate or load stems first.\n\n"
@@ -4264,7 +4264,7 @@ void StemperatorEditor::exportMixedStems()
 
             if (maxSamples == 0)
             {
-                juce::AlertWindow::showMessageBoxAsync (
+                StyledDialogWindow::showMessageBoxAsync (
                     juce::MessageBoxIconType::WarningIcon,
                     "Export Failed",
                     "Stems are empty. Nothing to export.");
@@ -4337,14 +4337,14 @@ void StemperatorEditor::exportMixedStems()
                         "\n\nMaster: " + juce::String (masterDb, 1) + " dB\n\n" +
                         "Exported to:\n" + file.getFullPathName();
 
-                    juce::AlertWindow::showMessageBoxAsync (
+                    StyledDialogWindow::showMessageBoxAsync (
                         juce::MessageBoxIconType::InfoIcon,
                         "Export Complete",
                         desc);
                 }
                 else
                 {
-                    juce::AlertWindow::showMessageBoxAsync (
+                    StyledDialogWindow::showMessageBoxAsync (
                         juce::MessageBoxIconType::WarningIcon,
                         "Export Failed",
                         "Could not create audio writer.");
@@ -4352,7 +4352,7 @@ void StemperatorEditor::exportMixedStems()
             }
             else
             {
-                juce::AlertWindow::showMessageBoxAsync (
+                StyledDialogWindow::showMessageBoxAsync (
                     juce::MessageBoxIconType::WarningIcon,
                     "Export Failed",
                     "Could not open file for writing:\n" + file.getFullPathName());
