@@ -1110,7 +1110,6 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
     {
         menu.addCommandItem (&commandManager, cmdLoadFile);
         menu.addCommandItem (&commandManager, cmdLoadStems);
-        menu.addCommandItem (&commandManager, cmdOpenStemFolder);
 
         // Recently Stemmed submenu
         if (recentStemFolders.size() > 0)
@@ -1135,7 +1134,6 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
         menu.addCommandItem (&commandManager, cmdBatchProcess);
         menu.addSeparator();
         menu.addCommandItem (&commandManager, cmdPlay);
-        menu.addCommandItem (&commandManager, cmdPlayStems);
         menu.addCommandItem (&commandManager, cmdStop);
         menu.addSeparator();
         menu.addCommandItem (&commandManager, cmdQuit);
@@ -1252,8 +1250,6 @@ void StemperatorEditor::getAllCommands (juce::Array<juce::CommandID>& commands)
         cmdExportPiano,
         cmdPlay,
         cmdStop,
-        cmdPlayStems,
-        cmdOpenStemFolder,
         cmdSetDefaultStemFolder,
         cmdAbout,
         cmdQuit
@@ -1316,10 +1312,6 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
             result.addDefaultKeypress ('m', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
             result.setActive (hasSeparatedStems);
             break;
-        case cmdOpenStemFolder:
-            result.setInfo ("Load Created Stems", "Load previously exported stems for playback", "File", 0);
-            result.setActive (lastStemFolder.exists());
-            break;
         case cmdSetDefaultStemFolder:
             {
                 juce::String folderInfo = defaultStemFolder.exists()
@@ -1333,13 +1325,16 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
             result.addDefaultKeypress ('q', juce::ModifierKeys::commandModifier);
             break;
         case cmdPlay:
-            result.setInfo ("Play Original", "Play the original audio file", "Transport", 0);
-            result.setActive (hasLoadedFile);
-            break;
-        case cmdPlayStems:
-            result.setInfo ("Play Stems", "Play separated stems (use mute/solo/volume controls)", "Transport", 0);
-            result.addDefaultKeypress (juce::KeyPress::spaceKey, juce::ModifierKeys::noModifiers);
-            result.setActive (hasSeparatedStems);
+            {
+                // Smart play: stems if available, otherwise original
+                juce::String playLabel = hasSeparatedStems ? "Play Stems" : "Play";
+                juce::String playDesc = hasSeparatedStems
+                    ? "Play separated stems (use mute/solo/volume controls)"
+                    : "Play the loaded audio file";
+                result.setInfo (playLabel, playDesc, "Transport", 0);
+                result.addDefaultKeypress (juce::KeyPress::spaceKey, juce::ModifierKeys::noModifiers);
+                result.setActive (hasLoadedFile || hasSeparatedStems);
+            }
             break;
         case cmdStop:
             result.setInfo ("Stop", "Stop playback", "Transport", 0);
@@ -1407,9 +1402,6 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
         case cmdExportMix:
             exportMixedStems();
             return true;
-        case cmdOpenStemFolder:
-            openStemFolder();
-            return true;
         case cmdSetDefaultStemFolder:
             {
                 fileChooser = std::make_unique<juce::FileChooser> (
@@ -1436,34 +1428,25 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
             juce::JUCEApplication::getInstance()->systemRequestedQuit();
             return true;
         case cmdPlay:
-            // Stop stem playback and play original
+            // Smart play: stems if available, otherwise original
             transportSource.stop();
-            if (readerSource)
-            {
-                transportSource.setSource (readerSource.get(), 0, nullptr, loadedSampleRate);
-                // Connect to processor for audio output
-                if (isStandalone())
-                    processor.setPlaybackSource (&transportSource);
-            }
-            transportSource.setPosition (0.0);
-            transportSource.start();
-            return true;
-        case cmdPlayStems:
             if (hasSeparatedStems)
             {
-                // Switch to stem mixer playback
-                transportSource.stop();
+                // Play separated stems with mute/solo/volume controls
                 if (! stemMixerSource)
                     stemMixerSource = std::make_unique<StemMixerSource> (separatedStems, processor);
                 transportSource.setSource (stemMixerSource.get(), 0, nullptr, loadedSampleRate);
-
-                // Connect to processor for audio output
-                if (isStandalone())
-                    processor.setPlaybackSource (&transportSource);
-
-                transportSource.setPosition (0.0);
-                transportSource.start();
             }
+            else if (readerSource)
+            {
+                // Play original audio file
+                transportSource.setSource (readerSource.get(), 0, nullptr, loadedSampleRate);
+            }
+            // Connect to processor for audio output
+            if (isStandalone())
+                processor.setPlaybackSource (&transportSource);
+            transportSource.setPosition (0.0);
+            transportSource.start();
             return true;
         case cmdStop:
             transportSource.stop();
@@ -3248,14 +3231,9 @@ bool StemperatorEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
             {
                 transportSource.start();
             }
-            else if (hasSeparatedStems)
+            else if (hasSeparatedStems || hasLoadedFile)
             {
-                // Set up stems playback
-                commandManager.invokeDirectly (cmdPlayStems, false);
-            }
-            else if (hasLoadedFile)
-            {
-                // Set up original file playback
+                // Smart play: stems if available, otherwise original
                 commandManager.invokeDirectly (cmdPlay, false);
             }
         }
@@ -4084,24 +4062,6 @@ void StemperatorEditor::batchProcessFiles()
                     });
                 });
         });
-}
-
-//==============================================================================
-// Load created stems from the last export folder
-void StemperatorEditor::openStemFolder()
-{
-    if (! lastStemFolder.exists())
-    {
-        juce::AlertWindow::showMessageBoxAsync (
-            juce::MessageBoxIconType::WarningIcon,
-            "No Stem Folder",
-            "No stems have been exported yet.\n\n"
-            "Use Export > Export All Stems first.");
-        return;
-    }
-
-    // Load stems from the last export folder instead of opening in file manager
-    loadStemsAfterExport (lastStemFolder);
 }
 
 //==============================================================================

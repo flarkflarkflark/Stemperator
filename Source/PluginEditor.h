@@ -153,10 +153,8 @@ private:
         cmdExportGuitar,     // Guitar stem (6-stem model only)
         cmdExportPiano,      // Piano stem (6-stem model only)
         cmdExportMix,        // Export mixed stems with current volume/mute settings
-        cmdPlay,
+        cmdPlay,             // Play (stems if available, otherwise original)
         cmdStop,
-        cmdPlayStems,        // Play separated stems (with mute/solo applied)
-        cmdOpenStemFolder,   // Open folder containing stems
         cmdSetDefaultStemFolder,  // Set default folder for stem export
         cmdAbout,
         cmdQuit              // Exit the application
@@ -169,7 +167,6 @@ private:
     void exportMixedStems();  // Export stems merged with current volume/mute settings
     void showExportProgress (const juce::String& message);
     void batchProcessFiles();  // Process multiple audio files
-    void openStemFolder();     // Load previously exported stems for playback
     void loadStemsAfterExport (const juce::File& folder);  // Load stems into playback after export
 
     // Standalone-specific components
