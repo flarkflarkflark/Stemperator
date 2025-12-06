@@ -3784,54 +3784,18 @@ void StemperatorEditor::batchProcessFiles()
         return;
     }
 
-    // Get quality setting for model selection
-    int qualityIndex = currentQuality;
-    juce::String modelName = (qualityIndex >= 2) ? "htdemucs_ft" : "htdemucs";
+    // Get current model name from processor
+    auto& demucs = processor.getDemucsProcessor();
+    juce::String modelName = (demucs.getModel() == DemucsProcessor::HTDemucs_6S) ? "htdemucs_6s" : "htdemucs";
 
-    // First, choose input files - start in last audio folder or Music directory
-    juce::File startFolder = lastAudioFolder.exists()
-        ? lastAudioFolder
-        : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
+    // Show batch window
+    auto* batchWindow = new BatchEditorWindow (modelName);
+    batchWindow->onStartBatch = [this] (const juce::Array<juce::File>& files, const juce::String& model)
+    {
+        // Start batch processing - stems saved next to originals
+        auto filesToProcess = std::make_shared<juce::Array<juce::File>> (files);
 
-    fileChooser = std::make_unique<juce::FileChooser> (
-        "Select Audio Files for Batch Processing",
-        startFolder,
-        "*.wav;*.mp3;*.flac;*.aiff;*.ogg;*.m4a",
-        true);  // Use native dialog
-
-    fileChooser->launchAsync (
-        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
-        [this, modelName] (const juce::FileChooser& fc)
-        {
-            auto results = fc.getResults();
-            if (results.isEmpty())
-                return;
-
-            // Now choose output directory - use defaultStemFolder if set
-            juce::File outputStartFolder = defaultStemFolder.exists()
-                ? defaultStemFolder
-                : results[0].getParentDirectory();
-
-            fileChooser = std::make_unique<juce::FileChooser> (
-                "Select Output Directory for Stems",
-                outputStartFolder,
-                "",
-                true);
-
-            auto filesToProcess = std::make_shared<juce::Array<juce::File>>();
-            for (const auto& f : results)
-                filesToProcess->add (f);
-
-            fileChooser->launchAsync (
-                juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-                [this, filesToProcess, modelName] (const juce::FileChooser& fc2)
-                {
-                    auto outputDir = fc2.getResult();
-                    if (! outputDir.isDirectory())
-                        return;
-
-                    // Start batch processing in background thread
-                    juce::Thread::launch ([this, filesToProcess, outputDir, modelName]()
+        juce::Thread::launch ([this, filesToProcess, model]()
                     {
                         isExporting.store (true);
                         cancelExport.store (false);
@@ -3880,8 +3844,8 @@ void StemperatorEditor::batchProcessFiles()
                                     fileNameLabel->setText (statusMsg, juce::dontSendNotification);
                             });
 
-                            // Create output folder for this file's stems
-                            auto stemFolder = outputDir.getChildFile (inputFile.getFileNameWithoutExtension() + "_stems");
+                            // Create output folder next to source file (Reaper-style)
+                            auto stemFolder = inputFile.getParentDirectory().getChildFile (inputFile.getFileNameWithoutExtension() + "_stems");
                             stemFolder.createDirectory();
 
                             // Check if the input path has problematic characters (unicode, special chars)
@@ -3939,7 +3903,7 @@ void StemperatorEditor::batchProcessFiles()
                             args.add (actualInputPath);
                             args.add (stemFolder.getFullPathName());
                             args.add ("--model");
-                            args.add (modelName);
+                            args.add (model);
 
                             std::cerr << "Args: " << args.joinIntoString (" | ").toStdString() << std::endl;
 
@@ -4023,7 +3987,7 @@ void StemperatorEditor::batchProcessFiles()
                         double totalTime = (juce::Time::getMillisecondCounterHiRes() - batchStartTime) / 1000.0;
                         int successCount = processedFiles - failedFiles;
 
-                        juce::MessageManager::callAsync ([this, successCount, failedFiles, totalTime, outputDir, totalFiles]()
+                        juce::MessageManager::callAsync ([this, successCount, failedFiles, totalTime, totalFiles]()
                         {
                             isExporting.store (false);
 
@@ -4046,22 +4010,16 @@ void StemperatorEditor::batchProcessFiles()
                                 if (fileNameLabel)
                                     fileNameLabel->setText (summary, juce::dontSendNotification);
 
-                                // Show styled completion dialog
-                                auto outputPath = outputDir.getFullPathName();
+                                // Simple completion dialog - stems are saved next to originals
                                 new BatchCompleteDialog (
-                                    successCount, totalFiles, failedFiles, outputPath, totalTime,
-                                    [outputPath]()
-                                    {
-                                        // Open folder callback
-                                        juce::File (outputPath).revealToUser();
-                                    });
+                                    successCount, totalFiles, failedFiles, "next to source files", totalTime,
+                                    nullptr);  // No folder to open - stems are distributed
                             }
 
                             commandManager.commandStatusChanged();
                         });
                     });
-                });
-        });
+    };
 }
 
 //==============================================================================

@@ -5,6 +5,7 @@
 #include "GUI/StemChannel.h"
 #include "GUI/PremiumLookAndFeel.h"
 #include "GUI/StyledDialogWindow.h"
+#include "GUI/BatchEditorWindow.h"
 
 /**
  * StemperatorEditor - Premium plugin GUI with scalable layout
