@@ -1,7 +1,13 @@
 -- @description Stemperator - AI Stem Separation
 -- @author flarkAUDIO
--- @version 1.4.0
+-- @version 1.5.0
 -- @changelog
+--   v1.5.0: Improved cross-platform support
+--   - Better Python detection (Homebrew, Windows venvs, user paths)
+--   - Added ~/.stemperator/.venv support for global installation
+--   - macOS: Added /opt/homebrew paths for Apple Silicon
+--   - Windows: Better AppData Python detection
+--   - Run "Stemperator: Setup AI Backend" to verify installation
 --   v1.4.0: Time selection support
 --   - Can now separate time selections (not just media items)
 --   - If no item selected, uses time selection instead
@@ -9,22 +15,12 @@
 --   v1.3.0: 6-stem model support with Guitar/Piano
 --   - Guitar and Piano checkboxes appear when 6-stem model selected
 --   - Keys 5/6 toggle Guitar/Piano stems
---   - Presets updated to include Guitar/Piano when using 6-stem model
 --   v1.2.0: Scalable/resizable GUI
 --   - Window is now resizable (drag edges/corners)
 --   - All elements scale proportionally with window size
---   - Minimum size: 380x340, Maximum: 760x680
---   - Window size persists between sessions
---   v1.1.1: Cross-platform support
---   - Full Windows, Linux, and macOS compatibility
---   - Auto-detect Python and ffmpeg paths per platform
---   - Use correct temp directories and shell commands
 --   v1.1.0: Major update
 --   - Persist settings between sessions (REAPER ExtState)
---   - Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental, D=Drums Only
---   - Added 6-stem model (htdemucs_6s) for guitar/piano separation
---   - Quick preset buttons: Karaoke, Instrumental, Drums Only
---   - Improved UI layout with presets section
+--   - Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental
 --   v1.0.0: Initial release
 -- @provides
 --   [main] .
