@@ -10,6 +10,30 @@ Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. A
 
 ---
 
+## Why Stemperator?
+
+**Stay in your DAW.** No more exporting, switching to external tools, and re-importing.
+
+Stemperator integrates directly into REAPER, letting you:
+
+- **Process time selections** - Select a 4-bar section and extract just the drums from that part
+- **Edit in place** - Replace a media item with its separated stems instantly
+- **Work non-destructively** - Original files are preserved, stems are created alongside
+- **Be surgical** - Found a sample with an unwanted vocal bleed? Extract only what you need
+- **Stay creative** - Remix, mashup, or repair audio without leaving your project
+
+### Real-World Workflows
+
+| Scenario | Traditional Approach | With Stemperator |
+|----------|---------------------|------------------|
+| Remove vocal from a loop | Export → External tool → Re-import → Align | Select item → Karaoke → Done |
+| Extract drums from reference track | Export → Separate → Import 4 files → Create tracks | Select → All Stems → Auto-routed tracks |
+| Fix a sample with unwanted bass | Find alternate sample or EQ compromise | Select → Bass Only → Delete original bass |
+| Create acapella from full mix | External software, manual export/import | Select → Vocals Only → New track |
+| Isolate guitar solo for analysis | Complex EQ/phase tricks | Select region → Guitar Only |
+
+---
+
 ## Quick Start
 
 ### REAPER Users (Recommended)
@@ -52,17 +76,33 @@ Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. A
 | **htdemucs_ft** (4-stem) | Vocals, Drums, Bass, Other | Highest quality |
 | **htdemucs_6s** (6-stem) | Vocals, Drums, Bass, Other, Guitar, Piano | Detailed separation |
 
+### Flexible Input Selection
+
+Stemperator works with whatever you have selected:
+
+| Selection Type | What Gets Processed |
+|----------------|---------------------|
+| **Media item(s)** | Full item(s) - stems replace or appear alongside original |
+| **Time selection** | Only the selected time range - perfect for surgical edits |
+| **Time selection + item** | Intersection of both - maximum precision |
+
+This means you can:
+- Process an entire song by selecting the media item
+- Extract stems from just a chorus by making a time selection
+- Work on a specific 2-bar section without affecting the rest
+
 ### REAPER Scripts
 
 | Script | Description |
 |--------|-------------|
-| **Stemperator: AI Stem Separation** | Main dialog - full control |
-| **Stemperator: Karaoke** | One-click vocal removal |
-| **Stemperator: Vocals Only** | Extract vocals |
-| **Stemperator: Drums Only** | Extract drums |
-| **Stemperator: Bass Only** | Extract bass |
-| **Stemperator: All Stems** | Extract all stems to tracks |
-| **Stemperator: Setup Toolbar** | Add toolbar buttons |
+| **Stemperator: AI Stem Separation** | Main dialog - full control over model, stems, and options |
+| **Stemperator: Karaoke** | One-click vocal removal (keeps drums, bass, other) |
+| **Stemperator: Vocals Only** | Extract vocals to new track |
+| **Stemperator: Drums Only** | Extract drums to new track |
+| **Stemperator: Bass Only** | Extract bass to new track |
+| **Stemperator: All Stems** | Extract all stems to separate tracks |
+| **Stemperator: Explode Stems** | Route VST3 multi-outputs to tracks |
+| **Stemperator: Setup Toolbar** | Add quick-access toolbar buttons |
 
 ### Keyboard Shortcuts (in dialog)
 - `1-6` - Toggle stems
