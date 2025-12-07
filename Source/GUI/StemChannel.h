@@ -31,6 +31,9 @@ public:
     // Level meter
     void setLevel (float level);
 
+    // Update font sizes from UISettings
+    void updateFontSizes();
+
     // Set whether this channel needs AI separation (shows "AI" badge when true and no levels)
     void setNeedsAISeparation (bool needsAI)
     {

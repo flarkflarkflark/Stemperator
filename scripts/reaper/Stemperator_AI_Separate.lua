@@ -82,24 +82,43 @@ end
 local OS = getOS()
 local PATH_SEP = OS == "Windows" and "\\" or "/"
 
+-- Get home directory (cross-platform)
+local function getHome()
+    if OS == "Windows" then
+        return os.getenv("USERPROFILE") or "C:\\Users\\Default"
+    else
+        return os.getenv("HOME") or "/tmp"
+    end
+end
+
 -- Configuration - Auto-detect paths (cross-platform)
 local function findPython()
     local paths = {}
+    local home = getHome()
 
     if OS == "Windows" then
-        -- Windows paths
+        -- Windows paths - check venvs first
         table.insert(paths, script_path .. ".venv\\Scripts\\python.exe")
+        table.insert(paths, home .. "\\.stemperator\\.venv\\Scripts\\python.exe")
         table.insert(paths, script_path .. "..\\..\\..\\venv\\Scripts\\python.exe")
-        table.insert(paths, os.getenv("LOCALAPPDATA") .. "\\Programs\\Python\\Python311\\python.exe")
-        table.insert(paths, os.getenv("LOCALAPPDATA") .. "\\Programs\\Python\\Python310\\python.exe")
+        -- Standard Python locations
+        local localAppData = os.getenv("LOCALAPPDATA") or ""
+        table.insert(paths, localAppData .. "\\Programs\\Python\\Python312\\python.exe")
+        table.insert(paths, localAppData .. "\\Programs\\Python\\Python311\\python.exe")
+        table.insert(paths, localAppData .. "\\Programs\\Python\\Python310\\python.exe")
         table.insert(paths, "python")
     else
-        -- Linux/macOS paths
+        -- Linux/macOS paths - check venvs first
         table.insert(paths, script_path .. ".venv/bin/python")
+        table.insert(paths, home .. "/.stemperator/.venv/bin/python")
         table.insert(paths, script_path .. "../.venv/bin/python")
-        if os.getenv("HOME") then
-            table.insert(paths, os.getenv("HOME") .. "/.local/bin/python3")
+        -- Homebrew on macOS
+        if OS == "macOS" then
+            table.insert(paths, "/opt/homebrew/bin/python3")
+            table.insert(paths, "/usr/local/opt/python@3.12/bin/python3")
         end
+        -- User local and system paths
+        table.insert(paths, home .. "/.local/bin/python3")
         table.insert(paths, "/usr/local/bin/python3")
         table.insert(paths, "/usr/bin/python3")
         table.insert(paths, "python3")

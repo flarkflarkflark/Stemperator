@@ -125,8 +125,8 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
 def main():
     parser = argparse.ArgumentParser(description="Demucs Stem Separation for Stemperator")
-    parser.add_argument("input", help="Input audio file")
-    parser.add_argument("output_dir", help="Output directory for stems")
+    parser.add_argument("input", nargs="?", help="Input audio file")
+    parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
     parser.add_argument("--model", default="htdemucs",
                         choices=["htdemucs", "htdemucs_ft", "htdemucs_6s", "mdx_extra", "mdx_extra_q"],
                         help="Demucs model to use")
@@ -139,11 +139,10 @@ def main():
 
     args = parser.parse_args()
 
-    # Check dependencies
-    if not check_dependencies():
-        sys.exit(1)
-
+    # Handle --check first (doesn't need input/output_dir)
     if args.check:
+        if not check_dependencies():
+            sys.exit(1)
         print("All dependencies OK!")
         import torch
         print(f"PyTorch: {torch.__version__}")
@@ -151,6 +150,14 @@ def main():
         if torch.cuda.is_available():
             print(f"GPU: {torch.cuda.get_device_name(0)}")
         sys.exit(0)
+
+    # Check dependencies for actual processing
+    if not check_dependencies():
+        sys.exit(1)
+
+    # Require input and output_dir for processing
+    if not args.input or not args.output_dir:
+        parser.error("input and output_dir are required for processing")
 
     # Validate input
     if not os.path.exists(args.input):

@@ -312,11 +312,37 @@ public:
         }
         y = stemY + 15;
 
-        // GPU/AI status
+        // GPU/AI status - check for audio-separator (actual backend)
         g.setColour (juce::Colour (0xff666688));
         g.setFont (juce::FontOptions (12.0f));
         juce::String status = processor.getGPUInfo();
-        if (processor.isDemucsAvailable())
+
+        // Check if audio-separator is available (the real AI backend)
+        // Use same search strategy as findPythonEnvironment()
+        bool aiAvailable = false;
+        {
+            auto executableFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+            auto projectRoot = executableFile.getParentDirectory().getParentDirectory().getParentDirectory().getParentDirectory();
+            auto venvPython = projectRoot.getChildFile (".venv/bin/python");
+            auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+            if (venvPython.existsAsFile() && separatorScript.existsAsFile())
+                aiAvailable = true;
+
+            // Also check STEMPERATOR_ROOT env var
+            if (! aiAvailable)
+            {
+                auto envRoot = juce::SystemStats::getEnvironmentVariable ("STEMPERATOR_ROOT", "");
+                if (envRoot.isNotEmpty())
+                {
+                    projectRoot = juce::File (envRoot);
+                    venvPython = projectRoot.getChildFile (".venv/bin/python");
+                    separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+                    aiAvailable = venvPython.existsAsFile() && separatorScript.existsAsFile();
+                }
+            }
+        }
+        if (aiAvailable)
             status += " | Demucs Ready";
         else
             status += " | Demucs Not Found";
@@ -793,6 +819,9 @@ private:
 StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     : AudioProcessorEditor (&p), processor (p)
 {
+    // Load UI font settings from file (before applying look and feel)
+    UISettings::getInstance().loadFromFile();
+
     // Apply premium look and feel
     setLookAndFeel (&premiumLookAndFeel);
 
@@ -980,9 +1009,12 @@ StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
     // Subtitle - show GPU and AI status
     juce::String subtitle = "AI-POWERED STEM SEPARATION | " + processor.getGPUInfo();
 
-    // Add Demucs status
-    if (processor.isDemucsAvailable())
-        subtitle += " | Demucs: Ready";
+    // Add Demucs status - check for audio-separator (actual backend)
+    {
+        auto pyEnv = findPythonEnvironment();
+        if (pyEnv.isValid())
+            subtitle += " | Demucs: Ready";
+    }
 
     subtitleLabel.setText (subtitle, juce::dontSendNotification);
     subtitleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
@@ -1073,6 +1105,16 @@ void StemperatorEditor::loadSettings()
     if (defaultFolderPath.isNotEmpty())
         defaultStemFolder = juce::File (defaultFolderPath);
 
+    // Load default project folder setting
+    juce::String defaultProjectPath = appSettings->getValue ("defaultProjectFolder", "");
+    if (defaultProjectPath.isNotEmpty())
+        defaultProjectFolder = juce::File (defaultProjectPath);
+
+    // Load default batch folder setting
+    juce::String defaultBatchPath = appSettings->getValue ("defaultBatchFolder", "");
+    if (defaultBatchPath.isNotEmpty())
+        defaultBatchFolder = juce::File (defaultBatchPath);
+
     // Load recent stem folders
     juce::String recentFoldersStr = appSettings->getValue ("recentStemFolders", "");
     if (recentFoldersStr.isNotEmpty())
@@ -1100,6 +1142,46 @@ void StemperatorEditor::loadSettings()
                 recentProjects.remove (i);
         }
     }
+
+    // Load recent batch output folders
+    juce::String recentBatchFoldersStr = appSettings->getValue ("recentBatchOutputFolders", "");
+    if (recentBatchFoldersStr.isNotEmpty())
+    {
+        recentBatchOutputFolders.clear();
+        recentBatchOutputFolders.addTokens (recentBatchFoldersStr, "|", "");
+        // Remove any non-existing folders
+        for (int i = recentBatchOutputFolders.size() - 1; i >= 0; --i)
+        {
+            if (! juce::File (recentBatchOutputFolders[i]).isDirectory())
+                recentBatchOutputFolders.remove (i);
+        }
+    }
+
+    // Load saved window position (standalone mode only)
+    if (isStandalone())
+    {
+        int windowX = appSettings->getIntValue ("windowX", -1);
+        int windowY = appSettings->getIntValue ("windowY", -1);
+        int windowW = appSettings->getIntValue ("windowW", 0);
+        int windowH = appSettings->getIntValue ("windowH", 0);
+
+        if (windowX >= 0 && windowY >= 0 && windowW > 0 && windowH > 0)
+        {
+            // Verify the position is still on a valid display
+            auto displays = juce::Desktop::getInstance().getDisplays();
+            juce::Rectangle<int> savedBounds (windowX, windowY, windowW, windowH);
+
+            for (const auto& display : displays.displays)
+            {
+                if (display.userArea.intersects (savedBounds))
+                {
+                    // Position is valid - will be applied in parentHierarchyChanged
+                    savedWindowBounds = savedBounds;
+                    break;
+                }
+            }
+        }
+    }
 }
 
 void StemperatorEditor::saveSettings()
@@ -1114,6 +1196,18 @@ void StemperatorEditor::saveSettings()
 
         if (defaultStemFolder.exists())
             appSettings->setValue ("defaultStemFolder", defaultStemFolder.getFullPathName());
+        else
+            appSettings->removeValue ("defaultStemFolder");
+
+        if (defaultProjectFolder.exists())
+            appSettings->setValue ("defaultProjectFolder", defaultProjectFolder.getFullPathName());
+        else
+            appSettings->removeValue ("defaultProjectFolder");
+
+        if (defaultBatchFolder.exists())
+            appSettings->setValue ("defaultBatchFolder", defaultBatchFolder.getFullPathName());
+        else
+            appSettings->removeValue ("defaultBatchFolder");
 
         // Save recent stem folders as pipe-separated string
         if (recentStemFolders.size() > 0)
@@ -1122,6 +1216,23 @@ void StemperatorEditor::saveSettings()
         // Save recent projects as pipe-separated string
         if (recentProjects.size() > 0)
             appSettings->setValue ("recentProjects", recentProjects.joinIntoString ("|"));
+
+        // Save recent batch output folders as pipe-separated string
+        if (recentBatchOutputFolders.size() > 0)
+            appSettings->setValue ("recentBatchOutputFolders", recentBatchOutputFolders.joinIntoString ("|"));
+
+        // Save window position (standalone mode only)
+        if (isStandalone())
+        {
+            if (auto* topLevel = getTopLevelComponent())
+            {
+                auto bounds = topLevel->getBounds();
+                appSettings->setValue ("windowX", bounds.getX());
+                appSettings->setValue ("windowY", bounds.getY());
+                appSettings->setValue ("windowW", bounds.getWidth());
+                appSettings->setValue ("windowH", bounds.getHeight());
+            }
+        }
 
         appSettings->saveIfNeeded();
     }
@@ -1167,6 +1278,26 @@ void StemperatorEditor::addToRecentProjects (const juce::File& projectFile)
     saveSettings();
 }
 
+void StemperatorEditor::addToRecentBatchOutputFolders (const juce::File& folder)
+{
+    if (! folder.isDirectory())
+        return;
+
+    juce::String folderPath = folder.getFullPathName();
+
+    // Remove if already exists (we'll add at front)
+    recentBatchOutputFolders.removeString (folderPath);
+
+    // Add to front
+    recentBatchOutputFolders.insert (0, folderPath);
+
+    // Keep only max items
+    while (recentBatchOutputFolders.size() > maxRecentFolders)
+        recentBatchOutputFolders.remove (recentBatchOutputFolders.size() - 1);
+
+    saveSettings();
+}
+
 //==============================================================================
 // Focus handling - ensure menu works immediately
 void StemperatorEditor::parentHierarchyChanged()
@@ -1177,6 +1308,37 @@ void StemperatorEditor::parentHierarchyChanged()
     // This allows menu bar clicks to work immediately on Linux
     if (isStandalone() && getParentComponent() != nullptr)
     {
+        // Apply saved window position only once, on first appearance
+        if (! windowPositionApplied && ! savedWindowBounds.isEmpty())
+        {
+            windowPositionApplied = true;
+
+            // Use a short delay to ensure the window hierarchy is fully set up
+            juce::Timer::callAfterDelay (50, [this]()
+            {
+                if (auto* topLevel = getTopLevelComponent())
+                {
+                    // Verify position is still valid
+                    auto displays = juce::Desktop::getInstance().getDisplays();
+                    bool positionValid = false;
+
+                    for (const auto& display : displays.displays)
+                    {
+                        if (display.userArea.intersects (savedWindowBounds))
+                        {
+                            positionValid = true;
+                            break;
+                        }
+                    }
+
+                    if (positionValid)
+                    {
+                        topLevel->setBounds (savedWindowBounds);
+                    }
+                }
+            });
+        }
+
         juce::Timer::callAfterDelay (100, [this]()
         {
             if (auto* peer = getPeer())
@@ -1262,10 +1424,107 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
             menu.addCommandItem (&commandManager, cmdExportPiano);
         }
         menu.addSeparator();
-        menu.addCommandItem (&commandManager, cmdSetDefaultStemFolder);
+
+        // STEMS folder submenu
+        {
+            juce::PopupMenu stemsFolderMenu;
+            bool hasStemsFolder = lastStemFolder.exists() && lastStemFolder.isDirectory();
+            bool hasDefaultStems = defaultStemFolder.exists();
+            stemsFolderMenu.addItem (3001, "Reveal STEMS Folder", hasStemsFolder);
+            if (hasDefaultStems)
+                stemsFolderMenu.addItem (3004, "Reveal Default Folder");
+            stemsFolderMenu.addSeparator();
+            stemsFolderMenu.addItem (3002, "Set Default STEMS Folder...");
+            if (hasDefaultStems)
+                stemsFolderMenu.addItem (3003, "Clear Default Folder");
+
+            juce::String stemsLabel = "STEMS Folder";
+            if (lastStemFolder.exists())
+                stemsLabel += " (" + lastStemFolder.getFileName() + ")";
+            else if (hasDefaultStems)
+                stemsLabel += " [" + defaultStemFolder.getFileName() + "]";
+            menu.addSubMenu (stemsLabel, stemsFolderMenu, true);
+        }
+
+        // PROJECT folder submenu
+        {
+            juce::PopupMenu projectFolderMenu;
+            bool hasProjectFolder = currentProjectFile.existsAsFile();
+            bool hasDefaultProject = defaultProjectFolder.exists();
+            projectFolderMenu.addItem (3010, "Reveal Project Folder", hasProjectFolder);
+            if (hasDefaultProject)
+                projectFolderMenu.addItem (3013, "Reveal Default Folder");
+            projectFolderMenu.addSeparator();
+            projectFolderMenu.addItem (3011, "Set Default PROJECT Folder...");
+            if (hasDefaultProject)
+                projectFolderMenu.addItem (3012, "Clear Default Folder");
+
+            juce::String projectLabel = "PROJECT Folder";
+            if (hasProjectFolder)
+                projectLabel += " (" + currentProjectFile.getParentDirectory().getFileName() + ")";
+            else if (hasDefaultProject)
+                projectLabel += " [" + defaultProjectFolder.getFileName() + "]";
+            menu.addSubMenu (projectLabel, projectFolderMenu, true);
+        }
+
+        // BATCH folder submenu
+        {
+            juce::PopupMenu batchFolderMenu;
+            bool hasBatchFolders = recentBatchOutputFolders.size() > 0;
+            bool hasDefaultBatch = defaultBatchFolder.exists();
+
+            // Most recent batch folder at top
+            if (hasBatchFolders)
+            {
+                juce::File mostRecent (recentBatchOutputFolders[0]);
+                batchFolderMenu.addItem (3020, "Reveal BATCH Folder", mostRecent.exists());
+            }
+            else
+            {
+                batchFolderMenu.addItem (3020, "Reveal BATCH Folder", false);  // Greyed out
+            }
+
+            if (hasDefaultBatch)
+                batchFolderMenu.addItem (3023, "Reveal Default Folder");
+
+            if (hasBatchFolders)
+            {
+                batchFolderMenu.addSeparator();
+
+                // Recent batch folders
+                juce::PopupMenu recentBatchMenu;
+                for (int i = 0; i < recentBatchOutputFolders.size(); ++i)
+                {
+                    juce::File folder (recentBatchOutputFolders[i]);
+                    recentBatchMenu.addItem (3030 + i, folder.getFileName(), folder.exists());
+                }
+                recentBatchMenu.addSeparator();
+                recentBatchMenu.addItem (3029, "Clear Recent Folders");
+                batchFolderMenu.addSubMenu ("Recent BATCH Folders", recentBatchMenu, true);
+            }
+
+            batchFolderMenu.addSeparator();
+            batchFolderMenu.addItem (3021, "Set Default BATCH Folder...");
+            if (hasDefaultBatch)
+                batchFolderMenu.addItem (3022, "Clear Default Folder");
+
+            juce::String batchLabel = "BATCH Folder";
+            if (hasBatchFolders)
+            {
+                juce::File mostRecent (recentBatchOutputFolders[0]);
+                batchLabel += " (" + mostRecent.getFileName() + ")";
+            }
+            else if (hasDefaultBatch)
+            {
+                batchLabel += " [" + defaultBatchFolder.getFileName() + "]";
+            }
+            menu.addSubMenu (batchLabel, batchFolderMenu, true);
+        }
     }
     else if (menuIndex == 3)  // Help menu
     {
+        menu.addCommandItem (&commandManager, cmdUISettings);
+        menu.addSeparator();
         menu.addCommandItem (&commandManager, cmdAbout);
     }
 
@@ -1289,6 +1548,146 @@ void StemperatorEditor::menuItemSelected (int menuItemID, int /*topLevelMenuInde
     {
         recentProjects.clear();
         saveSettings();
+        return;
+    }
+
+    // Handle STEMS folder menu items (3001-3009)
+    if (menuItemID == 3001)  // Reveal STEMS folder
+    {
+        if (lastStemFolder.exists())
+            lastStemFolder.revealToUser();
+        return;
+    }
+    if (menuItemID == 3002)  // Set default STEMS folder
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select default folder for stem export...",
+            defaultStemFolder.exists() ? defaultStemFolder : juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+            "",
+            true);
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [this] (const juce::FileChooser& c)
+            {
+                auto folder = c.getResult();
+                if (folder != juce::File() && folder.isDirectory())
+                {
+                    defaultStemFolder = folder;
+                    saveSettings();
+                }
+            });
+        return;
+    }
+    if (menuItemID == 3003)  // Clear default STEMS folder
+    {
+        defaultStemFolder = juce::File();
+        saveSettings();
+        return;
+    }
+    if (menuItemID == 3004)  // Reveal default STEMS folder
+    {
+        if (defaultStemFolder.exists())
+            defaultStemFolder.revealToUser();
+        return;
+    }
+
+    // Handle PROJECT folder menu items (3010-3019)
+    if (menuItemID == 3010)  // Reveal PROJECT folder
+    {
+        if (currentProjectFile.existsAsFile())
+            currentProjectFile.getParentDirectory().revealToUser();
+        return;
+    }
+    if (menuItemID == 3011)  // Set default PROJECT folder
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select default folder for project files...",
+            defaultProjectFolder.exists() ? defaultProjectFolder : juce::File::getSpecialLocation (juce::File::userDocumentsDirectory),
+            "",
+            true);
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [this] (const juce::FileChooser& c)
+            {
+                auto folder = c.getResult();
+                if (folder != juce::File() && folder.isDirectory())
+                {
+                    defaultProjectFolder = folder;
+                    saveSettings();
+                }
+            });
+        return;
+    }
+    if (menuItemID == 3012)  // Clear default PROJECT folder
+    {
+        defaultProjectFolder = juce::File();
+        saveSettings();
+        return;
+    }
+    if (menuItemID == 3013)  // Reveal default PROJECT folder
+    {
+        if (defaultProjectFolder.exists())
+            defaultProjectFolder.revealToUser();
+        return;
+    }
+
+    // Handle BATCH folder menu items (3020-3029)
+    if (menuItemID == 3020)  // Reveal most recent BATCH folder
+    {
+        if (recentBatchOutputFolders.size() > 0)
+        {
+            juce::File folder (recentBatchOutputFolders[0]);
+            if (folder.exists())
+                folder.revealToUser();
+        }
+        return;
+    }
+    if (menuItemID == 3021)  // Set default BATCH folder
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select default folder for batch output...",
+            defaultBatchFolder.exists() ? defaultBatchFolder : juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+            "",
+            true);
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [this] (const juce::FileChooser& c)
+            {
+                auto folder = c.getResult();
+                if (folder != juce::File() && folder.isDirectory())
+                {
+                    defaultBatchFolder = folder;
+                    saveSettings();
+                }
+            });
+        return;
+    }
+    if (menuItemID == 3022)  // Clear default BATCH folder
+    {
+        defaultBatchFolder = juce::File();
+        saveSettings();
+        return;
+    }
+    if (menuItemID == 3023)  // Reveal default BATCH folder
+    {
+        if (defaultBatchFolder.exists())
+            defaultBatchFolder.revealToUser();
+        return;
+    }
+    if (menuItemID == 3029)  // Clear recent BATCH folders
+    {
+        recentBatchOutputFolders.clear();
+        saveSettings();
+        return;
+    }
+
+    // Handle recent BATCH folder selection (3030+)
+    if (menuItemID >= 3030 && menuItemID < 3030 + recentBatchOutputFolders.size())
+    {
+        int index = menuItemID - 3030;
+        juce::File folder (recentBatchOutputFolders[index]);
+        if (folder.exists())
+            folder.revealToUser();
         return;
     }
 
@@ -1361,12 +1760,12 @@ void StemperatorEditor::getAllCommands (juce::Array<juce::CommandID>& commands)
         cmdExportPiano,
         cmdPlay,
         cmdStop,
-        cmdSetDefaultStemFolder,
         cmdResetStems,
         cmdDeleteStems,
         cmdUndo,
         cmdRedo,
         cmdAbout,
+        cmdUISettings,
         cmdQuit
     });
 }
@@ -1441,14 +1840,6 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
             result.addDefaultKeypress ('m', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
             result.setActive (hasSeparatedStems);
             break;
-        case cmdSetDefaultStemFolder:
-            {
-                juce::String folderInfo = defaultStemFolder.exists()
-                    ? "STEMS folder: " + defaultStemFolder.getFileName()
-                    : "Set STEMS folder...";
-                result.setInfo (folderInfo, "Set the default folder for stem export", "Export", 0);
-            }
-            break;
         case cmdResetStems:
             result.setInfo ("Reset All Faders", "Reset all stem faders to 0 dB", "Edit", 0);
             break;
@@ -1491,6 +1882,9 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
             break;
         case cmdAbout:
             result.setInfo ("About Stemperator", "Show application info", "Help", 0);
+            break;
+        case cmdUISettings:
+            result.setInfo ("UI Settings...", "Configure font sizes and UI appearance", "Help", 0);
             break;
         default:
             break;
@@ -1542,28 +1936,6 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
             return true;
         case cmdLoadProject:
             loadProject();
-            return true;
-        case cmdSetDefaultStemFolder:
-            {
-                fileChooser = std::make_unique<juce::FileChooser> (
-                    "Select default folder for stem export...",
-                    defaultStemFolder.exists() ? defaultStemFolder : juce::File::getSpecialLocation (juce::File::userMusicDirectory),
-                    "",
-                    true);
-
-                fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
-                    [this] (const juce::FileChooser& c)
-                    {
-                        auto folder = c.getResult();
-                        if (folder != juce::File() && folder.isDirectory())
-                        {
-                            defaultStemFolder = folder;
-                            saveSettings();
-                            // Update menu to show new folder name
-                            commandManager.commandStatusChanged();
-                        }
-                    });
-            }
             return true;
         case cmdResetStems:
             // Reset all stem faders to 0 dB using the RESET button handler
@@ -1664,6 +2036,22 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
             aboutOverlay->grabKeyboardFocus();
             return true;
         }
+        case cmdUISettings:
+        {
+            // Open UI Settings dialog - changes apply in real-time via callback
+            new UISettingsDialog (
+                [this]()
+                {
+                    updateFontSizes();
+                    repaint();
+                },
+                [this]()
+                {
+                    // Quit callback - trigger proper quit flow with unsaved project check
+                    commandManager.invokeDirectly (cmdQuit, false);
+                });
+            return true;
+        }
         default:
             return false;
     }
@@ -1759,6 +2147,16 @@ void StemperatorEditor::loadAudioFile (const juce::File& file)
 {
     if (! file.existsAsFile())
         return;
+
+    // Prevent loading while processing
+    if (isExporting.load())
+    {
+        StyledDialogWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Busy",
+            "Cannot load audio file while processing.\nPlease wait for current operation to complete or press Escape to cancel.");
+        return;
+    }
 
     // Stop any current playback first to avoid race conditions
     transportSource.stop();
@@ -1973,31 +2371,14 @@ void StemperatorEditor::exportStems (int stemIndex)
                         int secs = (int) audioDurationSec % 60;
                         juce::String durationStr = juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2);
 
-                        // Find the Python script and venv - try multiple locations
-                        auto executableFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
-                        auto executableDir = executableFile.getParentDirectory();
-
-                        // Try relative to executable (build/Stemperator_artefacts/Standalone/)
-                        auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
-
-                        auto venvPython = projectRoot.getChildFile (".venv/bin/python");
-                        auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-
-                        // If not found, try hardcoded development path
-                        if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
-                        {
-                            projectRoot = juce::File ("/home/flark/GIT/Stemperator");
-                            venvPython = projectRoot.getChildFile (".venv/bin/python");
-                            separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-                        }
-
-                        // Check if AI separator is available
-                        bool useAI = venvPython.existsAsFile() && separatorScript.existsAsFile();
+                        // Find the Python environment
+                        auto pyEnv = findPythonEnvironment();
+                        bool useAI = pyEnv.isValid();
                         juce::String accelInfo = useAI ? "Demucs AI (" + modelName + ")" : "Spectral (AI unavailable)";
 
                         // Debug output
                         std::cerr << "Export All - useAI: " << (useAI ? "yes" : "no")
-                                  << " venvPython: " << venvPython.getFullPathName().toStdString() << std::endl;
+                                  << " pythonExe: " << pyEnv.pythonExe.getFullPathName().toStdString() << std::endl;
 
                         // Show initial status - reset to standard label first for progress display
                         juce::MessageManager::callAsync ([this, accelInfo, qualityName, durationStr]()
@@ -2097,9 +2478,9 @@ void StemperatorEditor::exportStems (int stemIndex)
                                 // Build command arguments as StringArray for proper handling of spaces
                                 // -u flag enables unbuffered stdout for real-time progress output
                                 juce::StringArray args;
-                                args.add (venvPython.getFullPathName());
+                                args.add (pyEnv.pythonExe.getFullPathName());
                                 args.add ("-u");
-                                args.add (separatorScript.getFullPathName());
+                                args.add (pyEnv.separatorScript.getFullPathName());
                                 args.add (tempInputFile.getFullPathName());
                                 args.add (tempDir.getFullPathName());
                                 args.add ("--model");
@@ -2590,33 +2971,14 @@ void StemperatorEditor::exportStems (int stemIndex)
                         const char* stemFileNames[] = { "vocals", "drums", "bass", "other", "guitar", "piano" };
                         auto startTime = juce::Time::getMillisecondCounterHiRes();
 
-                        // Find the Python script and venv - try multiple locations
-                        auto executableFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
-                        auto executableDir = executableFile.getParentDirectory();
+                        // Find the Python environment
+                        auto pyEnv = findPythonEnvironment();
+                        bool useAI = pyEnv.isValid();
 
-                        // Try relative to executable (build/Stemperator_artefacts/Standalone/)
-                        auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
-
-                        auto venvPython = projectRoot.getChildFile (".venv/bin/python");
-                        auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-
-                        // If not found, try hardcoded development path
-                        if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
-                        {
-                            projectRoot = juce::File ("/home/flark/GIT/Stemperator");
-                            venvPython = projectRoot.getChildFile (".venv/bin/python");
-                            separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-                        }
-
-                        bool useAI = venvPython.existsAsFile() && separatorScript.existsAsFile();
-
-                        // Debug: log paths to stderr so we can see them
-                        std::cerr << "Executable: " << executableFile.getFullPathName().toStdString() << std::endl;
-                        std::cerr << "Project root: " << projectRoot.getFullPathName().toStdString() << std::endl;
-                        std::cerr << "venvPython: " << venvPython.getFullPathName().toStdString()
-                                  << " exists: " << (venvPython.existsAsFile() ? "yes" : "no") << std::endl;
-                        std::cerr << "separatorScript: " << separatorScript.getFullPathName().toStdString()
-                                  << " exists: " << (separatorScript.existsAsFile() ? "yes" : "no") << std::endl;
+                        // Debug: log paths to stderr
+                        std::cerr << "Project root: " << pyEnv.projectRoot.getFullPathName().toStdString() << std::endl;
+                        std::cerr << "pythonExe: " << pyEnv.pythonExe.getFullPathName().toStdString()
+                                  << " exists: " << (pyEnv.pythonExe.existsAsFile() ? "yes" : "no") << std::endl;
                         std::cerr << "useAI: " << (useAI ? "yes" : "no") << std::endl;
 
                         if (useAI)
@@ -2663,9 +3025,9 @@ void StemperatorEditor::exportStems (int stemIndex)
                             // Build command arguments as StringArray for proper handling of spaces
                             // -u flag enables unbuffered stdout for real-time progress output
                             juce::StringArray args;
-                            args.add (venvPython.getFullPathName());
+                            args.add (pyEnv.pythonExe.getFullPathName());
                             args.add ("-u");
-                            args.add (separatorScript.getFullPathName());
+                            args.add (pyEnv.separatorScript.getFullPathName());
                             args.add (tempInputFile.getFullPathName());
                             args.add (tempDir.getFullPathName());
                             args.add ("--model");
@@ -3183,12 +3545,13 @@ void StemperatorEditor::setupKnob (juce::Slider& slider, juce::Label& label, con
 void StemperatorEditor::updateFontSizes()
 {
     float scale = getScaleFactor();
+    auto& ui = UISettings::getInstance();
 
-    // Title fonts scale with window
-    titleLabel.setFont (juce::FontOptions (32.0f * scale).withStyle ("Bold"));
-    subtitleLabel.setFont (juce::FontOptions (11.0f * scale));
-    brandLabel.setFont (juce::FontOptions (20.0f * scale).withStyle ("Bold"));  // Larger brand label
-    masterLabel.setFont (juce::FontOptions (22.0f).withStyle ("Bold"));  // Fixed 22pt matches StemChannel (not scaled)
+    // Title fonts scale with window - use UISettings values
+    titleLabel.setFont (juce::FontOptions (ui.titleFont * scale).withStyle ("Bold"));
+    subtitleLabel.setFont (juce::FontOptions (ui.subtitleFont * scale));
+    brandLabel.setFont (juce::FontOptions (ui.brandFont * scale).withStyle ("Bold"));
+    masterLabel.setFont (juce::FontOptions (ui.masterLabelFont).withStyle ("Bold"));  // Fixed size matches StemChannel
 
     // Control labels - 50% larger (10 -> 15)
     float labelSize = 15.0f * scale;
@@ -3213,7 +3576,21 @@ void StemperatorEditor::updateFontSizes()
     vocalsFocusSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, sliderTextWidth, sliderTextHeight);
     bassCutoffSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, bassTextWidth, sliderTextHeight);
     drumSensSlider.setTextBoxStyle (juce::Slider::TextBoxRight, false, sliderTextWidth, sliderTextHeight);
-    // scaleBox is a ComboBox, no text box style needed
+
+    // Update file name label if it exists
+    if (fileNameLabel)
+        fileNameLabel->setFont (juce::FontOptions (ui.fileNameFont * scale).withStyle ("Bold"));
+
+    // Update mode label if it exists
+    if (modeLabel)
+        modeLabel->setFont (juce::FontOptions (ui.modeLabelFont * scale).withStyle ("Bold"));
+
+    // Update stem channels
+    for (auto& channel : stemChannels)
+    {
+        if (channel)
+            channel->updateFontSizes();
+    }
 }
 
 void StemperatorEditor::paint (juce::Graphics& g)
@@ -3367,7 +3744,7 @@ void StemperatorEditor::paint (juce::Graphics& g)
 
         // dB markings
         g.setColour (PremiumLookAndFeel::Colours::textDim);
-        g.setFont (juce::FontOptions (8.0f));
+        g.setFont (juce::FontOptions (10.0f));
 
         const float dbMarks[] = { 0.0f, -6.0f, -12.0f, -24.0f, -48.0f };
         for (float db : dbMarks)
@@ -3934,111 +4311,10 @@ void StemperatorEditor::filesDropped (const juce::StringArray& files, int, int)
     // If multiple files dropped, open batch editor (no project warning needed for batch)
     if (audioFiles.size() > 1)
     {
-        // Get current model name from processor
-        auto& demucs = processor.getDemucsProcessor();
-        juce::String modelName = (demucs.getModel() == DemucsProcessor::HTDemucs_6S) ? "htdemucs_6s" : "htdemucs";
-
-        auto* batchWindow = new BatchEditorWindow (modelName);
+        showBatchWindow();
         // Pre-populate with dropped files
-        for (const auto& f : audioFiles)
-            batchWindow->filesDropped (juce::StringArray (f.getFullPathName()), 0, 0);
-
-        batchWindow->onStartBatch = [this, batchWindow] (const juce::Array<juce::File>& batchFiles,
-                                                         const juce::String& model,
-                                                         const juce::File& customOutputFolder)
-        {
-            // Start batch processing with progress feedback
-            auto filesToProcess = std::make_shared<juce::Array<juce::File>> (batchFiles);
-            auto outputDir = customOutputFolder;
-
-            juce::Thread::launch ([this, batchWindow, filesToProcess, model, outputDir]()
-            {
-                isExporting.store (true);
-                cancelExport.store (false);
-
-                auto projectRoot = juce::File ("/home/flark/GIT/Stemperator");
-                auto venvPython = projectRoot.getChildFile (".venv/bin/python");
-                auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-
-                if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
-                {
-                    juce::MessageManager::callAsync ([this, batchWindow]()
-                    {
-                        StyledDialogWindow::showMessageBoxAsync (
-                            juce::MessageBoxIconType::WarningIcon,
-                            "AI Not Available",
-                            "Could not find the Python environment.");
-                        isExporting.store (false);
-                        batchWindow->processingComplete (0, 0);
-                    });
-                    return;
-                }
-
-                int totalFiles = filesToProcess->size();
-                int processedFiles = 0;
-                int failedFiles = 0;
-
-                for (const auto& inputFile : *filesToProcess)
-                {
-                    if (cancelExport.load() || batchWindow->isCancelRequested())
-                        break;
-
-                    // Update progress in batch window
-                    juce::String statusText = "Processing " + juce::String (processedFiles + 1) + "/" +
-                        juce::String (totalFiles) + ": " + inputFile.getFileName();
-                    batchWindow->setProgress (processedFiles, totalFiles, statusText);
-
-                    // Determine output folder
-                    juce::File outputFolder;
-                    if (outputDir.exists())
-                    {
-                        // Custom output folder - create subfolder for this file
-                        outputFolder = outputDir.getChildFile (inputFile.getFileNameWithoutExtension() + "_stems");
-                    }
-                    else
-                    {
-                        // Next to source file
-                        outputFolder = inputFile.getParentDirectory()
-                            .getChildFile (inputFile.getFileNameWithoutExtension() + "_stems");
-                    }
-                    outputFolder.createDirectory();
-
-                    // Run separation
-                    juce::ChildProcess process;
-                    juce::StringArray args;
-                    args.add (venvPython.getFullPathName());
-                    args.add (separatorScript.getFullPathName());
-                    args.add (inputFile.getFullPathName());
-                    args.add (outputFolder.getFullPathName());
-                    args.add ("--model");
-                    args.add (model);
-
-                    bool success = false;
-                    if (process.start (args))
-                    {
-                        success = process.waitForProcessToFinish (600000);  // 10 min timeout per file
-                        if (success && process.getExitCode() != 0)
-                            success = false;
-                    }
-
-                    if (success)
-                        processedFiles++;
-                    else
-                        failedFiles++;
-                }
-
-                juce::MessageManager::callAsync ([this, batchWindow, processedFiles, failedFiles, totalFiles]()
-                {
-                    isExporting.store (false);
-                    batchWindow->processingComplete (processedFiles, failedFiles);
-
-                    if (fileNameLabel)
-                        fileNameLabel->setText ("Batch: " + juce::String (processedFiles) + "/" +
-                            juce::String (totalFiles) + " completed",
-                            juce::dontSendNotification);
-                });
-            });
-        };
+        if (batchEditorWindow != nullptr)
+            batchEditorWindow->addFilesToBatch (audioFiles);
         return;
     }
 
@@ -4111,12 +4387,9 @@ void StemperatorEditor::separateCurrentFile()
         {
             auto startTime = juce::Time::getMillisecondCounterHiRes();
 
-            // Find the Python script and venv
-            auto projectRoot = juce::File ("/home/flark/GIT/Stemperator");
-            auto venvPython = projectRoot.getChildFile (".venv/bin/python");
-            auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-
-            if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
+            // Find the Python environment
+            auto pyEnv = findPythonEnvironment();
+            if (! pyEnv.isValid())
             {
                 juce::MessageManager::callAsync ([this]()
                 {
@@ -4124,7 +4397,8 @@ void StemperatorEditor::separateCurrentFile()
                         juce::MessageBoxIconType::WarningIcon,
                         "AI Not Available",
                         "Could not find the Python environment.\n\n"
-                        "Please set up the virtual environment first.");
+                        "Please set up the virtual environment first,\n"
+                        "or set the STEMPERATOR_ROOT environment variable.");
                     isExporting.store (false);
                 });
                 return;
@@ -4176,9 +4450,9 @@ void StemperatorEditor::separateCurrentFile()
             // Build command arguments as StringArray for proper handling of spaces
             // -u flag enables unbuffered stdout for real-time progress output
             juce::StringArray args;
-            args.add (venvPython.getFullPathName());
+            args.add (pyEnv.pythonExe.getFullPathName());
             args.add ("-u");
-            args.add (separatorScript.getFullPathName());
+            args.add (pyEnv.separatorScript.getFullPathName());
             args.add (tempInputFile.getFullPathName());
             args.add (tempDir.getFullPathName());
             args.add ("--model");
@@ -4598,13 +4872,24 @@ void StemperatorEditor::batchProcessFiles()
         return;
     }
 
+    showBatchWindow();
+}
+
+void StemperatorEditor::showBatchWindow()
+{
     // Get current model name from processor
     auto& demucs = processor.getDemucsProcessor();
     juce::String modelName = (demucs.getModel() == DemucsProcessor::HTDemucs_6S) ? "htdemucs_6s" : "htdemucs";
 
-    // Show batch window
-    auto* batchWindow = new BatchEditorWindow (modelName);
-    batchWindow->onStartBatch = [this, batchWindow] (const juce::Array<juce::File>& files,
+    // Create or reuse batch window
+    if (batchEditorWindow == nullptr)
+    {
+        batchEditorWindow = std::make_unique<BatchEditorWindow> (modelName);
+
+        // Use SafePointer for the async callbacks
+        juce::Component::SafePointer<BatchEditorWindow> safeBatchWindow (batchEditorWindow.get());
+
+        batchEditorWindow->onStartBatch = [this, safeBatchWindow] (const juce::Array<juce::File>& files,
                                                      const juce::String& model,
                                                      const juce::File& customOutputFolder)
     {
@@ -4612,23 +4897,23 @@ void StemperatorEditor::batchProcessFiles()
         auto filesToProcess = std::make_shared<juce::Array<juce::File>> (files);
         auto outputDir = customOutputFolder;
 
-        juce::Thread::launch ([this, batchWindow, filesToProcess, model, outputDir]()
+        juce::Thread::launch ([this, safeBatchWindow, filesToProcess, model, outputDir]()
                     {
                         isExporting.store (true);
                         cancelExport.store (false);
 
-                        auto projectRoot = juce::File ("/home/flark/GIT/Stemperator");
-                        auto venvPython = projectRoot.getChildFile (".venv/bin/python");
-                        auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
-
-                        if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
+                        // Find the Python environment
+                        auto pyEnv = findPythonEnvironment();
+                        if (! pyEnv.isValid())
                         {
                             juce::MessageManager::callAsync ([this]()
                             {
                                 StyledDialogWindow::showMessageBoxAsync (
                                     juce::MessageBoxIconType::WarningIcon,
                                     "AI Not Available",
-                                    "Could not find the Python environment.");
+                                    "Could not find the Python environment.\n\n"
+                                    "Please set up the virtual environment first,\n"
+                                    "or set the STEMPERATOR_ROOT environment variable.");
                                 isExporting.store (false);
                             });
                             return;
@@ -4660,6 +4945,10 @@ void StemperatorEditor::batchProcessFiles()
                                 if (fileNameLabel)
                                     fileNameLabel->setText (statusMsg, juce::dontSendNotification);
                             });
+
+                            // Update batch window progress
+                            if (safeBatchWindow != nullptr)
+                                safeBatchWindow->setProgress (processedFiles - 1, totalFiles, statusMsg);
 
                             // Create output folder - either custom or next to source file
                             juce::File stemFolder;
@@ -4718,9 +5007,9 @@ void StemperatorEditor::batchProcessFiles()
                             // Build command
                             // -u flag enables unbuffered stdout for real-time progress output
                             juce::StringArray args;
-                            args.add (venvPython.getFullPathName());
+                            args.add (pyEnv.pythonExe.getFullPathName());
                             args.add ("-u");
-                            args.add (separatorScript.getFullPathName());
+                            args.add (pyEnv.separatorScript.getFullPathName());
                             args.add (actualInputPath);
                             args.add (stemFolder.getFullPathName());
                             args.add ("--model");
@@ -4839,7 +5128,17 @@ void StemperatorEditor::batchProcessFiles()
                         double totalTime = (juce::Time::getMillisecondCounterHiRes() - batchStartTime) / 1000.0;
                         int successCount = processedFiles - failedFiles;
 
-                        juce::MessageManager::callAsync ([this, successCount, failedFiles, totalTime, totalFiles]()
+                        // Update batch window that processing is complete
+                        if (safeBatchWindow != nullptr)
+                            safeBatchWindow->processingComplete (successCount, failedFiles);
+
+                        // Determine the output path description
+                        juce::String outputPathDesc = outputDir.exists()
+                            ? outputDir.getFullPathName()
+                            : "next to source files";
+                        juce::File outputFolderToOpen = outputDir;
+
+                        juce::MessageManager::callAsync ([this, successCount, failedFiles, totalTime, totalFiles, outputPathDesc, outputFolderToOpen, safeBatchWindow]()
                         {
                             isExporting.store (false);
 
@@ -4847,6 +5146,13 @@ void StemperatorEditor::batchProcessFiles()
                             {
                                 if (fileNameLabel)
                                     fileNameLabel->setText ("Batch cancelled", juce::dontSendNotification);
+
+                                // Close batch window and clear files after cancel
+                                if (safeBatchWindow != nullptr)
+                                {
+                                    safeBatchWindow->clearFiles();
+                                    safeBatchWindow->setVisible (false);
+                                }
                             }
                             else
                             {
@@ -4862,16 +5168,56 @@ void StemperatorEditor::batchProcessFiles()
                                 if (fileNameLabel)
                                     fileNameLabel->setText (summary, juce::dontSendNotification);
 
-                                // Simple completion dialog - stems are saved next to originals
+                                // Completion dialog with correct output path and Open Folder callback
+                                // Capture SafePointer to batch window to close it after opening folder
                                 new BatchCompleteDialog (
-                                    successCount, totalFiles, failedFiles, "next to source files", totalTime,
-                                    nullptr);  // No folder to open - stems are distributed
+                                    successCount, totalFiles, failedFiles, outputPathDesc, totalTime,
+                                    outputFolderToOpen.exists() ? [outputFolderToOpen, safeBatchWindow]() {
+                                        outputFolderToOpen.revealToUser();
+                                        // Close batch window and clear files after opening folder
+                                        if (safeBatchWindow != nullptr)
+                                        {
+                                            safeBatchWindow->clearFiles();
+                                            safeBatchWindow->setVisible (false);
+                                        }
+                                    } : std::function<void()>(nullptr),
+                                    // onClose callback - also close batch window
+                                    [safeBatchWindow]() {
+                                        if (safeBatchWindow != nullptr)
+                                        {
+                                            safeBatchWindow->clearFiles();
+                                            safeBatchWindow->setVisible (false);
+                                        }
+                                    });
                             }
 
                             commandManager.commandStatusChanged();
                         });
                     });
-    };
+        };
+
+        // Callback to get recent output folders
+        batchEditorWindow->onGetRecentOutputFolders = [this]()
+        {
+            return recentBatchOutputFolders;
+        };
+
+        // Callback when a folder is used (to add to recent list)
+        batchEditorWindow->onOutputFolderUsed = [this] (const juce::File& folder)
+        {
+            addToRecentBatchOutputFolders (folder);
+            // Refresh the batch window's combo box
+            if (batchEditorWindow != nullptr)
+                batchEditorWindow->refreshRecentOutputFolders();
+        };
+
+        // Initialize with current recent folders
+        batchEditorWindow->refreshRecentOutputFolders();
+    }
+
+    // Show the window (whether newly created or existing)
+    batchEditorWindow->setVisible (true);
+    batchEditorWindow->toFront (true);
 }
 
 //==============================================================================
@@ -5597,6 +5943,16 @@ void StemperatorEditor::saveProjectToFile (const juce::File& file)
 
 void StemperatorEditor::loadProject()
 {
+    // Prevent loading while processing
+    if (isExporting.load())
+    {
+        StyledDialogWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Busy",
+            "Cannot load project while processing.\nPlease wait for current operation to complete or press Escape to cancel.");
+        return;
+    }
+
     juce::File defaultLocation = lastStemFolder.exists() ? lastStemFolder
                                 : lastAudioFolder.exists() ? lastAudioFolder
                                 : juce::File::getSpecialLocation (juce::File::userMusicDirectory);
@@ -5620,6 +5976,16 @@ void StemperatorEditor::loadProject()
 
 void StemperatorEditor::loadProject (const juce::File& file)
 {
+    // Prevent loading while processing
+    if (isExporting.load())
+    {
+        StyledDialogWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Busy",
+            "Cannot load project while processing.\nPlease wait for current operation to complete or press Escape to cancel.");
+        return;
+    }
+
     // Parse JSON
     juce::String jsonStr = file.loadFileAsString();
     juce::var projectVar = juce::JSON::parse (jsonStr);
@@ -5744,4 +6110,94 @@ void StemperatorEditor::loadProject (const juce::File& file)
             fileNameLabel->setText ("Project loaded: " + file.getFileName(), juce::dontSendNotification);
         }
     });
+}
+
+//==============================================================================
+// Find Python environment for AI separation
+StemperatorEditor::PythonEnvironment StemperatorEditor::findPythonEnvironment() const
+{
+    PythonEnvironment env;
+
+    // Strategy 1: Relative to executable (deployed app or build directory)
+    auto executableFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+    auto executableDir = executableFile.getParentDirectory();
+
+    // Try build structure: build/Stemperator_artefacts/Standalone/Stemperator
+    auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
+    auto venvPython = projectRoot.getChildFile (".venv/bin/python");
+    auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+    if (venvPython.existsAsFile() && separatorScript.existsAsFile())
+    {
+        env.projectRoot = projectRoot;
+        env.pythonExe = venvPython;
+        env.separatorScript = separatorScript;
+        return env;
+    }
+
+    // Strategy 2: Check STEMPERATOR_ROOT environment variable
+    auto envRoot = juce::SystemStats::getEnvironmentVariable ("STEMPERATOR_ROOT", "");
+    if (envRoot.isNotEmpty())
+    {
+        projectRoot = juce::File (envRoot);
+        venvPython = projectRoot.getChildFile (".venv/bin/python");
+        separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+        if (venvPython.existsAsFile() && separatorScript.existsAsFile())
+        {
+            env.projectRoot = projectRoot;
+            env.pythonExe = venvPython;
+            env.separatorScript = separatorScript;
+            return env;
+        }
+    }
+
+    // Strategy 3: Check ~/.config/stemperator/python_path (user config)
+    auto configDir = juce::File::getSpecialLocation (juce::File::userApplicationDataDirectory)
+                        .getChildFile ("stemperator");
+    auto pythonPathFile = configDir.getChildFile ("python_path");
+    if (pythonPathFile.existsAsFile())
+    {
+        auto customPath = pythonPathFile.loadFileAsString().trim();
+        if (customPath.isNotEmpty())
+        {
+            projectRoot = juce::File (customPath);
+            venvPython = projectRoot.getChildFile (".venv/bin/python");
+            separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+            if (venvPython.existsAsFile() && separatorScript.existsAsFile())
+            {
+                env.projectRoot = projectRoot;
+                env.pythonExe = venvPython;
+                env.separatorScript = separatorScript;
+                return env;
+            }
+        }
+    }
+
+    // Strategy 4: Common installation paths
+    const juce::String commonPaths[] = {
+        "/usr/share/stemperator",
+        "/opt/stemperator",
+        "/usr/local/share/stemperator",
+        juce::File::getSpecialLocation (juce::File::userHomeDirectory).getChildFile (".stemperator").getFullPathName()
+    };
+
+    for (const auto& path : commonPaths)
+    {
+        projectRoot = juce::File (path);
+        venvPython = projectRoot.getChildFile (".venv/bin/python");
+        separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+        if (venvPython.existsAsFile() && separatorScript.existsAsFile())
+        {
+            env.projectRoot = projectRoot;
+            env.pythonExe = venvPython;
+            env.separatorScript = separatorScript;
+            return env;
+        }
+    }
+
+    // Not found - return empty (invalid) environment
+    return env;
 }

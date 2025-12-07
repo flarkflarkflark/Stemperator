@@ -25,7 +25,13 @@ v1.1.0: Major update
         <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/audio_separator_process.py</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_Setup_Toolbar.lua" type="script" desc="Stemperator - Setup Toolbar (Run Once)">
+    <reapack name="Stemperator_Setup.lua" type="script" desc="Stemperator - Setup AI Backend (Run First!)">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - Checks Python + audio-separator installation]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Setup.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Setup_Toolbar.lua" type="script" desc="Stemperator - Setup Toolbar">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - Registers all scripts and creates Stemperator toolbar]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Setup_Toolbar.lua</source>

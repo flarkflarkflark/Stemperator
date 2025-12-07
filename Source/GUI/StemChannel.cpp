@@ -1,5 +1,6 @@
 #include "StemChannel.h"
 #include "PremiumLookAndFeel.h"
+#include "UISettingsDialog.h"
 #include <cmath>
 
 StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
@@ -139,9 +140,10 @@ void StemChannel::paint (juce::Graphics& g)
         }
     }
 
-    // dB markings (adjusted position for wider meter)
+    // dB markings (adjusted position for wider meter) - use UISettings for font size
+    auto& ui = UISettings::getInstance();
     g.setColour (PremiumLookAndFeel::Colours::textDim);
-    g.setFont (juce::FontOptions (8.0f));
+    g.setFont (juce::FontOptions (ui.meterScaleFont));
 
     const float dbMarks[] = { 0.0f, -6.0f, -12.0f, -24.0f, -48.0f };
     for (float db : dbMarks)
@@ -167,7 +169,7 @@ void StemChannel::paint (juce::Graphics& g)
 
         // "AI" text
         g.setColour (stemColour);
-        g.setFont (juce::FontOptions (10.0f).withStyle ("Bold"));
+        g.setFont (juce::FontOptions (ui.meterScaleFont).withStyle ("Bold"));
         g.drawText ("AI", badgeBounds, juce::Justification::centred);
     }
 }
@@ -274,4 +276,18 @@ void StemChannel::updateMeter()
             peakLevel *= 0.95f;  // Decay peak
         }
     }
+}
+
+void StemChannel::updateFontSizes()
+{
+    auto& ui = UISettings::getInstance();
+
+    // Update stem name label font
+    nameLabel.setFont (juce::FontOptions (ui.stemNameFont).withStyle ("Bold"));
+
+    // Note: TextButton fonts are controlled via LookAndFeel, not directly
+    // The buttons will use their default fonts from PremiumLookAndFeel
+
+    // Trigger repaint to update meter fonts (drawn in paint())
+    repaint();
 }

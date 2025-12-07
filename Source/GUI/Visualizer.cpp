@@ -107,7 +107,7 @@ void Visualizer::paint (juce::Graphics& g)
 
         // dB value below label
         float dbValue = 20.0f * std::log10 (juce::jmax (displayLevels[i], 0.0001f));
-        g.setFont (juce::FontOptions (9.0f));
+        g.setFont (juce::FontOptions (10.0f));
         g.setColour (PremiumLookAndFeel::Colours::textDim);
         g.drawText (juce::String (dbValue, 1) + " dB", labelArea.translated (0, 13),
                     juce::Justification::centredTop, false);
@@ -128,7 +128,7 @@ void Visualizer::paint (juce::Graphics& g)
         g.fillRoundedRectangle (inputFill, 4.0f);
     }
 
-    g.setFont (juce::FontOptions (8.0f));
+    g.setFont (juce::FontOptions (10.0f));
     g.setColour (PremiumLookAndFeel::Colours::textDim);
     g.drawText ("IN", inputBarArea.getX() - 2, inputBarArea.getBottom() + 2, 24, 12,
                 juce::Justification::centred, false);

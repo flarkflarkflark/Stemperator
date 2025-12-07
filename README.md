@@ -1,110 +1,184 @@
 # Stemperator
 
-**An AI-powered stem separator by flarkAUDIO**
+**AI-powered stem separation for music production**
 
-![flarkAUDIO](https://img.shields.io/badge/flarkAUDIO-Stemperator-blue)
-![ReaPack](https://img.shields.io/badge/ReaPack-compatible-green)
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)
+![ReaPack](https://img.shields.io/badge/ReaPack-compatible-green)
+![License](https://img.shields.io/badge/license-MIT-blue)
 
-Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems directly in REAPER. Perfect for remixing, karaoke, transcription, and music production.
+Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. Available as REAPER scripts (via ReaPack) and as a VST3/Standalone plugin.
 
-## What You Get
+---
 
-### REAPER Scripts (via ReaPack)
+## Quick Start
 
-| Script | Description |
-|--------|-------------|
-| **Stemperator: AI Stem Separation** | Main dialog with all options - select stems, choose model, configure output |
-| **Stemperator: Karaoke** | One-click vocal removal (instrumental) |
-| **Stemperator: Vocals Only** | Extract isolated vocals |
-| **Stemperator: Drums Only** | Extract drums and percussion |
-| **Stemperator: Bass Only** | Extract bass |
-| **Stemperator: Other Only** | Extract other instruments (guitars, synths, keys) |
-| **Stemperator: All 4 Stems** | Extract all 4 stems at once |
-| **Stemperator: 6-Stem All** | Extract 6 stems including Guitar & Piano |
-| **Stemperator: Guitar Only** | Extract guitar (6-stem model) |
-| **Stemperator: Piano Only** | Extract piano/keys (6-stem model) |
-| **Stemperator: Explode to Tracks** | Separate stems to individual REAPER tracks |
-| **Stemperator: Setup Toolbar** | Install toolbar icons for quick access |
+### REAPER Users (Recommended)
+
+1. **Install AI Backend** (one time, ~5 minutes):
+
+   **Windows** (PowerShell as Admin):
+   ```powershell
+   # Download and run installer
+   Invoke-WebRequest -Uri "https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/install.ps1" -OutFile install.ps1
+   .\install.ps1
+   ```
+
+   **macOS/Linux** (Terminal):
+   ```bash
+   curl -sSL https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/install.sh | bash
+   ```
+
+2. **Install REAPER Scripts**:
+   - Open REAPER → Extensions → ReaPack → Import repositories
+   - Paste: `https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/index.xml`
+   - Extensions → ReaPack → Browse packages → Search "Stemperator" → Install
+
+3. **Verify Setup**:
+   - Actions → Run: "Stemperator: Setup AI Backend"
+   - Should show all green checkmarks ✓
+
+4. **Use It**:
+   - Select audio item → Actions → "Stemperator: AI Stem Separation"
+
+---
+
+## Features
 
 ### Stem Types
 
-**4-Stem Model (htdemucs):**
-- Vocals - Singing and spoken voice
-- Drums - Percussion and drums
-- Bass - Bass guitar and low frequencies
-- Other - Guitars, synths, keys, etc.
+| Model | Stems | Best For |
+|-------|-------|----------|
+| **htdemucs** (4-stem) | Vocals, Drums, Bass, Other | Fast, general use |
+| **htdemucs_ft** (4-stem) | Vocals, Drums, Bass, Other | Highest quality |
+| **htdemucs_6s** (6-stem) | Vocals, Drums, Bass, Other, Guitar, Piano | Detailed separation |
 
-**6-Stem Model (htdemucs_6s):**
-- All of the above, plus:
-- Guitar - Isolated guitar
-- Piano - Isolated piano/keys
+### REAPER Scripts
 
-## Installation via ReaPack
+| Script | Description |
+|--------|-------------|
+| **Stemperator: AI Stem Separation** | Main dialog - full control |
+| **Stemperator: Karaoke** | One-click vocal removal |
+| **Stemperator: Vocals Only** | Extract vocals |
+| **Stemperator: Drums Only** | Extract drums |
+| **Stemperator: Bass Only** | Extract bass |
+| **Stemperator: All Stems** | Extract all stems to tracks |
+| **Stemperator: Setup Toolbar** | Add toolbar buttons |
 
-1. Open REAPER
-2. Go to **Extensions > ReaPack > Import repositories...**
-3. Paste this URL:
-   ```
-   https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/index.xml
-   ```
-4. Go to **Extensions > ReaPack > Browse packages**
-5. Search for "Stemperator" and install the scripts you want
-6. Run **Stemperator: Setup Toolbar** to add toolbar icons
-
-## Requirements
-
-- **Python 3.10+** with pip
-- **audio-separator** package (auto-installed on first run, or install manually):
-  ```bash
-  pip install audio-separator[gpu]  # For GPU acceleration
-  # or
-  pip install audio-separator       # CPU only
-  ```
-
-### Optional: GPU Acceleration
-
-For faster processing:
-
-**AMD GPU (ROCm):**
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
-```
-
-**NVIDIA GPU (CUDA):**
-```bash
-pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
-```
-
-## Usage
-
-### Quick Actions (One-Click)
-1. Select an audio item in REAPER
-2. Run any quick action script (Karaoke, Vocals Only, etc.)
-3. Stems are created in the same folder as your audio file
-
-### Main Dialog
-1. Select an audio item
-2. Run **Stemperator: AI Stem Separation**
-3. Check which stems you want
-4. Choose model (4-stem or 6-stem)
-5. Click **Separate**
-
-### Keyboard Shortcuts (in main dialog)
-- `1-4` - Toggle Vocals/Drums/Bass/Other
-- `5-6` - Toggle Guitar/Piano (6-stem mode)
+### Keyboard Shortcuts (in dialog)
+- `1-6` - Toggle stems
 - `K` - Karaoke preset
 - `I` - Instrumental preset
 - `A` - All stems
+- `Enter` - Start separation
+- `Esc` - Cancel
 
-### Toolbar
-Run **Stemperator: Setup Toolbar** once, then restart REAPER. Go to **View > Toolbars > Toolbar 2 (Stemperator)** to show the toolbar with quick-action buttons.
+---
+
+## Installation Details
+
+### Requirements
+
+- **Python 3.9+** (3.10-3.12 recommended)
+- **ffmpeg** (for audio conversion)
+- **~2GB disk space** (for AI models)
+
+### Automatic Installation
+
+The install scripts automatically:
+1. Find or install Python
+2. Create isolated virtual environment
+3. Install PyTorch with GPU support (if available)
+4. Install audio-separator package
+5. Pre-download AI models
+
+### GPU Acceleration
+
+| GPU | Support | Speed Improvement |
+|-----|---------|-------------------|
+| NVIDIA (CUDA) | ✓ Full | 10-20x faster |
+| AMD (ROCm) | ✓ Linux only | 10-15x faster |
+| Apple Silicon (MPS) | ✓ Native | 5-10x faster |
+| Intel/AMD (CPU) | ✓ Fallback | Baseline |
+
+### Manual Installation
+
+If automatic installation fails:
+
+**Windows:**
+```cmd
+python -m pip install audio-separator[gpu]
+winget install Gyan.FFmpeg
+```
+
+**macOS:**
+```bash
+pip3 install audio-separator[gpu]
+brew install ffmpeg
+```
+
+**Linux (Ubuntu/Debian):**
+```bash
+pip3 install audio-separator[gpu]
+sudo apt install ffmpeg
+```
+
+**Linux (Arch):**
+```bash
+pip install audio-separator[gpu]
+sudo pacman -S ffmpeg
+```
+
+---
+
+## VST3 Plugin
+
+Stemperator is also available as a multi-output VST3 plugin.
+
+### Download Pre-built
+
+Check [Releases](https://github.com/flarkflarkflark/Stemperator/releases) for pre-built binaries.
+
+### Build from Source
+
+```bash
+git clone --recursive https://github.com/flarkflarkflark/Stemperator.git
+cd Stemperator
+
+# Install AI backend
+./scripts/install.sh
+
+# Build plugin
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release -j8
+```
+
+### VST3 Features
+
+- Multi-output routing (4-6 stereo buses)
+- Real-time spectral preview
+- GPU-accelerated FFT processing
+- Premium scalable GUI
+
+---
+
+## Processing Time
+
+| Hardware | 3-minute song |
+|----------|---------------|
+| RTX 3080 / RX 6800 | 15-30 seconds |
+| RTX 2070 / RX 5700 | 30-60 seconds |
+| Apple M1/M2 | 45-90 seconds |
+| Modern CPU (8 core) | 2-5 minutes |
+| Older CPU | 5-15 minutes |
+
+---
 
 ## Output
 
-Stems are saved alongside your original audio file:
+Stems are saved alongside your audio:
 ```
-mysong.wav
+mysong.mp3
 mysong_vocals.wav
 mysong_drums.wav
 mysong_bass.wav
@@ -113,39 +187,46 @@ mysong_guitar.wav    # 6-stem only
 mysong_piano.wav     # 6-stem only
 ```
 
-## Processing Time
-
-| Hardware | Approximate Time (3-min song) |
-|----------|-------------------------------|
-| GPU (CUDA/ROCm) | 30-60 seconds |
-| CPU (modern) | 2-5 minutes |
-| CPU (older) | 5-15 minutes |
-
 ---
 
-## Also Available: VST3 Plugin
+## Troubleshooting
 
-Stemperator is also available as a multi-output VST3 plugin for real-time stem routing in any DAW.
+### "Python not found"
+Run the install script for your platform, or install Python 3.10+ manually.
 
-### Building the VST3
-
+### "audio-separator not found"
 ```bash
-git clone --recursive https://github.com/flarkflarkflark/Stemperator.git
-cd Stemperator
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release -j8
+pip install audio-separator[gpu]
 ```
 
-See [CLAUDE.md](CLAUDE.md) for detailed build instructions and architecture documentation.
+### "ffmpeg not found"
+- Windows: `winget install Gyan.FFmpeg`
+- macOS: `brew install ffmpeg`
+- Linux: `sudo apt install ffmpeg` or `sudo pacman -S ffmpeg`
+
+### Slow processing
+- Ensure GPU drivers are up to date
+- Use `htdemucs` model (faster than `htdemucs_ft`)
+- Check GPU is being used (look for CUDA/ROCm/MPS in output)
+
+### Out of memory
+- Close other GPU-intensive applications
+- Try `htdemucs` instead of `htdemucs_6s`
+- Processing in smaller chunks (time selection)
 
 ---
 
 ## Credits
 
-- **Demucs/HTDemucs**: Meta AI Research (MIT License)
-- **audio-separator**: Python wrapper for stem separation models
-- **JUCE**: Framework for VST3 plugin (commercial license)
+- **Demucs**: Meta AI Research (MIT License)
+- **audio-separator**: Beverly Nguyen (MIT License)
+- **JUCE**: RAL/ROLI (Commercial/GPL)
+
+---
+
+## License
+
+MIT License - see [LICENSE](LICENSE)
 
 ---
 

@@ -550,11 +550,13 @@ class BatchCompleteDialog : public juce::DocumentWindow
 public:
     BatchCompleteDialog (int successCount, int totalFiles, int failedCount,
                          const juce::String& outputPath, double totalTimeSeconds,
-                         std::function<void()> onOpenFolder = nullptr)
+                         std::function<void()> onOpenFolder = nullptr,
+                         std::function<void()> onClose = nullptr)
         : juce::DocumentWindow ("Batch Processing Complete",
                                 PremiumLookAndFeel::Colours::bgDark,
                                 juce::DocumentWindow::closeButton),
-          openFolderCallback (onOpenFolder)
+          openFolderCallback (onOpenFolder),
+          closeCallback (onClose)
     {
         setUsingNativeTitleBar (false);
         setTitleBarHeight (40);
@@ -578,6 +580,8 @@ public:
 
     void closeButtonPressed() override
     {
+        if (closeCallback)
+            closeCallback();
         setVisible (false);
         // Self-destruct
         juce::MessageManager::callAsync ([this]() { delete this; });
@@ -605,7 +609,7 @@ private:
             summaryLabel.setText (juce::String (successCount) + " of " + juce::String (totalFiles) + " files processed",
                                   juce::dontSendNotification);
             summaryLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
-            summaryLabel.setFont (juce::FontOptions (18.0f).withStyle ("Bold"));
+            summaryLabel.setFont (juce::FontOptions (28.0f).withStyle ("Bold"));
             summaryLabel.setJustificationType (juce::Justification::centred);
             addAndMakeVisible (summaryLabel);
 
@@ -613,7 +617,7 @@ private:
             timeLabel.setText ("Time: " + juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2),
                                juce::dontSendNotification);
             timeLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
-            timeLabel.setFont (juce::FontOptions (13.0f));
+            timeLabel.setFont (juce::FontOptions (20.0f));
             timeLabel.setJustificationType (juce::Justification::centred);
             addAndMakeVisible (timeLabel);
 
@@ -623,7 +627,7 @@ private:
                 failedLabel.setText (juce::String (failedCount) + " file(s) failed",
                                      juce::dontSendNotification);
                 failedLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::mute);
-                failedLabel.setFont (juce::FontOptions (13.0f));
+                failedLabel.setFont (juce::FontOptions (18.0f));
                 failedLabel.setJustificationType (juce::Justification::centred);
                 addAndMakeVisible (failedLabel);
             }
@@ -631,13 +635,13 @@ private:
             // Output path label
             pathTitleLabel.setText ("Output folder:", juce::dontSendNotification);
             pathTitleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
-            pathTitleLabel.setFont (juce::FontOptions (12.0f));
+            pathTitleLabel.setFont (juce::FontOptions (16.0f));
             addAndMakeVisible (pathTitleLabel);
 
             pathLabel.setText (outputPath, juce::dontSendNotification);
             pathLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
             pathLabel.setColour (juce::Label::backgroundColourId, PremiumLookAndFeel::Colours::bgDark);
-            pathLabel.setFont (juce::FontOptions (11.0f));
+            pathLabel.setFont (juce::FontOptions (15.0f));
             pathLabel.setJustificationType (juce::Justification::centredLeft);
             addAndMakeVisible (pathLabel);
 
@@ -650,19 +654,19 @@ private:
 
             closeButton.setButtonText ("Close");
             closeButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
-            closeButton.setTooltip ("Close this dialog");
+            closeButton.setTooltip ("Close this dialog and batch window");
             closeButton.onClick = closeCallback;
             addAndMakeVisible (closeButton);
 
-            setSize (420, failedCount > 0 ? 240 : 220);
+            setSize (500, failedCount > 0 ? 340 : 300);
         }
 
         void paint (juce::Graphics& g) override
         {
             g.fillAll (PremiumLookAndFeel::Colours::bgMid);
 
-            // Success/warning icon at top
-            auto iconBounds = juce::Rectangle<float> (getWidth() / 2.0f - 25.0f, 15.0f, 50.0f, 50.0f);
+            // Success/warning icon at top - smaller
+            auto iconBounds = juce::Rectangle<float> (getWidth() / 2.0f - 35.0f, 12.0f, 70.0f, 70.0f);
 
             // Glow
             g.setColour (statusColour.withAlpha (0.2f));
@@ -674,8 +678,8 @@ private:
 
             // Checkmark or warning symbol
             g.setColour (PremiumLookAndFeel::Colours::bgDark);
-            g.setFont (juce::FontOptions (28.0f).withStyle ("Bold"));
-            g.drawText ("OK", iconBounds.toNearestInt(), juce::Justification::centred);
+            g.setFont (juce::FontOptions (36.0f).withStyle ("Bold"));
+            g.drawText ("\u2713", iconBounds.toNearestInt(), juce::Justification::centred);  // ✓
         }
 
         void resized() override
@@ -683,36 +687,36 @@ private:
             auto bounds = getLocalBounds();
 
             // Icon space at top
-            bounds.removeFromTop (70);
+            bounds.removeFromTop (90);
 
             // Summary
-            summaryLabel.setBounds (bounds.removeFromTop (26));
+            summaryLabel.setBounds (bounds.removeFromTop (35));
 
             // Time
-            timeLabel.setBounds (bounds.removeFromTop (20));
+            timeLabel.setBounds (bounds.removeFromTop (28));
 
             // Failed (if visible)
             if (failedLabel.isVisible())
-                failedLabel.setBounds (bounds.removeFromTop (20));
+                failedLabel.setBounds (bounds.removeFromTop (25));
 
             bounds.removeFromTop (10);
 
             // Path section
-            auto pathSection = bounds.removeFromTop (45).reduced (20, 0);
-            pathTitleLabel.setBounds (pathSection.removeFromTop (16));
+            auto pathSection = bounds.removeFromTop (50).reduced (20, 0);
+            pathTitleLabel.setBounds (pathSection.removeFromTop (22));
             pathLabel.setBounds (pathSection);
 
             bounds.removeFromTop (10);
 
             // Buttons at bottom
-            auto buttonArea = bounds.removeFromTop (40).reduced (20, 0);
-            int buttonWidth = 100;
-            int spacing = 10;
+            auto buttonArea = bounds.removeFromTop (45).reduced (20, 0);
+            int buttonWidth = 120;
+            int spacing = 15;
             int totalButtonWidth = buttonWidth * 2 + spacing;
             int startX = (buttonArea.getWidth() - totalButtonWidth) / 2;
 
-            openFolderButton.setBounds (buttonArea.getX() + startX, buttonArea.getY(), buttonWidth, 34);
-            closeButton.setBounds (buttonArea.getX() + startX + buttonWidth + spacing, buttonArea.getY(), buttonWidth, 34);
+            openFolderButton.setBounds (buttonArea.getX() + startX, buttonArea.getY(), buttonWidth, 38);
+            closeButton.setBounds (buttonArea.getX() + startX + buttonWidth + spacing, buttonArea.getY(), buttonWidth, 38);
         }
 
     private:
@@ -731,6 +735,7 @@ private:
 
     std::unique_ptr<ContentComponent> content;
     std::function<void()> openFolderCallback;
+    std::function<void()> closeCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BatchCompleteDialog)
 };

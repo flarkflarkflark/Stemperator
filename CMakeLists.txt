@@ -140,15 +140,9 @@ set(STEMPERATOR_SOURCES
     Source/GUI/Visualizer.cpp
     Source/GUI/Visualizer.h
     Source/GUI/PremiumLookAndFeel.h
-    Source/GUI/SeparationWizard.cpp
-    Source/GUI/SeparationWizard.h
-    # AI-powered stem separation
+    # AI-powered stem separation (model state only, actual processing via Python subprocess)
     Source/AI/DemucsProcessor.cpp
     Source/AI/DemucsProcessor.h
-    Source/AI/UVRProcessor.cpp
-    Source/AI/UVRProcessor.h
-    Source/AI/SeparationWorkflow.cpp
-    Source/AI/SeparationWorkflow.h
 )
 
 # Add GPU sources if available
@@ -229,17 +223,17 @@ endif()
 # Copy to Standalone directory
 add_custom_command(TARGET Stemperator_Standalone POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/Source/AI/demucs_process.py
-        $<TARGET_FILE_DIR:Stemperator_Standalone>/demucs_process.py
-    COMMENT "Copying Demucs script to Standalone"
+        ${CMAKE_SOURCE_DIR}/Source/AI/audio_separator_process.py
+        $<TARGET_FILE_DIR:Stemperator_Standalone>/audio_separator_process.py
+    COMMENT "Copying audio-separator script to Standalone"
 )
 
 # Copy to VST3 directory
 add_custom_command(TARGET Stemperator_VST3 POST_BUILD
     COMMAND ${CMAKE_COMMAND} -E copy_if_different
-        ${CMAKE_SOURCE_DIR}/Source/AI/demucs_process.py
-        ${CMAKE_BINARY_DIR}/Stemperator_artefacts/VST3/demucs_process.py
-    COMMENT "Copying Demucs script to VST3"
+        ${CMAKE_SOURCE_DIR}/Source/AI/audio_separator_process.py
+        ${CMAKE_BINARY_DIR}/Stemperator_artefacts/VST3/audio_separator_process.py
+    COMMENT "Copying audio-separator script to VST3"
 )
 
 # =============================================================================

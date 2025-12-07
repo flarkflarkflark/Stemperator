@@ -40,16 +40,21 @@ void DemucsProcessor::checkAvailability()
     }
 
     // Find our script (look in multiple locations)
+    auto executableDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+    auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
+    auto envRoot = juce::SystemStats::getEnvironmentVariable ("STEMPERATOR_ROOT", "");
+
     juce::StringArray scriptLocations = {
-        juce::File::getSpecialLocation (juce::File::currentExecutableFile)
-            .getParentDirectory().getChildFile ("demucs_process.py").getFullPathName(),
-        juce::File::getSpecialLocation (juce::File::currentExecutableFile)
-            .getParentDirectory().getParentDirectory().getChildFile ("Source/AI/demucs_process.py").getFullPathName(),
+        executableDir.getChildFile ("demucs_process.py").getFullPathName(),
+        executableDir.getParentDirectory().getChildFile ("Source/AI/demucs_process.py").getFullPathName(),
+        projectRoot.getChildFile ("Source/AI/demucs_process.py").getFullPathName(),
         juce::File::getSpecialLocation (juce::File::currentApplicationFile)
-            .getSiblingFile ("demucs_process.py").getFullPathName(),
-        // Development location
-        "/home/flark/GIT/Stemperator/Source/AI/demucs_process.py"
+            .getSiblingFile ("demucs_process.py").getFullPathName()
     };
+
+    // Add STEMPERATOR_ROOT path if set
+    if (envRoot.isNotEmpty())
+        scriptLocations.add (juce::File (envRoot).getChildFile ("Source/AI/demucs_process.py").getFullPathName());
 
     for (const auto& loc : scriptLocations)
     {

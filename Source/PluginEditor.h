@@ -8,6 +8,7 @@
 #include "GUI/BatchEditorWindow.h"
 #include "GUI/TransportBar.h"
 #include "GUI/ExportOptionsDialog.h"
+#include "GUI/UISettingsDialog.h"
 
 //==============================================================================
 // Colorful Mode Label - draws "STEMS" or "LIVE" with colored letters, clickable to toggle
@@ -121,6 +122,7 @@ public:
         cmdUndo,             // Undo last action
         cmdRedo,             // Redo last undone action
         cmdAbout,
+        cmdUISettings,       // Open UI Settings dialog
         cmdQuit              // Exit the application
     };
 
@@ -244,18 +246,24 @@ private:
     juce::File lastStemFolder;  // Remember where stems were exported
     juce::File lastAudioFolder;  // Remember where audio files were loaded from
     juce::File defaultStemFolder;  // User-configurable default folder for stem export
+    juce::File defaultProjectFolder;  // User-configurable default folder for project save
+    juce::File defaultBatchFolder;  // User-configurable default folder for batch output
     juce::File currentProjectFile;  // Current .stemperator project file (for quick save)
     bool projectNeedsSave = false;  // Track if project has unsaved changes
     juce::StringArray recentStemFolders;  // Recently stemmed folders (max 10)
     juce::StringArray recentProjects;     // Recently saved/loaded project files (max 10)
+    juce::StringArray recentBatchOutputFolders;  // Recently used batch output folders (max 10)
     static constexpr int maxRecentFolders = 10;
 
     // Persistent settings
     std::unique_ptr<juce::PropertiesFile> appSettings;
+    juce::Rectangle<int> savedWindowBounds;  // Saved window position/size for multi-monitor support
+    bool windowPositionApplied = false;      // Flag to apply position only once
     void loadSettings();
     void saveSettings();
     void addToRecentStems (const juce::File& folder);  // Add folder to recent list
     void addToRecentProjects (const juce::File& projectFile);  // Add project to recent list
+    void addToRecentBatchOutputFolders (const juce::File& folder);  // Add batch output folder to recent list
 
     // Stem mixer for playback
     class StemMixerSource;
@@ -310,6 +318,20 @@ private:
 
     void performUndo();
     void performRedo();
+
+    // Python environment finding utility
+    struct PythonEnvironment
+    {
+        juce::File projectRoot;
+        juce::File pythonExe;
+        juce::File separatorScript;
+        bool isValid() const { return pythonExe.existsAsFile() && separatorScript.existsAsFile(); }
+    };
+    PythonEnvironment findPythonEnvironment() const;
+
+    // Batch processing window (reused, just shown/hidden)
+    std::unique_ptr<BatchEditorWindow> batchEditorWindow;
+    void showBatchWindow();
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorEditor)
 };
