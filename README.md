@@ -176,10 +176,10 @@ cmake --build . --config Release -j8
 
 ## Output
 
-Stems are saved alongside your audio:
+Stems are saved as WAV files alongside your original audio (regardless of input format):
 ```
-mysong.mp3
-mysong_vocals.wav
+mysong.mp3           # Your original file (mp3, wav, flac, etc.)
+mysong_vocals.wav    # Stems are always high-quality WAV
 mysong_drums.wav
 mysong_bass.wav
 mysong_other.wav
