@@ -398,21 +398,61 @@ public:
     }
 
     //==============================================================================
-    // TOOLTIP - Modern floating style
+    // TOOLTIP - Multi-line with full text visibility
     //==============================================================================
+    juce::Rectangle<int> getTooltipBounds (const juce::String& tipText,
+                                           juce::Point<int> screenPos,
+                                           juce::Rectangle<int> parentArea) override
+    {
+        juce::Font font (juce::FontOptions (18.0f));
+        int maxWidth = 450;  // Max width before wrapping
+
+        juce::AttributedString s;
+        s.setJustification (juce::Justification::centredLeft);
+        s.append (tipText, font, Colours::textBright);
+
+        juce::TextLayout tl;
+        tl.createLayout (s, (float) maxWidth);
+
+        int w = juce::jmin ((int) tl.getWidth() + 24, maxWidth + 24);
+        int h = (int) tl.getHeight() + 16;
+
+        // Position tooltip - prefer below and to the right of cursor
+        int x = screenPos.x + 10;
+        int y = screenPos.y + 20;
+
+        // If would go off right edge, flip to left
+        if (x + w > parentArea.getRight())
+            x = screenPos.x - w - 10;
+
+        // If would go off bottom, flip to above cursor
+        if (y + h > parentArea.getBottom())
+            y = screenPos.y - h - 10;
+
+        return juce::Rectangle<int> (x, y, w, h).constrainedWithin (parentArea);
+    }
+
     void drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height) override
     {
-        auto bounds = juce::Rectangle<float> (0, 0, width, height);
+        auto bounds = juce::Rectangle<float> (0, 0, (float) width, (float) height);
 
-        g.setColour (Colours::bgPanel.withAlpha (0.95f));
-        g.fillRoundedRectangle (bounds, 4.0f);
+        // Background with slight transparency
+        g.setColour (Colours::bgPanel.withAlpha (0.97f));
+        g.fillRoundedRectangle (bounds, 6.0f);
 
-        g.setColour (Colours::accent.withAlpha (0.5f));
-        g.drawRoundedRectangle (bounds.reduced (0.5f), 4.0f, 1.0f);
+        // Accent border
+        g.setColour (Colours::accent.withAlpha (0.6f));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 6.0f, 1.5f);
 
-        g.setColour (Colours::textBright);
-        g.setFont (juce::FontOptions (13.0f));
-        g.drawText (text, bounds.reduced (6.0f, 4.0f), juce::Justification::centred, true);
+        // Multi-line text layout
+        juce::Font font (juce::FontOptions (18.0f));
+        juce::AttributedString s;
+        s.setJustification (juce::Justification::centredLeft);
+        s.append (text, font, Colours::textBright);
+
+        juce::TextLayout tl;
+        tl.createLayout (s, bounds.getWidth() - 20.0f);
+        tl.draw (g, bounds.reduced (12.0f, 8.0f));
     }
 
     //==============================================================================

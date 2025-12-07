@@ -5,6 +5,19 @@ set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
+# =============================================================================
+# macOS Deployment Target - Support older macOS versions
+# =============================================================================
+# macOS 10.13 (High Sierra, 2017) for maximum compatibility
+# This allows the app to run on:
+# - All Intel Macs from 2012 onwards
+# - All Apple Silicon Macs (via Rosetta 2 or native)
+# - macOS 10.13 through macOS 15 (Sequoia)
+if(APPLE)
+    set(CMAKE_OSX_DEPLOYMENT_TARGET "10.13" CACHE STRING "Minimum macOS version")
+    message(STATUS "macOS deployment target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
+endif()
+
 # Add JUCE
 add_subdirectory(JUCE)
 
@@ -95,6 +108,21 @@ juce_add_plugin(Stemperator
 juce_generate_juce_header(Stemperator)
 
 # =============================================================================
+# Binary Resources (Icon)
+# =============================================================================
+juce_add_binary_data(StemperatorBinaryData
+    HEADER_NAME "BinaryData.h"
+    NAMESPACE "BinaryData"
+    SOURCES
+        Resources/icons/stemperator_256.png
+        Resources/icons/stemperator_128.png
+        Resources/icons/stemperator_64.png
+        Resources/icons/stemperator_48.png
+        Resources/icons/stemperator_32.png
+        Resources/icons/stemperator_16.png
+)
+
+# =============================================================================
 # Source Files
 # =============================================================================
 set(STEMPERATOR_SOURCES
@@ -102,6 +130,7 @@ set(STEMPERATOR_SOURCES
     Source/PluginProcessor.h
     Source/PluginEditor.cpp
     Source/PluginEditor.h
+    Source/StandaloneFilterApp.cpp
     Source/DSP/StemSeparator.cpp
     Source/DSP/StemSeparator.h
     Source/DSP/SpectralProcessor.cpp
@@ -144,8 +173,9 @@ target_compile_definitions(Stemperator
         JUCE_MODAL_LOOPS_PERMITTED=1
         # Disable VSync to reduce GPU idle usage on Linux
         JUCE_COREGRAPHICS_RENDER_WITH_MULTIPLE_PAINT_CALLS=0
-        # Standalone settings - disable audio input (we only process files)
+        # Standalone settings - use custom app to intercept window close
         JUCE_STANDALONE_FILTER_WINDOW_USE_KIOSK_MODE=0
+        JUCE_USE_CUSTOM_PLUGIN_STANDALONE_APP=1
         JucePlugin_WantsMidiInput=0
         JucePlugin_ProducesMidiOutput=0
 )
@@ -163,6 +193,7 @@ endif()
 # =============================================================================
 target_link_libraries(Stemperator
     PRIVATE
+        StemperatorBinaryData
         juce::juce_audio_basics
         juce::juce_audio_devices
         juce::juce_audio_formats

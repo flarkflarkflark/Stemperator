@@ -106,6 +106,7 @@ private:
             okButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent.darker (0.2f));
             okButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
             okButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            okButton.setTooltip ("Close this dialog");
             okButton.onClick = buttonCallback;
             addAndMakeVisible (okButton);
 
@@ -198,6 +199,347 @@ private:
     std::function<void()> closeCallback;
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StyledDialogWindow)
+};
+
+/**
+ * SavePromptDialog - Dialog for unsaved changes prompt
+ * Shows Save / Don't Save / Cancel buttons
+ */
+class SavePromptDialog : public juce::DocumentWindow
+{
+public:
+    SavePromptDialog (const juce::String& title,
+                      const juce::String& message,
+                      std::function<void (int)> onResult)
+        : juce::DocumentWindow (title,
+                                PremiumLookAndFeel::Colours::bgDark,
+                                juce::DocumentWindow::closeButton),
+          resultCallback (onResult)
+    {
+        setUsingNativeTitleBar (false);
+        setTitleBarHeight (40);
+        setResizable (false, false);
+
+        content = std::make_unique<ContentComponent> (message,
+            [this]() { handleResult (0); },   // Save
+            [this]() { handleResult (1); },   // Don't Save
+            [this]() { handleResult (2); });  // Cancel
+
+        setContentOwned (content.get(), true);
+        centreWithSize (content->getWidth(), content->getHeight() + getTitleBarHeight());
+        setVisible (true);
+        toFront (true);
+    }
+
+    void closeButtonPressed() override
+    {
+        handleResult (2);  // Treat X button as Cancel
+    }
+
+private:
+    void handleResult (int result)
+    {
+        if (resultCallback)
+            resultCallback (result);
+        setVisible (false);
+        juce::MessageManager::callAsync ([this]() { delete this; });
+    }
+
+    class ContentComponent : public juce::Component
+    {
+    public:
+        ContentComponent (const juce::String& message,
+                          std::function<void()> onSave,
+                          std::function<void()> onDontSave,
+                          std::function<void()> onCancel)
+            : saveCallback (onSave), dontSaveCallback (onDontSave), cancelCallback (onCancel)
+        {
+            // Warning icon
+            iconColour = PremiumLookAndFeel::Colours::solo;  // Orange/yellow for warning
+
+            // Message label
+            messageLabel.setText (message, juce::dontSendNotification);
+            messageLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+            messageLabel.setFont (juce::FontOptions (15.0f));
+            messageLabel.setJustificationType (juce::Justification::centredLeft);
+            addAndMakeVisible (messageLabel);
+
+            // Save button (accent color - primary action)
+            saveButton.setButtonText ("Save");
+            saveButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent.darker (0.2f));
+            saveButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+            saveButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            saveButton.setTooltip ("Save changes before quitting");
+            saveButton.onClick = saveCallback;
+            addAndMakeVisible (saveButton);
+
+            // Don't Save button (muted color)
+            dontSaveButton.setButtonText ("Don't Save");
+            dontSaveButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::mute.darker (0.3f));
+            dontSaveButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+            dontSaveButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            dontSaveButton.setTooltip ("Discard changes and quit");
+            dontSaveButton.onClick = dontSaveCallback;
+            addAndMakeVisible (dontSaveButton);
+
+            // Cancel button (neutral)
+            cancelButton.setButtonText ("Cancel");
+            cancelButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+            cancelButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+            cancelButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            cancelButton.setTooltip ("Return to Stemperator");
+            cancelButton.onClick = cancelCallback;
+            addAndMakeVisible (cancelButton);
+
+            setSize (420, 160);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (PremiumLookAndFeel::Colours::bgMid);
+
+            // Warning icon area
+            auto iconBounds = juce::Rectangle<float> (20.0f, 20.0f, 40.0f, 40.0f);
+
+            // Glow
+            g.setColour (iconColour.withAlpha (0.2f));
+            g.fillEllipse (iconBounds.expanded (4.0f));
+
+            // Circle
+            g.setColour (iconColour);
+            g.fillEllipse (iconBounds);
+
+            // Warning symbol
+            g.setColour (PremiumLookAndFeel::Colours::bgDark);
+            g.setFont (juce::FontOptions (24.0f).withStyle ("Bold"));
+            g.drawText ("!", iconBounds.toNearestInt(), juce::Justification::centred);
+        }
+
+        void resized() override
+        {
+            auto bounds = getLocalBounds().reduced (20);
+
+            // Icon takes left side
+            bounds.removeFromLeft (60);
+
+            // Buttons at bottom
+            auto buttonArea = bounds.removeFromBottom (40);
+            int buttonWidth = 95;
+            int spacing = 10;
+            int totalWidth = buttonWidth * 3 + spacing * 2;
+            int startX = (buttonArea.getWidth() - totalWidth) / 2;
+
+            saveButton.setBounds (buttonArea.getX() + startX, buttonArea.getY() + 3, buttonWidth, 34);
+            dontSaveButton.setBounds (buttonArea.getX() + startX + buttonWidth + spacing, buttonArea.getY() + 3, buttonWidth, 34);
+            cancelButton.setBounds (buttonArea.getX() + startX + (buttonWidth + spacing) * 2, buttonArea.getY() + 3, buttonWidth, 34);
+
+            bounds.removeFromBottom (15);
+
+            // Message takes the rest
+            messageLabel.setBounds (bounds);
+        }
+
+    private:
+        std::function<void()> saveCallback;
+        std::function<void()> dontSaveCallback;
+        std::function<void()> cancelCallback;
+        juce::Colour iconColour;
+
+        juce::Label messageLabel;
+        juce::TextButton saveButton;
+        juce::TextButton dontSaveButton;
+        juce::TextButton cancelButton;
+    };
+
+    std::unique_ptr<ContentComponent> content;
+    std::function<void (int)> resultCallback;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SavePromptDialog)
+};
+
+/**
+ * ConfirmDialog - OK/Cancel confirmation dialog in huisstijl
+ */
+class ConfirmDialog : public juce::DocumentWindow
+{
+public:
+    ConfirmDialog (const juce::String& title,
+                   const juce::String& message,
+                   StyledDialogWindow::IconType iconType,
+                   std::function<void (bool)> onResult)
+        : juce::DocumentWindow (title,
+                                PremiumLookAndFeel::Colours::bgDark,
+                                juce::DocumentWindow::closeButton),
+          resultCallback (onResult)
+    {
+        setUsingNativeTitleBar (false);
+        setTitleBarHeight (40);
+        setResizable (false, false);
+
+        content = std::make_unique<ContentComponent> (message, iconType,
+            [this]() { handleResult (true); },   // OK
+            [this]() { handleResult (false); }); // Cancel
+
+        setContentOwned (content.get(), true);
+        centreWithSize (content->getWidth(), content->getHeight() + getTitleBarHeight());
+        setVisible (true);
+        toFront (true);
+    }
+
+    void closeButtonPressed() override
+    {
+        handleResult (false);  // Treat X button as Cancel
+    }
+
+    // Static helper for showing OK/Cancel dialog
+    static void showOkCancelBox (const juce::String& title,
+                                  const juce::String& message,
+                                  StyledDialogWindow::IconType iconType,
+                                  std::function<void (bool)> callback)
+    {
+        auto* dialog = new ConfirmDialog (title, message, iconType, callback);
+        juce::ignoreUnused (dialog);
+    }
+
+private:
+    void handleResult (bool confirmed)
+    {
+        if (resultCallback)
+            resultCallback (confirmed);
+        setVisible (false);
+        juce::MessageManager::callAsync ([this]() { delete this; });
+    }
+
+    class ContentComponent : public juce::Component
+    {
+    public:
+        ContentComponent (const juce::String& message,
+                          StyledDialogWindow::IconType iconType,
+                          std::function<void()> onOk,
+                          std::function<void()> onCancel)
+            : icon (iconType), okCallback (onOk), cancelCallback (onCancel)
+        {
+            // Determine icon color
+            switch (icon)
+            {
+                case StyledDialogWindow::IconType::Success:
+                    iconColour = PremiumLookAndFeel::Colours::active;
+                    iconText = "OK";
+                    break;
+                case StyledDialogWindow::IconType::Warning:
+                    iconColour = PremiumLookAndFeel::Colours::solo;
+                    iconText = "!";
+                    break;
+                case StyledDialogWindow::IconType::Error:
+                    iconColour = PremiumLookAndFeel::Colours::mute;
+                    iconText = "X";
+                    break;
+                case StyledDialogWindow::IconType::Info:
+                default:
+                    iconColour = PremiumLookAndFeel::Colours::accent;
+                    iconText = "?";
+                    break;
+            }
+
+            // Message label
+            messageLabel.setText (message, juce::dontSendNotification);
+            messageLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+            messageLabel.setFont (juce::FontOptions (15.0f));
+            messageLabel.setJustificationType (juce::Justification::centredLeft);
+            addAndMakeVisible (messageLabel);
+
+            // OK button (accent color - primary action)
+            okButton.setButtonText ("OK");
+            okButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent.darker (0.2f));
+            okButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+            okButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            okButton.setTooltip ("Confirm action");
+            okButton.onClick = okCallback;
+            addAndMakeVisible (okButton);
+
+            // Cancel button (neutral)
+            cancelButton.setButtonText ("Cancel");
+            cancelButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+            cancelButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+            cancelButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            cancelButton.setTooltip ("Cancel action");
+            cancelButton.onClick = cancelCallback;
+            addAndMakeVisible (cancelButton);
+
+            // Calculate size based on message
+            int width = juce::jmax (350, (int) messageLabel.getFont().getStringWidthFloat (message) + 100);
+            width = juce::jmin (width, 500);
+
+            // Count lines for height
+            int numLines = 1;
+            for (int i = 0; i < message.length(); ++i)
+                if (message[i] == '\n')
+                    numLines++;
+
+            int height = juce::jmax (150, 80 + numLines * 22 + 60);
+            setSize (width, height);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (PremiumLookAndFeel::Colours::bgMid);
+
+            // Icon area
+            auto iconBounds = juce::Rectangle<float> (20.0f, 20.0f, 40.0f, 40.0f);
+
+            // Glow
+            g.setColour (iconColour.withAlpha (0.2f));
+            g.fillEllipse (iconBounds.expanded (4.0f));
+
+            // Circle
+            g.setColour (iconColour);
+            g.fillEllipse (iconBounds);
+
+            // Icon symbol
+            g.setColour (PremiumLookAndFeel::Colours::textBright);
+            g.setFont (juce::FontOptions (20.0f).withStyle ("Bold"));
+            g.drawText (iconText, iconBounds.toNearestInt(), juce::Justification::centred);
+        }
+
+        void resized() override
+        {
+            auto bounds = getLocalBounds().reduced (20);
+
+            // Icon takes left side
+            bounds.removeFromLeft (60);
+
+            // Buttons at bottom
+            auto buttonArea = bounds.removeFromBottom (40);
+            int buttonWidth = 90;
+            int spacing = 10;
+            int totalWidth = buttonWidth * 2 + spacing;
+            int startX = (buttonArea.getWidth() - totalWidth) / 2;
+
+            okButton.setBounds (buttonArea.getX() + startX, buttonArea.getY() + 3, buttonWidth, 34);
+            cancelButton.setBounds (buttonArea.getX() + startX + buttonWidth + spacing, buttonArea.getY() + 3, buttonWidth, 34);
+
+            bounds.removeFromBottom (10);
+
+            // Message takes the rest
+            messageLabel.setBounds (bounds);
+        }
+
+    private:
+        StyledDialogWindow::IconType icon;
+        juce::Colour iconColour;
+        juce::String iconText;
+        std::function<void()> okCallback;
+        std::function<void()> cancelCallback;
+
+        juce::Label messageLabel;
+        juce::TextButton okButton;
+        juce::TextButton cancelButton;
+    };
+
+    std::unique_ptr<ContentComponent> content;
+    std::function<void (bool)> resultCallback;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (ConfirmDialog)
 };
 
 /**
@@ -302,11 +644,13 @@ private:
             // Buttons
             openFolderButton.setButtonText ("Open Folder");
             openFolderButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent.darker (0.2f));
+            openFolderButton.setTooltip ("Open the output folder in file browser");
             openFolderButton.onClick = openCallback;
             addAndMakeVisible (openFolderButton);
 
             closeButton.setButtonText ("Close");
             closeButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+            closeButton.setTooltip ("Close this dialog");
             closeButton.onClick = closeCallback;
             addAndMakeVisible (closeButton);
 

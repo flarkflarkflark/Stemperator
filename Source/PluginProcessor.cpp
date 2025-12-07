@@ -174,7 +174,11 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         juce::AudioSourceChannelInfo info (&buffer, 0, buffer.getNumSamples());
         playbackSource->getNextAudioBlock (info);
 
-        // Get level for metering
+        // Apply loudness normalization (playback only - this does NOT affect export files)
+        if (normalizationGain != 1.0f)
+            buffer.applyGain (normalizationGain);
+
+        // Get level for metering (after normalization so meters reflect actual output)
         float inLevel = 0.0f;
         for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
             inLevel = std::max (inLevel, buffer.getMagnitude (ch, 0, buffer.getNumSamples()));
@@ -244,7 +248,8 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         // This compensation is CONSTANT regardless of how many stems are playing
         // to ensure consistent levels when toggling solo/mute
         // Lower value = more headroom, less clipping when all stems play together
-        constexpr float stemCompensation = 0.5f;  // ~6dB reduction for headroom
+        // Reduced from 0.5 to 0.42 to better match STEMS mode output level
+        constexpr float stemCompensation = 0.42f;  // ~7.5dB reduction for headroom
 
         for (int stem = 0; stem < NumStems4; ++stem)
         {
@@ -260,13 +265,15 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             }
 
             // Update level meter
+            // Attenuate LIVE mode meters to match STEMS mode visual levels
+            constexpr float liveMeterAttenuation = 0.65f;  // ~-3.7 dB reduction for visual balance
             float level = 0.0f;
             for (int ch = 0; ch < numChannels; ++ch)
             {
                 if (stems[stem].getNumChannels() > ch)
                     level = std::max (level, stems[stem].getMagnitude (ch, 0, numSamples));
             }
-            stemLevels[stem].store (level * gain);
+            stemLevels[stem].store (level * gain * liveMeterAttenuation);
         }
 
         // Apply soft limiting to prevent clipping from stem summing
@@ -381,6 +388,8 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
         }
 
         // Update level meter
+        // Attenuate LIVE mode meters to match STEMS mode visual levels
+        constexpr float liveMeterAttenuation = 0.65f;  // ~-3.7 dB reduction for visual balance
         float level = 0.0f;
         for (int ch = 0; ch < 2; ++ch)
         {
@@ -388,7 +397,7 @@ void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce:
             if (outCh < buffer.getNumChannels())
                 level = std::max (level, buffer.getMagnitude (outCh, 0, numSamples));
         }
-        stemLevels[stem].store (level * gain);
+        stemLevels[stem].store (level * gain * liveMeterAttenuation);
     }
 }
 

@@ -104,6 +104,10 @@ public:
     void setSkipSeparation (bool skip) { skipSeparation = skip; }
     bool getSkipSeparation() const { return skipSeparation; }
 
+    // Loudness normalization (playback only - does NOT affect export)
+    void setNormalizationGain (float gain) { normalizationGain = gain; }
+    float getNormalizationGain() const { return normalizationGain; }
+
 private:
     //==============================================================================
     juce::AudioProcessorValueTreeState::ParameterLayout createParameterLayout();
@@ -128,6 +132,7 @@ private:
     juce::AudioSource* playbackSource = nullptr;
     juce::AudioBuffer<float> playbackBuffer;
     bool skipSeparation = false;  // Skip GPU processing when playing pre-separated stems
+    float normalizationGain = 1.0f;  // Loudness normalization (playback only)
 
     JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorProcessor)
 };

@@ -13,7 +13,7 @@ StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
     // Note: Don't set range/value here - the attachment will do it from the parameter
     // Note: Don't set suffix - the parameter's stringFromValue already adds " dB"
     gainSlider.setSliderStyle (juce::Slider::LinearVertical);
-    gainSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 65, 18);
+    gainSlider.setTextBoxStyle (juce::Slider::TextBoxAbove, false, 65, 18);
     gainSlider.setColour (juce::Slider::thumbColourId, stemColour);
     gainSlider.setColour (juce::Slider::trackColourId, stemColour.darker (0.3f));
     gainSlider.setColour (juce::Slider::textBoxTextColourId, PremiumLookAndFeel::Colours::textBright);
@@ -176,9 +176,15 @@ void StemChannel::resized()
 {
     auto bounds = getLocalBounds().reduced (6);
 
-    // Name at top - minimal height, no extra spacing
-    nameLabel.setBounds (bounds.removeFromTop (24));
-    // No extra spacing - fader starts immediately after name
+    // Skip top accent line (3px line + 2px from top + 3px spacing = 8px)
+    bounds.removeFromTop (5);  // Space for accent line
+
+    // Name at top - 24px height, horizontally centered
+    auto labelBounds = bounds.removeFromTop (24);
+    // Exclude meter area from label centering calculation
+    auto labelCenterBounds = labelBounds;
+    labelCenterBounds.removeFromRight (28);  // Exclude LED meter area
+    nameLabel.setBounds (labelCenterBounds);
 
     // Reserve space for wider LED meter on right side
     bounds.removeFromRight (28);
