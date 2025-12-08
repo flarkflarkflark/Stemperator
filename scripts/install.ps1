@@ -75,6 +75,34 @@ function Test-PythonVersion {
     return $false
 }
 
+# Get Python version details
+function Get-PythonVersion {
+    param($pythonCmd)
+
+    $versionOutput = & cmd /c "$pythonCmd --version 2>&1"
+    if ($versionOutput -match "Python (\d+)\.(\d+)") {
+        return @{
+            Major = [int]$Matches[1]
+            Minor = [int]$Matches[2]
+        }
+    }
+    return $null
+}
+
+# Check if Python version is compatible with torch-directml
+function Test-DirectMLCompatible {
+    param($pythonCmd)
+
+    $version = Get-PythonVersion $pythonCmd
+    if ($null -eq $version) {
+        return $false
+    }
+
+    # torch-directml typically supports Python 3.8-3.11
+    # Python 3.12+ is not yet supported as of 2024
+    return ($version.Major -eq 3 -and $version.Minor -ge 8 -and $version.Minor -le 11)
+}
+
 # Detect GPU
 function Get-GPUType {
     # Check for NVIDIA
@@ -106,7 +134,8 @@ function Install-Python {
 
     if (Get-Command winget -ErrorAction SilentlyContinue) {
         try {
-            winget install Python.Python.3.12 --accept-package-agreements --accept-source-agreements
+            # Install Python 3.11 for best compatibility with torch-directml
+            winget install Python.Python.3.11 --accept-package-agreements --accept-source-agreements
             # Refresh PATH
             $env:Path = [System.Environment]::GetEnvironmentVariable("Path", "Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path", "User")
             return $true
@@ -116,7 +145,8 @@ function Install-Python {
     }
 
     Write-Error "Could not install Python automatically."
-    Write-Info "Please install Python 3.10+ from https://www.python.org/downloads/"
+    Write-Info "Please install Python 3.11 from https://www.python.org/downloads/"
+    Write-Info "Python 3.11 is recommended for AMD GPU acceleration (DirectML support)."
     Write-Info "Make sure to check 'Add Python to PATH' during installation."
     return $false
 }
@@ -169,7 +199,7 @@ function New-Venv {
 
 # Install PyTorch
 function Install-PyTorch {
-    param($gpuType)
+    param($gpuType, $pythonCmd)
 
     $pip = Join-Path $VenvDir "Scripts\pip.exe"
 
@@ -181,10 +211,27 @@ function Install-PyTorch {
             & $pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
         }
         "amd" {
-            Write-Info "Installing PyTorch with DirectML support (AMD on Windows)..."
-            # ROCm is not available on Windows, use DirectML instead
-            & $pip install torch torchvision torchaudio
-            & $pip install torch-directml
+            # Check if DirectML is compatible with current Python version
+            $directMLCompatible = Test-DirectMLCompatible $pythonCmd
+
+            if ($directMLCompatible) {
+                Write-Info "Installing PyTorch with DirectML support (AMD on Windows)..."
+                & $pip install torch torchvision torchaudio
+
+                # Try to install torch-directml, but don't fail if it doesn't work
+                Write-Info "Installing DirectML acceleration..."
+                & $pip install torch-directml
+
+                if ($LASTEXITCODE -ne 0) {
+                    Write-Warning "DirectML installation failed. Falling back to CPU mode."
+                    Write-Warning "PyTorch will still work, but without AMD GPU acceleration."
+                }
+            } else {
+                $version = Get-PythonVersion $pythonCmd
+                Write-Warning "Python $($version.Major).$($version.Minor) is not compatible with torch-directml (requires Python 3.8-3.11)"
+                Write-Warning "Installing PyTorch in CPU mode. Consider using Python 3.11 for AMD GPU acceleration."
+                & $pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cpu
+            }
         }
         default {
             Write-Info "Installing PyTorch (CPU only)..."
@@ -261,11 +308,20 @@ function Main {
             exit 1
         }
 
-        Write-Success "Found Python: $(& cmd /c "$pythonCmd --version 2>&1")"
+        $pythonVersionStr = & cmd /c "$pythonCmd --version 2>&1"
+        Write-Success "Found Python: $pythonVersionStr"
 
         if (-not (Test-PythonVersion $pythonCmd)) {
             Write-Error "Python 3.9+ required"
             exit 1
+        }
+
+        # Warn if Python version is incompatible with DirectML
+        $version = Get-PythonVersion $pythonCmd
+        if ($version.Major -eq 3 -and $version.Minor -ge 12) {
+            Write-Warning "Python $($version.Major).$($version.Minor) detected. DirectML (AMD GPU acceleration) requires Python 3.8-3.11."
+            Write-Warning "Installation will continue, but PyTorch will run in CPU mode."
+            Write-Info "For AMD GPU support, consider installing Python 3.11 alongside your current version."
         }
     } else {
         $pythonCmd = "python"
@@ -292,7 +348,7 @@ function Main {
     & $pip install --upgrade pip
 
     # Install PyTorch
-    Install-PyTorch $gpuType
+    Install-PyTorch $gpuType $pythonCmd
 
     # Install audio-separator
     Install-AudioSeparator

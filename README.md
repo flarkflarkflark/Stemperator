@@ -130,9 +130,15 @@ This means you can:
 
 ### Requirements
 
-- **Python 3.9+** (3.10-3.12 recommended)
+- **Python 3.9+** (version depends on your GPU):
+  - **AMD GPU (Windows)**: Python 3.8-3.11 required for DirectML acceleration
+  - **NVIDIA GPU**: Python 3.9-3.12 recommended
+  - **macOS/Linux**: Python 3.9-3.12 recommended
+  - **CPU only**: Python 3.9-3.12 recommended
 - **ffmpeg** (for audio conversion)
 - **~2GB disk space** (for AI models)
+
+> **Note**: Python 3.14+ is not yet compatible with DirectML (AMD GPU acceleration on Windows). The installer will automatically fall back to CPU mode if an incompatible version is detected.
 
 ### Automatic Installation
 
@@ -145,12 +151,13 @@ The install scripts automatically:
 
 ### GPU Acceleration
 
-| GPU | Support | Speed Improvement |
-|-----|---------|-------------------|
-| NVIDIA (CUDA) | ✓ Full | 10-20x faster |
-| AMD (ROCm) | ✓ Linux only | 10-15x faster |
-| Apple Silicon (MPS) | ✓ Native | 5-10x faster |
-| Intel/AMD (CPU) | ✓ Fallback | Baseline |
+| GPU | Support | Speed Improvement | Requirements |
+|-----|---------|-------------------|--------------|
+| NVIDIA (CUDA) | ✓ Full | 10-20x faster | Python 3.9-3.12 |
+| AMD (DirectML) | ✓ Windows only | 5-10x faster | Python 3.8-3.11 |
+| AMD (ROCm) | ✓ Linux only | 10-15x faster | Python 3.9-3.12 |
+| Apple Silicon (MPS) | ✓ Native | 5-10x faster | Python 3.9-3.12 |
+| Intel/AMD (CPU) | ✓ Fallback | Baseline | Python 3.9+ |
 
 ### Manual Installation
 
@@ -247,6 +254,12 @@ mysong_piano.wav     # 6-stem only
 
 ### "Python not found"
 Run the install script for your platform, or install Python 3.10+ manually.
+
+### "torch-directml" installation failed (AMD GPU on Windows)
+This typically means you have Python 3.12+ installed, which is not compatible with DirectML. Options:
+1. Install Python 3.11 alongside your current version (recommended)
+2. Continue with CPU mode (slower but functional)
+3. Wait for DirectML to support newer Python versions
 
 ### "audio-separator not found"
 ```bash
