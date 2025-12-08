@@ -242,12 +242,25 @@ function Install-PyTorch {
 
 # Install audio-separator
 function Install-AudioSeparator {
+    param($pythonCmd)
+
     $pip = Join-Path $VenvDir "Scripts\pip.exe"
 
     Write-Info "Installing audio-separator..."
     & $pip install audio-separator
 
+    if ($LASTEXITCODE -ne 0) {
+        $version = Get-PythonVersion $pythonCmd
+        Write-Error "Failed to install audio-separator"
+        Write-Warning "Python $($version.Major).$($version.Minor) may be too new for audio-separator dependencies"
+        Write-Info "Some packages (like diffq-fixed) don't have pre-built wheels for Python 3.14+"
+        Write-Info "Recommended solution: Install Python 3.11 and re-run this installer"
+        Write-Info "  winget install Python.Python.3.11"
+        return $false
+    }
+
     Write-Success "audio-separator installed"
+    return $true
 }
 
 # Verify installation
@@ -316,9 +329,21 @@ function Main {
             exit 1
         }
 
-        # Warn if Python version is incompatible with DirectML
+        # Warn if Python version is too new
         $version = Get-PythonVersion $pythonCmd
-        if ($version.Major -eq 3 -and $version.Minor -ge 12) {
+        if ($version.Major -eq 3 -and $version.Minor -ge 14) {
+            Write-Warning "Python $($version.Major).$($version.Minor) detected - this is very new!"
+            Write-Warning "Many AI packages don't support Python 3.14+ yet (missing pre-built wheels)"
+            Write-Warning "Installation will attempt to continue, but may fail during package installation."
+            Write-Info "Recommended: Install Python 3.11 for best compatibility"
+            Write-Info "  winget install Python.Python.3.11"
+            Write-Host ""
+            $response = Read-Host "Continue anyway? [y/N]"
+            if ($response -ne "y" -and $response -ne "Y") {
+                Write-Info "Installation cancelled. Please install Python 3.11 and try again."
+                exit 0
+            }
+        } elseif ($version.Major -eq 3 -and $version.Minor -ge 12) {
             Write-Warning "Python $($version.Major).$($version.Minor) detected. DirectML (AMD GPU acceleration) requires Python 3.8-3.11."
             Write-Warning "Installation will continue, but PyTorch will run in CPU mode."
             Write-Info "For AMD GPU support, consider installing Python 3.11 alongside your current version."
@@ -351,7 +376,24 @@ function Main {
     Install-PyTorch $gpuType $pythonCmd
 
     # Install audio-separator
-    Install-AudioSeparator
+    $separatorInstalled = Install-AudioSeparator $pythonCmd
+
+    if (-not $separatorInstalled) {
+        Write-Host "`n" -NoNewline
+        Write-Host "==============================================" -ForegroundColor Red
+        Write-Host " Installation Failed" -ForegroundColor Red
+        Write-Host "==============================================" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Python 3.14 is too new for the AI audio separation ecosystem." -ForegroundColor Yellow
+        Write-Host "Many dependencies don't have pre-built packages yet." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "To fix this, install Python 3.11:" -ForegroundColor Cyan
+        Write-Host "  winget install Python.Python.3.11" -ForegroundColor White
+        Write-Host ""
+        Write-Host "Then run this installer again." -ForegroundColor Cyan
+        Write-Host ""
+        exit 1
+    }
 
     # Verify
     Test-Installation

@@ -130,15 +130,15 @@ This means you can:
 
 ### Requirements
 
-- **Python 3.9+** (version depends on your GPU):
-  - **AMD GPU (Windows)**: Python 3.8-3.11 required for DirectML acceleration
-  - **NVIDIA GPU**: Python 3.9-3.12 recommended
-  - **macOS/Linux**: Python 3.9-3.12 recommended
-  - **CPU only**: Python 3.9-3.12 recommended
+- **Python 3.9-3.12** (version depends on your GPU):
+  - **AMD GPU (Windows)**: Python 3.11 **strongly recommended** (DirectML support)
+  - **NVIDIA GPU**: Python 3.10-3.12 recommended
+  - **macOS/Linux**: Python 3.10-3.12 recommended
+  - **CPU only**: Python 3.10-3.12 recommended
 - **ffmpeg** (for audio conversion)
 - **~2GB disk space** (for AI models)
 
-> **Note**: Python 3.14+ is not yet compatible with DirectML (AMD GPU acceleration on Windows). The installer will automatically fall back to CPU mode if an incompatible version is detected.
+> **⚠️ Important**: Python 3.14+ is **NOT COMPATIBLE** with audio-separator and its dependencies (missing pre-built packages). Python 3.13 may have limited support. **Use Python 3.11 for best compatibility and AMD GPU acceleration.**
 
 ### Automatic Installation
 
@@ -255,11 +255,23 @@ mysong_piano.wav     # 6-stem only
 ### "Python not found"
 Run the install script for your platform, or install Python 3.10+ manually.
 
+### Installation fails with Python 3.14+
+
+**Problem**: `diffq-fixed` or other packages fail to build with "subprocess-exited-with-error"
+
+**Cause**: Python 3.14 is too new - many AI packages don't have pre-built wheels yet
+
+**Solution**: Install Python 3.11 (recommended):
+```powershell
+winget install Python.Python.3.11
+```
+Then re-run the installer - it will automatically use Python 3.11.
+
 ### "torch-directml" installation failed (AMD GPU on Windows)
-This typically means you have Python 3.12+ installed, which is not compatible with DirectML. Options:
-1. Install Python 3.11 alongside your current version (recommended)
-2. Continue with CPU mode (slower but functional)
-3. Wait for DirectML to support newer Python versions
+This typically means you have Python 3.12+ installed, which is not compatible with DirectML. Install Python 3.11 for AMD GPU support:
+```powershell
+winget install Python.Python.3.11
+```
 
 ### "audio-separator not found"
 ```bash
