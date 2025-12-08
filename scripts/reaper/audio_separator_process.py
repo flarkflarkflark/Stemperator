@@ -39,7 +39,7 @@ def emit_progress(percent: float, stage: str = ""):
     sys.stdout.write(f"PROGRESS:{int(percent)}:{stage}\n")
     sys.stdout.flush()
 
-def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs"):
+def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs", segment_size: int = None):
     """
     Separate audio into stems using audio-separator.
 
@@ -75,14 +75,37 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
     print(f"Input: {input_file}", file=sys.stderr)
     print(f"Output: {output_dir}", file=sys.stderr)
 
-    # Check GPU availability
+    # Check GPU availability (NVIDIA CUDA or AMD DirectML)
     import torch
+    device = "cpu"
+    gpu_name = None
+    use_directml = False
+
+    # Check for NVIDIA CUDA first
     if torch.cuda.is_available():
-        device = "cuda:0"  # Use first GPU (RX 9070)
-        print(f"Using GPU: {torch.cuda.get_device_name(0)}", file=sys.stderr)
+        device = "cuda:0"
+        gpu_name = torch.cuda.get_device_name(0)
+        print(f"Using NVIDIA GPU: {gpu_name}", file=sys.stderr)
     else:
-        device = "cpu"
-        print("WARNING: No GPU detected, using CPU (will be slow)", file=sys.stderr)
+        # Check for AMD DirectML
+        try:
+            import torch_directml
+            dml_device = torch_directml.device()
+            dml_count = torch_directml.device_count()
+            use_directml = True
+            gpu_name = "AMD GPU (DirectML)"
+            print(f"Using AMD GPU via DirectML", file=sys.stderr)
+            print(f"DirectML device: {dml_device}", file=sys.stderr)
+            print(f"DirectML device count: {dml_count}", file=sys.stderr)
+            # Try to get device name if available
+            try:
+                for i in range(dml_count):
+                    dev_name = torch_directml.device_name(i)
+                    print(f"  Device {i}: {dev_name}", file=sys.stderr)
+            except:
+                pass
+        except ImportError:
+            print("WARNING: No GPU detected, using CPU (will be slow)", file=sys.stderr)
 
     # Progress emitter thread for model loading phase
     # This provides smooth progress during the slow model loading
@@ -118,13 +141,33 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
     # Initialize separator
     # Note: Don't set output_bitrate - it causes ffmpeg errors with WAV format
+    # For AMD GPUs, use use_directml=True instead of device parameter
+
+    # Demucs parameters
+    # segment_size: controls VRAM usage - larger = more VRAM but potentially faster
+    # shifts: 2 is default, 1 is faster but lower quality
+    # overlap: 0.25 is default
+    # Dynamic segment size: use provided value or default to 40 (single-track optimized)
+    actual_segment_size = segment_size if segment_size else 40
+    print(f"Segment size: {actual_segment_size}", file=sys.stderr)
+
+    demucs_config = {
+        "segment_size": actual_segment_size,
+        "shifts": 2,
+        "overlap": 0.25,
+        "segments_enabled": True,
+    }
+    if not use_directml:
+        demucs_config["device"] = device
+
     separator = Separator(
         output_dir=output_dir,
         output_format="WAV",
-        normalization_threshold=0.9,
+        normalization_threshold=1.0,  # 1.0 = no normalization
         log_level=10,  # DEBUG
-        mdx_params={"device": device},
-        demucs_params={"device": device}
+        use_directml=use_directml,
+        mdx_params={"device": device} if not use_directml else {},
+        demucs_params=demucs_config
     )
 
     emit_progress(3, "Loading AI model")
@@ -150,7 +193,7 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
     # Estimate processing time: roughly 0.3-0.5x realtime on GPU, 2-4x on CPU
     # So a 3-minute song takes ~1-2 minutes on GPU, ~6-12 minutes on CPU
-    is_gpu = torch.cuda.is_available()
+    is_gpu = gpu_name is not None
     if is_gpu:
         estimated_time = duration_seconds * 0.5  # GPU: ~0.5x realtime
     else:
@@ -262,10 +305,28 @@ def check_installation():
 
         print(f"audio-separator: OK", file=sys.stderr)
         print(f"PyTorch: {torch.__version__}", file=sys.stderr)
-        print(f"CUDA available: {torch.cuda.is_available()}", file=sys.stderr)
 
+        gpu_found = False
+
+        # Check NVIDIA CUDA
         if torch.cuda.is_available():
+            print(f"NVIDIA CUDA: Available", file=sys.stderr)
             print(f"GPU: {torch.cuda.get_device_name(0)}", file=sys.stderr)
+            gpu_found = True
+        else:
+            print(f"NVIDIA CUDA: Not available", file=sys.stderr)
+
+        # Check AMD DirectML
+        try:
+            import torch_directml
+            dml_device = torch_directml.device()
+            print(f"AMD DirectML: Available ({dml_device})", file=sys.stderr)
+            gpu_found = True
+        except ImportError:
+            print(f"AMD DirectML: Not available", file=sys.stderr)
+
+        if not gpu_found:
+            print(f"WARNING: No GPU acceleration available, will use CPU", file=sys.stderr)
 
         return True
     except ImportError as e:
@@ -279,6 +340,8 @@ def main():
     parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
     parser.add_argument("--model", default="htdemucs",
                         help="Model to use (htdemucs, htdemucs_ft, UVR-MDX-NET-Voc_FT, etc.)")
+    parser.add_argument("--segment-size", type=int, default=None,
+                        help="Segment size for processing (default: 40 for single, 25 for parallel)")
     parser.add_argument("--check", action="store_true",
                         help="Only check installation, don't process")
     parser.add_argument("--list-models", action="store_true",
@@ -311,7 +374,7 @@ def main():
         sys.exit(1)
 
     try:
-        output_files = separate_stems(args.input, args.output_dir, args.model)
+        output_files = separate_stems(args.input, args.output_dir, args.model, args.segment_size)
 
         # Output JSON for C++ to parse
         print(json.dumps(output_files))
