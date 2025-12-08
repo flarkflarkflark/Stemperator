@@ -434,11 +434,15 @@ function Main {
     # Upgrade pip
     $pip = Join-Path $VenvDir "Scripts\pip.exe"
     Write-Info "Upgrading pip..."
-    & $pip install --upgrade pip 2>&1 | Out-Null
-    if ($LASTEXITCODE -eq 0) {
-        Write-Success "pip upgraded"
-    } else {
-        Write-Info "pip upgrade skipped (already latest or locked)"
+    try {
+        $pipOutput = & $pip install --upgrade pip 2>&1 | Out-String
+        if ($LASTEXITCODE -eq 0) {
+            Write-Success "pip upgraded"
+        } else {
+            Write-Info "pip upgrade skipped (already latest or locked)"
+        }
+    } catch {
+        Write-Info "pip upgrade skipped (non-critical)"
     }
 
     # Install PyTorch
