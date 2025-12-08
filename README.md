@@ -6,6 +6,8 @@
 ![ReaPack](https://img.shields.io/badge/ReaPack-compatible-green)
 ![License](https://img.shields.io/badge/license-MIT-blue)
 
+![Stemperator Hero](docs/images/stemperator-hero.png)
+
 Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. Available as REAPER scripts (via ReaPack) and as a VST3/Standalone plugin.
 
 ---
@@ -13,6 +15,8 @@ Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. A
 ## Why Stemperator?
 
 **Stay in your DAW.** No more exporting, switching to external tools, and re-importing.
+
+![Before and After](docs/images/stemperator-before-after.png)
 
 Stemperator integrates directly into REAPER, letting you:
 
@@ -76,9 +80,13 @@ Stemperator integrates directly into REAPER, letting you:
 | **htdemucs_ft** (4-stem) | Vocals, Drums, Bass, Other | Highest quality |
 | **htdemucs_6s** (6-stem) | Vocals, Drums, Bass, Other, Guitar, Piano | Detailed separation |
 
+![6-Stem Model](docs/images/stemperator-6stem.png)
+
 ### Flexible Input Selection
 
 Stemperator works with whatever you have selected:
+
+![Time Selection Feature](docs/images/stemperator-time-selection.png)
 
 | Selection Type | What Gets Processed |
 |----------------|---------------------|
@@ -93,6 +101,8 @@ This means you can:
 
 ### REAPER Scripts
 
+![Stemperator Dialog](docs/images/stemperator-dialog.png)
+
 | Script | Description |
 |--------|-------------|
 | **Stemperator: AI Stem Separation** | Main dialog - full control over model, stems, and options |
@@ -103,6 +113,8 @@ This means you can:
 | **Stemperator: All Stems** | Extract all stems to separate tracks |
 | **Stemperator: Explode Stems** | Route VST3 multi-outputs to tracks |
 | **Stemperator: Setup Toolbar** | Add quick-access toolbar buttons |
+
+![Toolbar Icons](docs/images/stemperator-toolbar.png)
 
 ### Keyboard Shortcuts (in dialog)
 - `1-6` - Toggle stems
@@ -215,6 +227,8 @@ cmake --build . --config Release -j8
 ---
 
 ## Output
+
+![REAPER with Stems](docs/images/reaper-stems.png)
 
 Stems are saved as WAV files alongside your original audio (regardless of input format):
 ```
