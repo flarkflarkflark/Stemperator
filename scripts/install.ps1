@@ -38,34 +38,62 @@ function Find-Python {
     if (Get-Command py -ErrorAction SilentlyContinue) {
         # Try Python 3.11 specifically (best compatibility)
         try {
-            $version = & py -3.11 --version 2>&1
-            if ($version -match "Python 3\.11") {
-                Write-Info "Found Python 3.11 (preferred version)"
-                return "py -3.11"
-            }
-        } catch {}
-
-        # Try Python 3.12
-        try {
-            $version = & py -3.12 --version 2>&1
-            if ($version -match "Python 3\.12") {
-                return "py -3.12"
+            $null = & py -3.11 --version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $version = & py -3.11 --version 2>&1 | Out-String
+                if ($version -match "Python 3\.11") {
+                    Write-Info "Found Python 3.11 (preferred version)"
+                    return "py -3.11"
+                }
             }
         } catch {}
 
         # Try Python 3.10
         try {
-            $version = & py -3.10 --version 2>&1
-            if ($version -match "Python 3\.10") {
-                return "py -3.10"
+            $null = & py -3.10 --version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $version = & py -3.10 --version 2>&1 | Out-String
+                if ($version -match "Python 3\.10") {
+                    Write-Info "Found Python 3.10"
+                    return "py -3.10"
+                }
             }
         } catch {}
 
-        # Fall back to any Python 3
+        # Try Python 3.12 (has limited DirectML support)
         try {
-            $version = & py -3 --version 2>&1
-            if ($version -match "Python 3") {
-                return "py -3"
+            $null = & py -3.12 --version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $version = & py -3.12 --version 2>&1 | Out-String
+                if ($version -match "Python 3\.12") {
+                    Write-Info "Found Python 3.12"
+                    return "py -3.12"
+                }
+            }
+        } catch {}
+
+        # Try Python 3.9
+        try {
+            $null = & py -3.9 --version 2>&1
+            if ($LASTEXITCODE -eq 0) {
+                $version = & py -3.9 --version 2>&1 | Out-String
+                if ($version -match "Python 3\.9") {
+                    Write-Info "Found Python 3.9"
+                    return "py -3.9"
+                }
+            }
+        } catch {}
+
+        # Only use generic `py -3` as last resort (might pick wrong version)
+        try {
+            $version = & py -3 --version 2>&1 | Out-String
+            if ($version -match "Python 3\.(\d+)") {
+                $minor = [int]$Matches[1]
+                # Reject Python 3.14+ even here
+                if ($minor -lt 14) {
+                    Write-Info "Found Python 3.$minor via py launcher"
+                    return "py -3"
+                }
             }
         } catch {}
     }
@@ -78,7 +106,7 @@ function Find-Python {
     # Try python
     if (Get-Command python -ErrorAction SilentlyContinue) {
         try {
-            $version = & python --version 2>&1
+            $version = & python --version 2>&1 | Out-String
             if ($version -match "Python 3") {
                 return "python"
             }
@@ -355,21 +383,31 @@ function Main {
             exit 1
         }
 
-        # Warn if Python version is too new
+        # Check if Python version is compatible
         $version = Get-PythonVersion $pythonCmd
         if ($version.Major -eq 3 -and $version.Minor -ge 14) {
-            Write-Warning "Python $($version.Major).$($version.Minor) detected - this is very new!"
-            Write-Warning "Many AI packages don't support Python 3.14+ yet (missing pre-built wheels)"
-            Write-Warning "Installation will attempt to continue, but may fail during package installation."
-            Write-Info "Recommended: Install Python 3.11 for best compatibility"
-            Write-Info "  winget install Python.Python.3.11"
+            Write-Host "`n" -NoNewline
+            Write-Host "==============================================" -ForegroundColor Red
+            Write-Host " Python $($version.Major).$($version.Minor) is NOT COMPATIBLE" -ForegroundColor Red
+            Write-Host "==============================================" -ForegroundColor Red
             Write-Host ""
-            $response = Read-Host "Continue anyway? [y/N]"
-            if ($response -ne "y" -and $response -ne "Y") {
-                Write-Info "Installation cancelled. Please install Python 3.11 and try again."
-                exit 0
-            }
-        } elseif ($version.Major -eq 3 -and $version.Minor -ge 12) {
+            Write-Host "Python 3.14+ is too new for audio-separator and its dependencies." -ForegroundColor Yellow
+            Write-Host "Required packages (diffq-fixed, torch-directml) don't support Python 3.14 yet." -ForegroundColor Yellow
+            Write-Host ""
+            Write-Host "Supported Python versions: 3.9, 3.10, 3.11, 3.12" -ForegroundColor Cyan
+            Write-Host "Recommended: Python 3.11 (best compatibility with all features)" -ForegroundColor Green
+            Write-Host ""
+            Write-Host "To install Python 3.11:" -ForegroundColor Cyan
+            Write-Host "  winget install Python.Python.3.11" -ForegroundColor White
+            Write-Host ""
+            Write-Host "After installing, run this script again and it will automatically use Python 3.11." -ForegroundColor Cyan
+            Write-Host ""
+            exit 1
+        } elseif ($version.Major -eq 3 -and $version.Minor -ge 13) {
+            Write-Warning "Python $($version.Major).$($version.Minor) detected - this may not be fully compatible"
+            Write-Warning "Some packages may fail to install due to missing pre-built wheels"
+            Write-Info "Python 3.11 is recommended for best compatibility"
+        } elseif ($version.Major -eq 3 -and $version.Minor -eq 12) {
             Write-Warning "Python $($version.Major).$($version.Minor) detected. DirectML (AMD GPU acceleration) requires Python 3.8-3.11."
             Write-Warning "Installation will continue, but PyTorch will run in CPU mode."
             Write-Info "For AMD GPU support, consider installing Python 3.11 alongside your current version."
