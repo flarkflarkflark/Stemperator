@@ -72,6 +72,8 @@ local function findPython()
     if OS == "Windows" then
         -- Check venv in script directory
         table.insert(paths, script_path .. ".venv\\Scripts\\python.exe")
+        -- Check Documents/Stemperator (common install location)
+        table.insert(paths, getHome() .. "\\Documents\\Stemperator\\.venv\\Scripts\\python.exe")
         -- Check global venv in user profile
         table.insert(paths, getHome() .. "\\.stemperator\\.venv\\Scripts\\python.exe")
         -- Check C:\WINDOWS\.venv (alternate install location)
@@ -87,6 +89,8 @@ local function findPython()
     else
         -- Check venv in script directory
         table.insert(paths, script_path .. ".venv/bin/python")
+        -- Check Documents/Stemperator (common install location)
+        table.insert(paths, getHome() .. "/Documents/Stemperator/.venv/bin/python")
         -- Check global venv in home
         table.insert(paths, getHome() .. "/.stemperator/.venv/bin/python")
         -- User local bin
@@ -123,6 +127,8 @@ local function findSeparatorScript()
     local paths = {
         script_path .. "audio_separator_process.py",
         script_path .. ".." .. PATH_SEP .. "AI" .. PATH_SEP .. "audio_separator_process.py",
+        getHome() .. PATH_SEP .. "Documents" .. PATH_SEP .. "Stemperator" .. PATH_SEP .. "Source" .. PATH_SEP .. "AI" .. PATH_SEP .. "audio_separator_process.py",
+        getHome() .. PATH_SEP .. "Documents" .. PATH_SEP .. "Stemperator" .. PATH_SEP .. "scripts" .. PATH_SEP .. "reaper" .. PATH_SEP .. "audio_separator_process.py",
         getHome() .. PATH_SEP .. ".stemperator" .. PATH_SEP .. "audio_separator_process.py",
     }
 
