@@ -74,6 +74,8 @@ local function findPython()
         table.insert(paths, script_path .. ".venv\\Scripts\\python.exe")
         -- Check global venv in user profile
         table.insert(paths, getHome() .. "\\.stemperator\\.venv\\Scripts\\python.exe")
+        -- Check C:\WINDOWS\.venv (alternate install location)
+        table.insert(paths, "C:\\WINDOWS\\.venv\\Scripts\\python.exe")
         -- Standard Python locations
         local localAppData = os.getenv("LOCALAPPDATA") or ""
         table.insert(paths, localAppData .. "\\Programs\\Python\\Python312\\python.exe")

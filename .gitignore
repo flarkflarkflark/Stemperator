@@ -6,6 +6,12 @@ cmake-build-*/
 *.so
 *.dylib
 
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
 # JUCE
 JUCE/
 
