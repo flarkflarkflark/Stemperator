@@ -1,6 +1,52 @@
 # CLAUDE.md - Stemperator
 
-## Project Overview
+## REAPER Script Implementation (ACTIVE DEVELOPMENT)
+
+### Quick Start for Claude
+**Read `docs/Stemperator_Session_Notes.md` for full development context!**
+
+### Current State (2025-12-08)
+- **Status**: WORKING - Multi-track parallel processing with GPU acceleration
+- **Debug mode**: ENABLED (`DEBUG_MODE = true` in Lua script line 65)
+- **Hardware tested**: AMD Ryzen 7840HS + RX 9070 eGPU (16GB) via DirectML
+
+### Key Files
+| File | Location | Purpose |
+|------|----------|---------|
+| `Stemperator_AI_Separate.lua` | `scripts/reaper/` | Main REAPER script with GUI |
+| `audio_separator_process.py` | `scripts/reaper/` | Python backend for AI separation |
+| `Stemperator_Session_Notes.md` | `docs/` | Detailed development notes |
+
+### Recent Fixes (This Session)
+1. Multi-track parallel processing - all items on all tracks
+2. Dynamic segment size: 40 (single-track), 25 (multi-track parallel)
+3. Mute/Delete selection split fix (re-query bounds after first split)
+4. Window flickering fix (`execHidden()` function)
+5. AMD DirectML GPU detection and display
+
+### Installation
+```bash
+# Windows - Copy to REAPER Scripts folder
+cp scripts/reaper/*.lua scripts/reaper/*.py \
+   "$APPDATA/REAPER/Scripts/Stemperator - AI Stem Separation/AI/Stem Separation/"
+
+# Linux
+cp scripts/reaper/*.lua scripts/reaper/*.py \
+   ~/.config/REAPER/Scripts/Stemperator/
+
+# Test Python backend
+python scripts/reaper/audio_separator_process.py --check
+```
+
+### Dependencies
+- Python 3.9+ with `pip install audio-separator[gpu]`
+- `pip install torch-directml` (Windows AMD GPU)
+- ffmpeg in PATH
+- REAPER with js_ReaScriptAPI and SWS extensions
+
+---
+
+## VST3 Plugin (FUTURE)
 
 **Stemperator** is an AI-powered stem separation VST3 plugin and standalone application by flarkAUDIO. It separates audio into 4 stems:
 - **Vocals** - Lead and backing vocals
