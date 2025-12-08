@@ -36,6 +36,32 @@ function Write-Info { param($msg) Write-Host "[-] $msg" -ForegroundColor Blue }
 function Find-Python {
     # Try py launcher first (Windows Python)
     if (Get-Command py -ErrorAction SilentlyContinue) {
+        # Try Python 3.11 specifically (best compatibility)
+        try {
+            $version = & py -3.11 --version 2>&1
+            if ($version -match "Python 3\.11") {
+                Write-Info "Found Python 3.11 (preferred version)"
+                return "py -3.11"
+            }
+        } catch {}
+
+        # Try Python 3.12
+        try {
+            $version = & py -3.12 --version 2>&1
+            if ($version -match "Python 3\.12") {
+                return "py -3.12"
+            }
+        } catch {}
+
+        # Try Python 3.10
+        try {
+            $version = & py -3.10 --version 2>&1
+            if ($version -match "Python 3\.10") {
+                return "py -3.10"
+            }
+        } catch {}
+
+        # Fall back to any Python 3
         try {
             $version = & py -3 --version 2>&1
             if ($version -match "Python 3") {
