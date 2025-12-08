@@ -270,9 +270,10 @@ function Install-PyTorch {
 
             if ($directMLCompatible) {
                 Write-Info "Installing PyTorch with DirectML support (AMD on Windows)..."
-                & $pip install torch torchvision torchaudio
+                # Install PyTorch 2.4.1 (compatible with torch-directml)
+                & $pip install torch==2.4.1 torchvision==0.19.1 torchaudio==2.4.1
 
-                # Try to install torch-directml, but don't fail if it doesn't work
+                # Install torch-directml
                 Write-Info "Installing DirectML acceleration..."
                 & $pip install torch-directml
 
@@ -301,7 +302,7 @@ function Install-AudioSeparator {
     $pip = Join-Path $VenvDir "Scripts\pip.exe"
 
     Write-Info "Installing audio-separator..."
-    & $pip install audio-separator
+    & $pip install audio-separator onnxruntime
 
     if ($LASTEXITCODE -ne 0) {
         $version = Get-PythonVersion $pythonCmd
@@ -323,19 +324,33 @@ function Test-Installation {
 
     Write-Info "Verifying installation..."
 
-    & $python -c @"
-import torch
-print(f'PyTorch version: {torch.__version__}')
-if torch.cuda.is_available():
-    print(f'CUDA available: {torch.cuda.get_device_name(0)}')
-else:
-    print('Using CPU (or DirectML if AMD)')
+    $verifyOutput = & $python -c @"
+import sys
+try:
+    import torch
+    print(f'PyTorch version: {torch.__version__}')
+    if torch.cuda.is_available():
+        print(f'CUDA available: {torch.cuda.get_device_name(0)}')
+    else:
+        print('Using CPU (or DirectML if AMD)')
 
-from audio_separator.separator import Separator
-print('audio-separator is ready')
-"@
+    from audio_separator.separator import Separator
+    print('audio-separator: Ready')
+    sys.exit(0)
+except Exception as e:
+    print(f'Verification failed: {e}')
+    sys.exit(1)
+"@ 2>&1
 
-    Write-Success "All components verified!"
+    Write-Host $verifyOutput
+
+    if ($LASTEXITCODE -eq 0) {
+        Write-Success "All components verified!"
+        return $true
+    } else {
+        Write-Error "Verification failed - some components could not be imported"
+        return $false
+    }
 }
 
 # Download models
@@ -469,7 +484,23 @@ function Main {
     }
 
     # Verify
-    Test-Installation
+    $verified = Test-Installation
+
+    if (-not $verified) {
+        Write-Host "`n" -NoNewline
+        Write-Host "==============================================" -ForegroundColor Red
+        Write-Host " Installation Incomplete" -ForegroundColor Red
+        Write-Host "==============================================" -ForegroundColor Red
+        Write-Host ""
+        Write-Host "Some components failed verification." -ForegroundColor Yellow
+        Write-Host "Please check the error messages above." -ForegroundColor Yellow
+        Write-Host ""
+        Write-Host "Common fixes:" -ForegroundColor Cyan
+        Write-Host "  - Try deleting .venv folder and running installer again" -ForegroundColor White
+        Write-Host "  - Check that Python 3.11 is being used (not 3.14+)" -ForegroundColor White
+        Write-Host ""
+        exit 1
+    }
 
     # Ask about models
     Write-Host ""
