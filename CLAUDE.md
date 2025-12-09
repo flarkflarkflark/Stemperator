@@ -19,10 +19,40 @@
 
 ### Recent Fixes (This Session)
 1. Multi-track parallel processing - all items on all tracks
-2. Dynamic segment size: 40 (single-track), 25 (multi-track parallel)
+2. Dynamic segment size: 30 (single), 40 (sequential), 25 (parallel)
 3. Mute/Delete selection split fix (re-query bounds after first split)
 4. Window flickering fix (`execHidden()` function)
 5. AMD DirectML GPU detection and display
+6. User-selectable Parallel/Sequential processing mode
+7. Enhanced progress window with real-time stats (CPU, GPU, RAM, ETA)
+8. Benchmark timing in completion dialog
+9. STEMperate button with colored stem letters
+
+### Benchmark: RX 9070 16GB (~5.5s audio per track)
+
+**Fast Model (htdemucs):**
+| Tracks | Sequential | Parallel | Speedup |
+|--------|-----------|----------|---------|
+| 1 | 0:15 | 0:16 | 1.0x |
+| 2 | 0:47 | 0:19 | 2.5x |
+| 3 | 1:11 | 0:26 | 2.7x |
+| 4 | 1:32 | 0:36 | 2.6x |
+| 5 | 1:59 | 0:50 | 2.4x |
+
+**Quality Model (htdemucs_ft):**
+| Tracks | Sequential | Parallel | Speedup |
+|--------|-----------|----------|---------|
+| 1 | 0:37 | 0:37 | 1.0x |
+| 2 | 1:58 | 0:44 | 2.7x |
+| 3 | 2:59 | 1:19 | 2.3x |
+| 4 | 3:53 | 1:34 | 2.5x |
+| 5 | 4:58 | 2:08 | 2.3x |
+
+**Summary:**
+- Fast model is **~2.5x faster** than quality model
+- Parallel mode is **2.3-2.7x faster** than sequential
+- **Best case:** 5 tracks fast parallel = 50s (vs 4:58 quality sequential = 6x faster)
+- **Default: Parallel + htdemucs** (needs 12GB+ VRAM)
 
 ### Installation
 ```bash

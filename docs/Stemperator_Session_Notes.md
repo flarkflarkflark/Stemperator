@@ -139,6 +139,51 @@ SETTINGS = {
 7. ✅ Window flickering fix (execHidden)
 8. ✅ Dynamic segment size (single vs multi-track)
 9. ✅ Debug logging systeem
+10. ✅ User-selectable Parallel/Sequential processing mode
+11. ✅ Enhanced progress window with real-time stats (CPU, GPU, RAM, ETA)
+12. ✅ Benchmark timing in completion dialog
+13. ✅ STEMperate button with colored stem letters
+
+## Benchmark Results: Sequential vs Parallel Processing
+
+**Test Hardware:** AMD Ryzen 7 7840HS + RX 9070 eGPU (16GB VRAM)
+**Audio:** ~5.5s per track
+
+### Fast Model (htdemucs)
+| Tracks | Sequential | Parallel | Speedup |
+|--------|-----------|----------|---------|
+| 1 | 0:15 | 0:16 | 1.0x |
+| 2 | 0:47 | 0:19 | **2.5x** |
+| 3 | 1:11 | 0:26 | **2.7x** |
+| 4 | 1:32 | 0:36 | **2.6x** |
+| 5 | 1:59 | 0:50 | **2.4x** |
+
+### Quality Model (htdemucs_ft)
+| Tracks | Sequential | Parallel | Speedup |
+|--------|-----------|----------|---------|
+| 1 | 0:37 | 0:37 | 1.0x |
+| 2 | 1:58 | 0:44 | **2.7x** |
+| 3 | 2:59 | 1:19 | **2.3x** |
+| 4 | 3:53 | 1:34 | **2.5x** |
+| 5 | 4:58 | 2:08 | **2.3x** |
+
+**Key insights:**
+- **Fast model is ~2.5x faster** than quality model
+- Single track: No difference between modes
+- Multi-track: Parallel is **2.3-2.7x faster**
+- Sequential: Linear scaling (~15s/track fast, ~60s/track quality)
+- Parallel: Sub-linear scaling (~10s/track fast, ~25s/track quality)
+- **Best case:** 5 tracks fast parallel = 50s vs 4:58 quality sequential = **6x faster**
+
+**Segment sizes:**
+- Single-track: 30
+- Multi-track Sequential: 40
+- Multi-track Parallel: 25
+
+**Recommendation:**
+- Use **Parallel mode** (default) for GPUs with 12GB+ VRAM
+- Use **Sequential** for 4-8GB GPUs to avoid OOM errors
+- Use **htdemucs** (fast) for drafts, **htdemucs_ft** (quality) for final stems
 
 ## Bekende limitaties
 - DirectML op Windows: ~50-60% GPU benutting (vs ~100% met ROCm op Linux)
