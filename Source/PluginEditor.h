@@ -122,6 +122,7 @@ public:
         cmdUndo,             // Undo last action
         cmdRedo,             // Redo last undone action
         cmdAbout,
+        cmdHelpPage,         // Open Help page with documentation
         cmdUISettings,       // Open UI Settings dialog
         cmdQuit              // Exit the application
     };

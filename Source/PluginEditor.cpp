@@ -394,6 +394,240 @@ private:
 };
 
 //==============================================================================
+// Help overlay - scrollable help documentation
+class HelpOverlay : public juce::Component
+{
+public:
+    HelpOverlay()
+    {
+        setOpaque (false);
+        setWantsKeyboardFocus (true);
+
+        // Create scrollable viewport
+        viewport.setScrollBarsShown (true, false);
+        viewport.setViewedComponent (&contentComponent, false);
+        addAndMakeVisible (viewport);
+
+        // Close button
+        closeButton.setButtonText ("X");
+        closeButton.onClick = [this]()
+        {
+            if (auto* parent = getParentComponent())
+            {
+                parent->removeChildComponent (this);
+                delete this;
+            }
+        };
+        addAndMakeVisible (closeButton);
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Semi-transparent dark overlay
+        g.setColour (juce::Colour (0xcc000008));
+        g.fillAll();
+
+        // Center panel dimensions (larger for help content)
+        float panelWidth = juce::jmin (700.0f, bounds.getWidth() * 0.85f);
+        float panelHeight = juce::jmin (600.0f, bounds.getHeight() * 0.9f);
+        panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        // Panel background with gradient
+        juce::ColourGradient bgGradient (
+            juce::Colour (0xff151522), panelBounds.getCentreX(), panelBounds.getY(),
+            juce::Colour (0xff0a0a10), panelBounds.getCentreX(), panelBounds.getBottom(), false);
+        g.setGradientFill (bgGradient);
+        g.fillRoundedRectangle (panelBounds, 16.0f);
+
+        // Panel border with accent glow
+        g.setColour (juce::Colour (0xff7b68ee).withAlpha (0.6f));
+        g.drawRoundedRectangle (panelBounds.reduced (1), 16.0f, 2.0f);
+
+        // Title bar background
+        auto titleBar = panelBounds.removeFromTop (50);
+        g.setColour (juce::Colour (0xff1a1a28));
+        g.fillRoundedRectangle (titleBar.getX(), titleBar.getY(), titleBar.getWidth(), titleBar.getHeight() + 8, 16.0f);
+        g.setColour (juce::Colour (0xff151522));
+        g.fillRect (titleBar.getX() + 1, titleBar.getBottom() - 8, titleBar.getWidth() - 2, 8.0f);
+
+        // Title
+        g.setColour (juce::Colour (0xff7b68ee));
+        g.setFont (juce::FontOptions (24.0f).withStyle ("Bold"));
+        g.drawText ("Help & Quick Start", titleBar, juce::Justification::centred);
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().toFloat();
+        float panelWidth = juce::jmin (700.0f, bounds.getWidth() * 0.85f);
+        float panelHeight = juce::jmin (600.0f, bounds.getHeight() * 0.9f);
+        panelBounds = juce::Rectangle<float> (
+            (bounds.getWidth() - panelWidth) / 2,
+            (bounds.getHeight() - panelHeight) / 2,
+            panelWidth, panelHeight);
+
+        // Close button in top-right of panel
+        closeButton.setBounds ((int) (panelBounds.getRight() - 40), (int) (panelBounds.getY() + 10), 30, 30);
+
+        // Viewport fills panel below title
+        auto contentArea = panelBounds.reduced (20).withTrimmedTop (40);
+        viewport.setBounds (contentArea.toNearestInt());
+
+        // Set content component size (height based on content)
+        contentComponent.setSize ((int) contentArea.getWidth() - 20, 1100);
+    }
+
+    void mouseDown (const juce::MouseEvent& e) override
+    {
+        // Close overlay when clicked outside panel
+        if (! panelBounds.contains (e.position))
+        {
+            if (auto* parent = getParentComponent())
+            {
+                parent->removeChildComponent (this);
+                delete this;
+            }
+        }
+    }
+
+    bool keyPressed (const juce::KeyPress& key) override
+    {
+        if (key == juce::KeyPress::escapeKey)
+        {
+            if (auto* parent = getParentComponent())
+            {
+                parent->removeChildComponent (this);
+                delete this;
+            }
+            return true;
+        }
+        return false;
+    }
+
+private:
+    juce::Rectangle<float> panelBounds;
+    juce::Viewport viewport;
+    juce::TextButton closeButton;
+
+    // Content component that draws the help text
+    class HelpContent : public juce::Component
+    {
+    public:
+        void paint (juce::Graphics& g) override
+        {
+            float y = 10;
+            float x = 10;
+            float width = (float) getWidth() - 20;
+
+            auto drawSection = [&] (const juce::String& title, const juce::StringArray& items)
+            {
+                // Section title
+                g.setColour (juce::Colour (0xff7b68ee));
+                g.setFont (juce::FontOptions (16.0f).withStyle ("Bold"));
+                g.drawText (title, x, y, width, 24, juce::Justification::centredLeft);
+                y += 28;
+
+                // Items
+                g.setColour (juce::Colour (0xffccccdd));
+                g.setFont (juce::FontOptions (13.0f));
+                for (const auto& item : items)
+                {
+                    // Word wrap for long items
+                    auto textLayout = juce::AttributedString (item);
+                    textLayout.setFont (juce::FontOptions (13.0f));
+                    textLayout.setColour (juce::Colour (0xffccccdd));
+                    juce::TextLayout layout;
+                    layout.createLayout (textLayout, width - 15);
+                    float itemHeight = layout.getHeight() + 6;
+
+                    g.drawText ("\xe2\x80\xa2", x, y, 15, 20, juce::Justification::centredLeft);  // bullet
+                    layout.draw (g, juce::Rectangle<float> (x + 15, y, width - 15, itemHeight));
+                    y += itemHeight;
+                }
+                y += 12;
+            };
+
+            // Quick Start
+            drawSection ("Getting Started", {
+                "Load Audio: File > Load Audio File (Cmd/Ctrl+O) or drag & drop",
+                "Separate: The file is automatically separated into stems",
+                "Play: Press Space or click Play to hear the separated stems",
+                "Mix: Adjust stem volumes with the faders, use Mute (M) and Solo (S)"
+            });
+
+            // Playback Modes
+            drawSection ("Playback Modes", {
+                "STEMS mode: Play separated stems with individual volume control",
+                "LIVE mode: Play original audio file (click mode indicator to switch)",
+                "Mode indicator shows current playback mode - click to toggle"
+            });
+
+            // Stem Controls
+            drawSection ("Stem Controls", {
+                "Faders: Adjust individual stem volumes (-inf to +12 dB)",
+                "M (Mute): Silence a stem - click again to unmute",
+                "S (Solo): Hear only this stem - click again to unsolo",
+                "Pan: Adjust left/right positioning of each stem",
+                "RESET: Reset all faders to 0 dB (unity gain)"
+            });
+
+            // Export Options
+            drawSection ("Exporting", {
+                "Export All Stems: Save all stems as separate audio files",
+                "Export Mix: Export stems merged with current fader/mute settings",
+                "Export Individual: Export a specific stem (Vocals, Drums, etc.)",
+                "Supported formats: WAV (16/24/32-bit), FLAC, MP3, OGG"
+            });
+
+            // Keyboard Shortcuts
+            drawSection ("Keyboard Shortcuts", {
+                "Space: Play/Pause",
+                "Cmd/Ctrl+O: Load audio file",
+                "Cmd/Ctrl+S: Save project",
+                "Cmd/Ctrl+Shift+E: Export all stems",
+                "Cmd/Ctrl+Shift+M: Export mix",
+                "Cmd/Ctrl+Z: Undo",
+                "Cmd/Ctrl+Q: Quit"
+            });
+
+            // Models
+            drawSection ("AI Models", {
+                "4-Stem (htdemucs): Vocals, Drums, Bass, Other - faster processing",
+                "6-Stem (htdemucs_6s): Adds Guitar and Piano - more detailed separation",
+                "Quality: Fast/Balanced/Best - higher quality = longer processing"
+            });
+
+            // Projects
+            drawSection ("Projects", {
+                "Save Project: Saves audio file reference, stem data, and mixer settings",
+                "Load Project: Restore a previous session with all settings",
+                "Project files use .stemperator extension"
+            });
+
+            // Batch Processing
+            drawSection ("Batch Processing", {
+                "File > Batch Process: Process multiple files at once",
+                "Select input files and output folder",
+                "All files are processed with current model and quality settings"
+            });
+
+            // Tips
+            drawSection ("Tips", {
+                "Use Solo to isolate stems for checking separation quality",
+                "Export Mix to create karaoke versions (mute vocals)",
+                "The visualizer shows real-time spectrum of the playing audio",
+                "Window size and position are remembered between sessions"
+            });
+        }
+    } contentComponent;
+};
+
+//==============================================================================
 // ColorfulModeLabel implementation
 void ColorfulModeLabel::paint (juce::Graphics& g)
 {
@@ -1523,6 +1757,8 @@ juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::S
     }
     else if (menuIndex == 3)  // Help menu
     {
+        menu.addCommandItem (&commandManager, cmdHelpPage);
+        menu.addSeparator();
         menu.addCommandItem (&commandManager, cmdUISettings);
         menu.addSeparator();
         menu.addCommandItem (&commandManager, cmdAbout);
@@ -1765,6 +2001,7 @@ void StemperatorEditor::getAllCommands (juce::Array<juce::CommandID>& commands)
         cmdUndo,
         cmdRedo,
         cmdAbout,
+        cmdHelpPage,
         cmdUISettings,
         cmdQuit
     });
@@ -1882,6 +2119,10 @@ void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::Applica
             break;
         case cmdAbout:
             result.setInfo ("About Stemperator", "Show application info", "Help", 0);
+            break;
+        case cmdHelpPage:
+            result.setInfo ("Help...", "Open help and quick start guide", "Help", 0);
+            result.addDefaultKeypress (juce::KeyPress::F1Key, juce::ModifierKeys::noModifiers);
             break;
         case cmdUISettings:
             result.setInfo ("UI Settings...", "Configure font sizes and UI appearance", "Help", 0);
@@ -2034,6 +2275,16 @@ bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::Invocatio
             aboutOverlay->setBounds (getLocalBounds());
             aboutOverlay->toFront (true);
             aboutOverlay->grabKeyboardFocus();
+            return true;
+        }
+        case cmdHelpPage:
+        {
+            // Show help overlay with scrollable documentation
+            auto* helpOverlay = new HelpOverlay();
+            addAndMakeVisible (helpOverlay);
+            helpOverlay->setBounds (getLocalBounds());
+            helpOverlay->toFront (true);
+            helpOverlay->grabKeyboardFocus();
             return true;
         }
         case cmdUISettings:
