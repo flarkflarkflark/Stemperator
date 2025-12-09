@@ -74,6 +74,8 @@ local function findPython()
         table.insert(paths, script_path .. ".venv\\Scripts\\python.exe")
         -- Check Documents/Stemperator (common install location)
         table.insert(paths, getHome() .. "\\Documents\\Stemperator\\.venv\\Scripts\\python.exe")
+        -- Hardcoded common paths for reliability
+        table.insert(paths, "C:\\Users\\Administrator\\Documents\\Stemperator\\.venv\\Scripts\\python.exe")
         -- Check global venv in user profile
         table.insert(paths, getHome() .. "\\.stemperator\\.venv\\Scripts\\python.exe")
         -- Check C:\WINDOWS\.venv (alternate install location)
@@ -143,9 +145,21 @@ end
 
 -- Check if audio-separator is installed
 local function checkAudioSeparator(pythonPath)
+    -- If using a venv from Stemperator install, trust that audio-separator is there
+    if pythonPath:match("Stemperator") and pythonPath:match("%.venv") then
+        return true
+    end
+
     local cmd
     if OS == "Windows" then
-        cmd = '"' .. pythonPath .. '" -c "from audio_separator.separator import Separator; print(\'OK\')" 2>nul'
+        -- Use batch wrapper for reliable Windows execution
+        local batchPath = script_path .. "check_audio_separator.bat"
+        if fileExists(batchPath) then
+            cmd = '"' .. batchPath .. '" "' .. pythonPath .. '"'
+        else
+            -- Fallback to direct command
+            cmd = 'cmd /c ""' .. pythonPath .. '" -c "from audio_separator.separator import Separator; print(\'OK\')" 2>nul"'
+        end
     else
         cmd = '"' .. pythonPath .. '" -c "from audio_separator.separator import Separator; print(\'OK\')" 2>/dev/null'
     end

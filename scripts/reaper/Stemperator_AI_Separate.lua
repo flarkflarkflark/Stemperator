@@ -58,7 +58,7 @@
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
-local SCRIPT_NAME = "Stemperator: AI Stem Separation"
+local SCRIPT_NAME = "Stemperator"
 local EXT_SECTION = "Stemperator"  -- For ExtState persistence
 
 -- Debug mode - set to true to enable debug logging
@@ -195,9 +195,9 @@ local STEMS = {
 
 -- Available models
 local MODELS = {
-    { id = "htdemucs", name = "Fast (htdemucs)", desc = "4 stems, fastest" },
-    { id = "htdemucs_ft", name = "Quality (htdemucs_ft)", desc = "4 stems, best quality" },
-    { id = "htdemucs_6s", name = "6-Stem (guitar/piano)", desc = "6 stems, includes guitar & piano" },
+    { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
+    { id = "htdemucs_ft", name = "Quality", desc = "htdemucs_ft - Best quality, slower (4 stems)" },
+    { id = "htdemucs_6s", name = "6-Stem", desc = "htdemucs_6s - Adds Guitar & Piano separation" },
 }
 
 -- Settings (persist between runs)
@@ -211,6 +211,7 @@ local SETTINGS = {
     deleteSelection = false,   -- Delete only the selection portion (splits item)
     deleteOriginalTrack = false,
     darkMode = true,           -- Dark/Light theme toggle
+    parallelProcessing = true, -- Process multiple tracks in parallel (uses more GPU memory)
 }
 
 -- Theme colors (will be set based on darkMode)
@@ -223,6 +224,7 @@ local function updateTheme()
             bg = {0.18, 0.18, 0.20},
             bgGradientTop = {0.10, 0.10, 0.12},
             bgGradientBottom = {0.18, 0.18, 0.20},
+            inputBg = {0.12, 0.12, 0.14},
             text = {1, 1, 1},
             textDim = {0.7, 0.7, 0.7},
             textHint = {0.5, 0.5, 0.5},
@@ -242,6 +244,7 @@ local function updateTheme()
             bg = {0.92, 0.92, 0.94},
             bgGradientTop = {0.96, 0.96, 0.98},
             bgGradientBottom = {0.88, 0.88, 0.90},
+            inputBg = {0.85, 0.85, 0.87},
             text = {0.1, 0.1, 0.1},
             textDim = {0.3, 0.3, 0.3},
             textHint = {0.5, 0.5, 0.5},
@@ -266,18 +269,30 @@ local GUI = {
     running = false,
     result = nil,
     wasMouseDown = false,
+    logoWasClicked = false,
     -- Scaling
-    baseW = 380,
-    baseH = 340,
-    minW = 380,
-    minH = 340,
-    maxW = 1520,  -- Up to 4x scale
-    maxH = 1360,
+    baseW = 340,
+    baseH = 346,
+    minW = 340,
+    minH = 346,
+    maxW = 1360,  -- Up to 4x scale
+    maxH = 1384,
     scale = 1.0,
+    -- Tooltip
+    tooltip = nil,
+    tooltipX = 0,
+    tooltipY = 0,
 }
 
 -- Store last dialog position for subsequent windows (progress, result, messages)
 local lastDialogX, lastDialogY, lastDialogW, lastDialogH = nil, nil, 380, 340
+
+-- Track auto-selected items and tracks for restore on cancel
+local autoSelectedItems = {}
+local autoSelectionTracks = {}  -- Tracks that were selected when we auto-selected items
+
+-- Store playback state to restore after processing
+local savedPlaybackState = 0  -- 0=stopped, 1=playing, 2=paused, 5=recording, 6=record paused
 
 -- Load settings from ExtState
 local function loadSettings()
@@ -308,6 +323,9 @@ local function loadSettings()
     local darkMode = reaper.GetExtState(EXT_SECTION, "darkMode")
     if darkMode ~= "" then SETTINGS.darkMode = (darkMode == "1") end
     updateTheme()
+
+    local parallelProcessing = reaper.GetExtState(EXT_SECTION, "parallelProcessing")
+    if parallelProcessing ~= "" then SETTINGS.parallelProcessing = (parallelProcessing == "1") end
 
     -- Load stem selections
     for i, stem in ipairs(STEMS) do
@@ -349,6 +367,7 @@ local function saveSettings()
     reaper.SetExtState(EXT_SECTION, "deleteSelection", SETTINGS.deleteSelection and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "deleteOriginalTrack", SETTINGS.deleteOriginalTrack and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "darkMode", SETTINGS.darkMode and "1" or "0", true)
+    reaper.SetExtState(EXT_SECTION, "parallelProcessing", SETTINGS.parallelProcessing and "1" or "0", true)
 
     for _, stem in ipairs(STEMS) do
         reaper.SetExtState(EXT_SECTION, "stem_" .. stem.name, stem.selected and "1" or "0", true)
@@ -368,11 +387,13 @@ end
 
 -- Preset functions
 local function applyPresetKaraoke()
-    -- Instrumental only (no vocals)
+    -- Instrumental only (no vocals) - includes Guitar+Piano in 6-stem mode
     STEMS[1].selected = false  -- Vocals OFF
     STEMS[2].selected = true   -- Drums
     STEMS[3].selected = true   -- Bass
     STEMS[4].selected = true   -- Other
+    if STEMS[5] then STEMS[5].selected = true end   -- Guitar (6-stem)
+    if STEMS[6] then STEMS[6].selected = true end   -- Piano (6-stem)
 end
 
 local function applyPresetInstrumental()
@@ -385,6 +406,8 @@ local function applyPresetDrumsOnly()
     STEMS[2].selected = true   -- Drums ONLY
     STEMS[3].selected = false  -- Bass
     STEMS[4].selected = false  -- Other
+    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
+    if STEMS[6] then STEMS[6].selected = false end  -- Piano
 end
 
 local function applyPresetVocalsOnly()
@@ -392,6 +415,46 @@ local function applyPresetVocalsOnly()
     STEMS[2].selected = false  -- Drums
     STEMS[3].selected = false  -- Bass
     STEMS[4].selected = false  -- Other
+    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
+    if STEMS[6] then STEMS[6].selected = false end  -- Piano
+end
+
+local function applyPresetBassOnly()
+    STEMS[1].selected = false  -- Vocals
+    STEMS[2].selected = false  -- Drums
+    STEMS[3].selected = true   -- Bass ONLY
+    STEMS[4].selected = false  -- Other
+    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
+    if STEMS[6] then STEMS[6].selected = false end  -- Piano
+end
+
+local function applyPresetOtherOnly()
+    STEMS[1].selected = false  -- Vocals
+    STEMS[2].selected = false  -- Drums
+    STEMS[3].selected = false  -- Bass
+    STEMS[4].selected = true   -- Other ONLY
+    if STEMS[5] then STEMS[5].selected = false end  -- Guitar
+    if STEMS[6] then STEMS[6].selected = false end  -- Piano
+end
+
+local function applyPresetGuitarOnly()
+    -- Only works with 6-stem model
+    STEMS[1].selected = false  -- Vocals
+    STEMS[2].selected = false  -- Drums
+    STEMS[3].selected = false  -- Bass
+    STEMS[4].selected = false  -- Other
+    STEMS[5].selected = true   -- Guitar ONLY
+    STEMS[6].selected = false  -- Piano
+end
+
+local function applyPresetPianoOnly()
+    -- Only works with 6-stem model
+    STEMS[1].selected = false  -- Vocals
+    STEMS[2].selected = false  -- Drums
+    STEMS[3].selected = false  -- Bass
+    STEMS[4].selected = false  -- Other
+    STEMS[5].selected = false  -- Guitar
+    STEMS[6].selected = true   -- Piano ONLY
 end
 
 local function applyPresetAll()
@@ -491,247 +554,1407 @@ local messageWindowState = {
     icon = "info",  -- "info", "warning", "error"
     wasMouseDown = false,
     startTime = 0,
+    monitorSelection = false,  -- When true, auto-close and open main dialog on selection
 }
 
+-- STEM colors for window borders (used by all windows)
+local STEM_BORDER_COLORS = {
+    {255, 100, 100},  -- Red (Vocals)
+    {100, 200, 255},  -- Blue (Drums)
+    {150, 100, 255},  -- Purple (Bass)
+    {100, 255, 150},  -- Green (Other)
+}
+
+-- Draw colored STEM gradient border at top of window
+local function drawStemBorder(x, y, w, thickness)
+    thickness = thickness or 3
+    for i = 0, w - 1 do
+        local colorIdx = math.floor(i / w * 4) + 1
+        colorIdx = math.min(4, math.max(1, colorIdx))
+        local c = STEM_BORDER_COLORS[colorIdx]
+        gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
+        gfx.line(x + i, y, x + i, y + thickness - 1)
+    end
+end
+
+-- Art Gallery state
+local artGalleryState = {
+    currentArt = 1,
+    wasMouseDown = false,
+    startTime = 0,
+    -- Camera controls for flying through gallery
+    zoom = 1.0,
+    panX = 0,
+    panY = 0,
+    targetZoom = 1.0,
+    targetPanX = 0,
+    targetPanY = 0,
+    isDragging = false,
+    dragStartX = 0,
+    dragStartY = 0,
+    dragStartPanX = 0,
+    dragStartPanY = 0,
+    lastMouseWheel = 0,
+}
+
+-- STEMperator Art Gallery - Spectacular animated visualizations
+-- Each piece is a fully animated graphical artwork
+local stemperatorArt = {
+    {
+        title = "The Prism of Sound",
+        subtitle = "White light becomes a spectrum of music",
+        description = "Audio enters as one, emerges as four distinct colors of sound",
+    },
+    {
+        title = "Neural Separation",
+        subtitle = "Deep learning dissects the mix",
+        description = "Watch as AI neurons fire and separate the tangled waveforms",
+    },
+    {
+        title = "The Four Elements",
+        subtitle = "Voice, Rhythm, Bass, Harmony",
+        description = "Like earth, water, fire and air - four essences of music",
+    },
+    {
+        title = "Waveform Surgery",
+        subtitle = "Precision extraction in real-time",
+        description = "Surgical separation of intertwined frequencies",
+    },
+    {
+        title = "The Sound Galaxy",
+        subtitle = "Stars of audio in cosmic dance",
+        description = "Each stem orbits the central mix like planets around a sun",
+    },
+    {
+        title = "Frequency Waterfall",
+        subtitle = "Cascading layers of sound",
+        description = "High frequencies fall through mid and low, each finding its home",
+    },
+    {
+        title = "The DNA Helix",
+        subtitle = "Unraveling the genetic code of music",
+        description = "Double helix of sound splits into its component strands",
+    },
+    {
+        title = "Particle Storm",
+        subtitle = "Audio atoms in motion",
+        description = "Millions of sound particles sorting themselves by type",
+    },
+    {
+        title = "The Mixing Desk",
+        subtitle = "Faders of the universe",
+        description = "Four channels rising from chaos into clarity",
+    },
+    {
+        title = "Stem Constellation",
+        subtitle = "Navigate by the stars of sound",
+        description = "Connect the dots to reveal the hidden patterns in music",
+    },
+}
+
+-- Forward declaration for showMessage
+local showMessage
+
+-- Draw Art Gallery window - SPECTACULAR GRAPHICAL ANIMATIONS
+local function drawArtGallery()
+    local w, h = gfx.w, gfx.h
+
+    -- Calculate scale for large window
+    local scale = math.min(w / 800, h / 600)
+    scale = math.max(0.5, math.min(4.0, scale))
+    local function PS(val) return math.floor(val * scale + 0.5) end
+
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+    local middleMouseDown = gfx.mouse_cap & 64 == 64  -- Middle mouse button
+    local time = os.clock() - artGalleryState.startTime
+
+    -- === CAMERA CONTROLS ===
+    -- Mouse wheel zoom (zoom towards mouse position)
+    local mouseWheel = gfx.mouse_wheel
+    if mouseWheel ~= artGalleryState.lastMouseWheel then
+        local delta = (mouseWheel - artGalleryState.lastMouseWheel) / 120
+        local zoomFactor = 1.15
+        if delta > 0 then
+            artGalleryState.targetZoom = math.min(5.0, artGalleryState.targetZoom * zoomFactor)
+        elseif delta < 0 then
+            artGalleryState.targetZoom = math.max(0.5, artGalleryState.targetZoom / zoomFactor)
+        end
+        -- Zoom towards mouse position
+        local zoomCenterX = mx - w/2
+        local zoomCenterY = my - h/2
+        if delta > 0 then
+            artGalleryState.targetPanX = artGalleryState.targetPanX - zoomCenterX * 0.15
+            artGalleryState.targetPanY = artGalleryState.targetPanY - zoomCenterY * 0.15
+        else
+            artGalleryState.targetPanX = artGalleryState.targetPanX + zoomCenterX * 0.1
+            artGalleryState.targetPanY = artGalleryState.targetPanY + zoomCenterY * 0.1
+        end
+        artGalleryState.lastMouseWheel = mouseWheel
+    end
+
+    -- Pan with right mouse button or middle mouse button
+    local rightMouseDown = gfx.mouse_cap & 2 == 2
+    if (rightMouseDown or middleMouseDown) and not artGalleryState.isDragging then
+        artGalleryState.isDragging = true
+        artGalleryState.dragStartX = mx
+        artGalleryState.dragStartY = my
+        artGalleryState.dragStartPanX = artGalleryState.targetPanX
+        artGalleryState.dragStartPanY = artGalleryState.targetPanY
+    elseif (rightMouseDown or middleMouseDown) and artGalleryState.isDragging then
+        artGalleryState.targetPanX = artGalleryState.dragStartPanX + (mx - artGalleryState.dragStartX)
+        artGalleryState.targetPanY = artGalleryState.dragStartPanY + (my - artGalleryState.dragStartY)
+    elseif not rightMouseDown and not middleMouseDown then
+        artGalleryState.isDragging = false
+    end
+
+    -- Smooth interpolation for camera movement
+    local smoothing = 0.15
+    artGalleryState.zoom = artGalleryState.zoom + (artGalleryState.targetZoom - artGalleryState.zoom) * smoothing
+    artGalleryState.panX = artGalleryState.panX + (artGalleryState.targetPanX - artGalleryState.panX) * smoothing
+    artGalleryState.panY = artGalleryState.panY + (artGalleryState.targetPanY - artGalleryState.panY) * smoothing
+
+    -- Double-click to reset camera
+    if mouseDown and not artGalleryState.wasMouseDown then
+        local now = os.clock()
+        if artGalleryState.lastClickTime and now - artGalleryState.lastClickTime < 0.3 then
+            -- Double click - reset camera
+            artGalleryState.targetZoom = 1.0
+            artGalleryState.targetPanX = 0
+            artGalleryState.targetPanY = 0
+        end
+        artGalleryState.lastClickTime = now
+    end
+
+    -- Apply zoom and pan to get effective center
+    local zoom = artGalleryState.zoom
+    local panX = artGalleryState.panX
+    local panY = artGalleryState.panY
+
+    -- Transform function: applies zoom and pan to coordinates relative to center
+    local function transform(x, y)
+        local cx, cy = w/2, h/2
+        local tx = cx + (x - cx) * zoom + panX
+        local ty = cy + (y - cy) * zoom + panY
+        return tx, ty
+    end
+
+    -- Scaled size with zoom
+    local function ZS(val)
+        return PS(val) * zoom
+    end
+
+    -- STEM colors
+    local stemColors = {
+        {1.0, 0.4, 0.4},   -- S = Vocals (red)
+        {0.4, 0.8, 1.0},   -- T = Drums (blue)
+        {0.6, 0.4, 1.0},   -- E = Bass (purple)
+        {0.4, 1.0, 0.6},   -- M = Other (green)
+    }
+
+    -- Background - subtle gradient effect
+    for y = 0, h do
+        local gradient = 0.08 + (y / h) * 0.04
+        if not SETTINGS.darkMode then gradient = 0.92 - (y / h) * 0.04 end
+        gfx.set(gradient, gradient, gradient + 0.02, 1)
+        gfx.line(0, y, w, y)
+    end
+
+    -- Colored STEM border at top
+    drawStemBorder(0, 0, w, 3)
+
+    -- Current art piece
+    local art = stemperatorArt[artGalleryState.currentArt]
+    -- Apply camera transform to center point
+    local centerX = w / 2 + panX
+    local centerY = h / 2 - PS(30) + panY
+
+    -- ============================================
+    -- DRAW THE SPECTACULAR ANIMATION FOR EACH ART
+    -- ============================================
+
+    if artGalleryState.currentArt == 1 then
+        -- === THE PRISM OF SOUND ===
+        -- White light enters a prism and splits into 4 colored beams
+
+        local prismX, prismY = centerX, centerY
+        local prismSize = PS(80)
+
+        -- Incoming white beam (animated)
+        local beamPulse = 0.7 + math.sin(time * 3) * 0.3
+        gfx.set(1, 1, 1, beamPulse)
+        for i = -2, 2 do
+            gfx.line(PS(50), prismY + i, prismX - prismSize/2, prismY + i)
+        end
+
+        -- Draw prism (triangle)
+        gfx.set(0.3, 0.3, 0.4, 0.8)
+        local p1x, p1y = prismX - prismSize/2, prismY + prismSize/2
+        local p2x, p2y = prismX + prismSize/2, prismY + prismSize/2
+        local p3x, p3y = prismX, prismY - prismSize/2
+        -- Fill prism
+        for y = p3y, p1y do
+            local progress = (y - p3y) / (p1y - p3y)
+            local halfWidth = progress * prismSize / 2
+            gfx.line(prismX - halfWidth, y, prismX + halfWidth, y)
+        end
+        -- Prism outline
+        gfx.set(0.5, 0.5, 0.6, 1)
+        gfx.line(p1x, p1y, p2x, p2y)
+        gfx.line(p2x, p2y, p3x, p3y)
+        gfx.line(p3x, p3y, p1x, p1y)
+
+        -- Outgoing colored beams (spreading)
+        local beamStartX = prismX + prismSize/2
+        local beamEndX = w - PS(50)
+        for i, color in ipairs(stemColors) do
+            local angle = (i - 2.5) * 0.15
+            local waveOffset = math.sin(time * 4 + i) * PS(5)
+            local alpha = 0.6 + math.sin(time * 3 + i * 0.5) * 0.4
+
+            gfx.set(color[1], color[2], color[3], alpha)
+            local endY = prismY + (beamEndX - beamStartX) * math.tan(angle) + waveOffset
+            for j = -2, 2 do
+                gfx.line(beamStartX, prismY + j, beamEndX, endY + j)
+            end
+
+            -- Stem label at end
+            gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+            local labels = {"V", "D", "B", "O"}
+            local lw = gfx.measurestr(labels[i])
+            gfx.x = beamEndX + PS(10)
+            gfx.y = endY - PS(7)
+            gfx.drawstr(labels[i])
+        end
+
+    elseif artGalleryState.currentArt == 2 then
+        -- === NEURAL SEPARATION ===
+        -- Neural network nodes firing and processing
+
+        local layers = {3, 6, 8, 6, 4}  -- neurons per layer
+        local layerSpacing = (w - PS(150)) / (#layers - 1)
+        local nodes = {}
+
+        -- Create and draw nodes
+        for l, count in ipairs(layers) do
+            nodes[l] = {}
+            local layerX = PS(75) + (l - 1) * layerSpacing
+            local startY = centerY - (count - 1) * PS(25)
+
+            for n = 1, count do
+                local nodeY = startY + (n - 1) * PS(50)
+                nodes[l][n] = {x = layerX, y = nodeY}
+
+                -- Node pulse animation
+                local pulsePhase = time * 3 + l * 0.5 + n * 0.3
+                local pulse = 0.5 + math.sin(pulsePhase) * 0.5
+                local radius = PS(12) + pulse * PS(5)
+
+                -- Glow effect
+                if l == #layers then
+                    local color = stemColors[n] or stemColors[1]
+                    gfx.set(color[1], color[2], color[3], 0.3 * pulse)
+                    gfx.circle(layerX, nodeY, radius + PS(8), 1, 1)
+                    gfx.set(color[1], color[2], color[3], 0.8)
+                else
+                    gfx.set(0.5, 0.6, 0.8, 0.3 * pulse)
+                    gfx.circle(layerX, nodeY, radius + PS(5), 1, 1)
+                    gfx.set(0.4, 0.5, 0.7, 0.8)
+                end
+                gfx.circle(layerX, nodeY, radius, 1, 1)
+
+                -- Draw connections to previous layer
+                if l > 1 then
+                    for pn = 1, #nodes[l-1] do
+                        local prevNode = nodes[l-1][pn]
+                        local connPulse = math.sin(time * 5 + l + n + pn) * 0.5 + 0.5
+                        gfx.set(0.3, 0.4, 0.6, 0.15 + connPulse * 0.2)
+                        gfx.line(prevNode.x, prevNode.y, layerX, nodeY)
+                    end
+                end
+            end
+        end
+
+        -- Draw labels for output
+        local labels = {"Vocals", "Drums", "Bass", "Other"}
+        gfx.setfont(1, "Arial", PS(11))
+        for i = 1, 4 do
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            local node = nodes[#layers][i]
+            gfx.x = node.x + PS(20)
+            gfx.y = node.y - PS(5)
+            gfx.drawstr(labels[i])
+        end
+
+    elseif artGalleryState.currentArt == 3 then
+        -- === THE FOUR ELEMENTS ===
+        -- Four orbiting elemental spheres
+
+        local orbitRadius = PS(120)
+        local sphereRadius = PS(40)
+
+        -- Central mix sphere
+        local centralPulse = 0.8 + math.sin(time * 2) * 0.2
+        gfx.set(0.9, 0.9, 0.9, centralPulse * 0.5)
+        gfx.circle(centerX, centerY, PS(50), 1, 1)
+        gfx.set(1, 1, 1, 0.8)
+        gfx.circle(centerX, centerY, PS(45), 0, 1)
+        gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+        gfx.set(0.3, 0.3, 0.3, 1)
+        local mixW = gfx.measurestr("MIX")
+        gfx.x = centerX - mixW/2
+        gfx.y = centerY - PS(6)
+        gfx.drawstr("MIX")
+
+        -- Four orbiting elements
+        local elements = {"Vocals", "Drums", "Bass", "Other"}
+        local symbols = {"~", "#", "=", "*"}
+        for i = 1, 4 do
+            local angle = time * 0.5 + (i - 1) * math.pi / 2
+            local wobble = math.sin(time * 3 + i) * PS(10)
+            local ex = centerX + math.cos(angle) * (orbitRadius + wobble)
+            local ey = centerY + math.sin(angle) * (orbitRadius + wobble)
+
+            -- Element glow
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.3)
+            gfx.circle(ex, ey, sphereRadius + PS(15), 1, 1)
+
+            -- Element sphere
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.9)
+            gfx.circle(ex, ey, sphereRadius, 1, 1)
+
+            -- Element symbol
+            gfx.set(1, 1, 1, 1)
+            gfx.setfont(1, "Arial", PS(24), string.byte('b'))
+            local symW = gfx.measurestr(symbols[i])
+            gfx.x = ex - symW/2
+            gfx.y = ey - PS(10)
+            gfx.drawstr(symbols[i])
+
+            -- Element name
+            gfx.setfont(1, "Arial", PS(10))
+            local nameW = gfx.measurestr(elements[i])
+            gfx.x = ex - nameW/2
+            gfx.y = ey + PS(12)
+            gfx.drawstr(elements[i])
+
+            -- Connection line to center
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.3)
+            gfx.line(centerX, centerY, ex, ey)
+        end
+
+    elseif artGalleryState.currentArt == 4 then
+        -- === WAVEFORM SURGERY ===
+        -- Scalpel cutting through waveform, separating colors
+
+        local waveW = w - PS(100)
+        local waveH = PS(150)
+        local waveStartX = PS(50)
+        local waveY = centerY
+
+        -- Draw mixed waveform (before cut)
+        local cutX = waveStartX + (time * 50) % waveW
+
+        -- Before cut - mixed gray
+        for x = waveStartX, math.min(cutX, waveStartX + waveW) do
+            local t = (x - waveStartX) / waveW * math.pi * 8
+            local amp = waveH/2 * (0.5 + math.sin(t * 0.5) * 0.3)
+            local y = waveY + math.sin(t + time * 2) * amp
+            gfx.set(0.5, 0.5, 0.5, 0.6)
+            gfx.line(x, waveY, x, y)
+        end
+
+        -- After cut - separated colored stems
+        if cutX > waveStartX then
+            for i, color in ipairs(stemColors) do
+                local offset = (i - 2.5) * PS(35)
+                gfx.set(color[1], color[2], color[3], 0.7)
+                for x = cutX, waveStartX + waveW do
+                    local t = (x - waveStartX) / waveW * math.pi * 8
+                    local amp = waveH/4 * (0.3 + math.sin(t * 0.3 + i) * 0.2)
+                    local separation = math.min(1, (x - cutX) / PS(100))
+                    local y = waveY + offset * separation + math.sin(t + time * 2 + i) * amp
+                    gfx.line(x, waveY + offset * separation, x, y)
+                end
+            end
+        end
+
+        -- Draw scalpel
+        local scalpelY = waveY - waveH/2 - PS(30) + math.sin(time * 8) * PS(5)
+        gfx.set(0.8, 0.8, 0.9, 1)
+        -- Blade
+        gfx.line(cutX - PS(5), scalpelY, cutX, scalpelY + PS(60))
+        gfx.line(cutX, scalpelY + PS(60), cutX + PS(5), scalpelY)
+        -- Handle
+        gfx.set(0.4, 0.3, 0.2, 1)
+        gfx.rect(cutX - PS(8), scalpelY - PS(25), PS(16), PS(25), 1)
+
+    elseif artGalleryState.currentArt == 5 then
+        -- === THE SOUND GALAXY ===
+        -- Stars orbiting a central sun, particles everywhere
+
+        -- Draw background stars
+        math.randomseed(42)  -- Fixed seed for consistent stars
+        for i = 1, 100 do
+            local sx = math.random() * w
+            local sy = math.random() * h
+            local twinkle = 0.3 + math.sin(time * 5 + i) * 0.3
+            gfx.set(1, 1, 1, twinkle)
+            gfx.circle(sx, sy, PS(1), 1, 1)
+        end
+
+        -- Central sun (the mix)
+        local sunPulse = 1 + math.sin(time * 2) * 0.1
+        -- Sun glow
+        for r = PS(60), PS(30), -PS(5) do
+            local alpha = (PS(60) - r) / PS(30) * 0.3
+            gfx.set(1, 0.9, 0.5, alpha)
+            gfx.circle(centerX, centerY, r * sunPulse, 1, 1)
+        end
+        gfx.set(1, 0.95, 0.7, 1)
+        gfx.circle(centerX, centerY, PS(30) * sunPulse, 1, 1)
+
+        -- Orbiting stem planets
+        local orbits = {PS(100), PS(150), PS(200), PS(250)}
+        local speeds = {0.8, 0.6, 0.4, 0.3}
+        local labels = {"V", "D", "B", "O"}
+        for i = 1, 4 do
+            local angle = time * speeds[i] + (i - 1) * math.pi / 2
+            local px = centerX + math.cos(angle) * orbits[i]
+            local py = centerY + math.sin(angle) * orbits[i] * 0.6  -- Elliptical
+
+            -- Orbit path
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.15)
+            for a = 0, math.pi * 2, 0.1 do
+                local ox = centerX + math.cos(a) * orbits[i]
+                local oy = centerY + math.sin(a) * orbits[i] * 0.6
+                gfx.circle(ox, oy, PS(1), 1, 1)
+            end
+
+            -- Planet glow
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.4)
+            gfx.circle(px, py, PS(25), 1, 1)
+            -- Planet
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            gfx.circle(px, py, PS(18), 1, 1)
+            -- Label
+            gfx.set(1, 1, 1, 1)
+            gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+            local lw = gfx.measurestr(labels[i])
+            gfx.x = px - lw/2
+            gfx.y = py - PS(6)
+            gfx.drawstr(labels[i])
+        end
+
+    elseif artGalleryState.currentArt == 6 then
+        -- === FREQUENCY WATERFALL ===
+        -- Cascading frequency bands falling and separating
+
+        local bandH = PS(30)
+        local bandW = w - PS(100)
+        local startX = PS(50)
+        local labels = {"HIGH - Vocals", "MID-HIGH - Drums", "MID-LOW - Bass", "LOW - Other"}
+
+        for i = 1, 4 do
+            local baseY = PS(80) + (i - 1) * PS(100)
+            local flowOffset = (time * 100 + i * 50) % bandW
+
+            -- Draw flowing frequency band
+            for x = 0, bandW do
+                local xPos = startX + x
+                local wavePhase = x / bandW * math.pi * 6 + time * 3
+                local amp = bandH/2 * (0.5 + math.sin(wavePhase + i) * 0.3)
+                local alpha = 0.3 + math.sin(wavePhase) * 0.2
+
+                -- Waterfall effect - brighter at "current" position
+                local distFromFlow = math.abs(x - flowOffset)
+                if distFromFlow < PS(50) then
+                    alpha = alpha + (1 - distFromFlow / PS(50)) * 0.5
+                end
+
+                gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], alpha)
+                gfx.line(xPos, baseY - amp, xPos, baseY + amp)
+            end
+
+            -- Frequency label
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            gfx.setfont(1, "Arial", PS(11), string.byte('b'))
+            gfx.x = startX + bandW + PS(10)
+            gfx.y = baseY - PS(5)
+            gfx.drawstr(labels[i])
+
+            -- Droplets falling
+            for d = 1, 5 do
+                local dropX = startX + ((time * 80 + d * 100 + i * 30) % bandW)
+                local dropY = baseY + (time * 50 + d * 20) % PS(80)
+                local dropAlpha = 1 - (dropY - baseY) / PS(80)
+                gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], dropAlpha * 0.6)
+                gfx.circle(dropX, dropY, PS(3), 1, 1)
+            end
+        end
+
+    elseif artGalleryState.currentArt == 7 then
+        -- === THE DNA HELIX ===
+        -- Double helix unraveling into 4 strands
+
+        local helixLength = w - PS(150)
+        local helixStartX = PS(75)
+        local helixRadius = PS(40)
+
+        -- Draw the double helix splitting into 4
+        for x = 0, helixLength do
+            local progress = x / helixLength
+            local phase = x / PS(30) + time * 2
+            local splitFactor = math.min(1, progress * 2)  -- Start splitting at 50%
+
+            if progress < 0.5 then
+                -- Before split - double helix
+                local y1 = centerY + math.sin(phase) * helixRadius
+                local y2 = centerY - math.sin(phase) * helixRadius
+                local alpha = 0.5 + math.cos(phase) * 0.3
+
+                gfx.set(0.8, 0.8, 0.8, alpha)
+                gfx.circle(helixStartX + x, y1, PS(4), 1, 1)
+                gfx.circle(helixStartX + x, y2, PS(4), 1, 1)
+
+                -- Connection bars
+                if math.floor(phase) % 2 == 0 then
+                    gfx.set(0.6, 0.6, 0.6, 0.4)
+                    gfx.line(helixStartX + x, y1, helixStartX + x, y2)
+                end
+            else
+                -- After split - 4 strands separating
+                for i = 1, 4 do
+                    local separation = (progress - 0.5) * 2  -- 0 to 1
+                    local targetOffset = (i - 2.5) * PS(50)
+                    local yOffset = targetOffset * separation
+                    local y = centerY + yOffset + math.sin(phase + i * 0.5) * helixRadius * (1 - separation * 0.5)
+                    local alpha = 0.5 + math.cos(phase + i) * 0.3
+
+                    gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], alpha)
+                    gfx.circle(helixStartX + x, y, PS(4), 1, 1)
+                end
+            end
+        end
+
+        -- Labels at the end
+        local labels = {"Vocals", "Drums", "Bass", "Other"}
+        gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+        for i = 1, 4 do
+            local yOffset = (i - 2.5) * PS(50)
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            gfx.x = helixStartX + helixLength + PS(15)
+            gfx.y = centerY + yOffset - PS(6)
+            gfx.drawstr(labels[i])
+        end
+
+    elseif artGalleryState.currentArt == 8 then
+        -- === PARTICLE STORM ===
+        -- Thousands of particles sorting by color
+
+        -- Particle system with sorting animation
+        math.randomseed(12345)
+        local numParticles = 200
+
+        for p = 1, numParticles do
+            local colorIdx = ((p - 1) % 4) + 1
+            local baseX = math.random() * w
+            local baseY = math.random() * h
+
+            -- Calculate target position (sorted by stem)
+            local targetX = PS(100) + (colorIdx - 1) * (w - PS(200)) / 3
+            local targetY = PS(100) + math.random() * (h - PS(250))
+
+            -- Interpolate based on time (cycling)
+            local sortPhase = (math.sin(time * 0.5) + 1) / 2  -- 0 to 1 cycling
+            local px = baseX + (targetX - baseX) * sortPhase
+            local py = baseY + (targetY - baseY) * sortPhase
+
+            -- Add some turbulence
+            px = px + math.sin(time * 3 + p) * PS(10) * (1 - sortPhase)
+            py = py + math.cos(time * 3 + p * 0.7) * PS(10) * (1 - sortPhase)
+
+            -- Draw particle
+            local alpha = 0.4 + math.sin(time * 5 + p) * 0.2
+            gfx.set(stemColors[colorIdx][1], stemColors[colorIdx][2], stemColors[colorIdx][3], alpha)
+            gfx.circle(px, py, PS(3), 1, 1)
+        end
+
+        -- Labels when sorted
+        local labels = {"Vocals", "Drums", "Bass", "Other"}
+        gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+        for i = 1, 4 do
+            local labelX = PS(100) + (i - 1) * (w - PS(200)) / 3
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            local lw = gfx.measurestr(labels[i])
+            gfx.x = labelX - lw/2
+            gfx.y = h - PS(100)
+            gfx.drawstr(labels[i])
+        end
+
+    elseif artGalleryState.currentArt == 9 then
+        -- === THE MIXING DESK ===
+        -- Four animated faders rising from darkness
+
+        local faderW = PS(60)
+        local faderH = PS(250)
+        local faderSpacing = (w - PS(200) - faderW * 4) / 3
+        local startX = PS(100)
+        local baseY = h - PS(120)
+
+        local labels = {"VOC", "DRM", "BAS", "OTH"}
+        local fullLabels = {"Vocals", "Drums", "Bass", "Other"}
+
+        for i = 1, 4 do
+            local faderX = startX + (i - 1) * (faderW + faderSpacing)
+
+            -- Fader channel strip background
+            gfx.set(0.15, 0.15, 0.18, 1)
+            gfx.rect(faderX - PS(10), baseY - faderH - PS(40), faderW + PS(20), faderH + PS(80), 1)
+
+            -- Fader track
+            gfx.set(0.1, 0.1, 0.12, 1)
+            gfx.rect(faderX + faderW/2 - PS(4), baseY - faderH, PS(8), faderH, 1)
+
+            -- Animated fader level
+            local level = 0.3 + math.sin(time * 2 + i * 0.8) * 0.3 + math.sin(time * 5 + i * 1.5) * 0.15
+            local faderY = baseY - level * faderH
+
+            -- Level meter (behind fader)
+            local meterLevel = level + math.sin(time * 8 + i) * 0.1
+            for y = baseY, baseY - meterLevel * faderH, -PS(3) do
+                local meterProgress = (baseY - y) / faderH
+                local r = stemColors[i][1] * (0.3 + meterProgress * 0.7)
+                local g = stemColors[i][2] * (0.3 + meterProgress * 0.7)
+                local b = stemColors[i][3] * (0.3 + meterProgress * 0.7)
+                gfx.set(r, g, b, 0.8)
+                gfx.rect(faderX + PS(5), y, faderW - PS(10), PS(2), 1)
+            end
+
+            -- Fader knob
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            gfx.rect(faderX, faderY - PS(10), faderW, PS(20), 1)
+            gfx.set(1, 1, 1, 0.5)
+            gfx.line(faderX + PS(5), faderY, faderX + faderW - PS(5), faderY)
+
+            -- Channel label
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+            local labelW = gfx.measurestr(labels[i])
+            gfx.x = faderX + faderW/2 - labelW/2
+            gfx.y = baseY + PS(15)
+            gfx.drawstr(labels[i])
+        end
+
+    elseif artGalleryState.currentArt == 10 then
+        -- === STEM CONSTELLATION ===
+        -- Stars connected forming STEM pattern
+
+        -- Draw constellation background
+        math.randomseed(999)
+        for i = 1, 80 do
+            local sx = math.random() * w
+            local sy = math.random() * h
+            local twinkle = 0.2 + math.sin(time * 4 + i * 0.5) * 0.2
+            gfx.set(1, 1, 1, twinkle)
+            gfx.circle(sx, sy, PS(1), 1, 1)
+        end
+
+        -- STEM constellation points
+        local constellations = {
+            -- S shape
+            {points = {{0.15, 0.3}, {0.25, 0.25}, {0.15, 0.4}, {0.25, 0.55}, {0.15, 0.5}}, color = 1},
+            -- T shape
+            {points = {{0.35, 0.25}, {0.45, 0.25}, {0.55, 0.25}, {0.45, 0.35}, {0.45, 0.55}}, color = 2},
+            -- E shape
+            {points = {{0.65, 0.25}, {0.75, 0.25}, {0.65, 0.4}, {0.72, 0.4}, {0.65, 0.55}, {0.75, 0.55}}, color = 3},
+            -- M shape
+            {points = {{0.8, 0.55}, {0.8, 0.25}, {0.87, 0.4}, {0.94, 0.25}, {0.94, 0.55}}, color = 4},
+        }
+
+        for _, const in ipairs(constellations) do
+            local color = stemColors[const.color]
+            local points = const.points
+
+            -- Draw connections
+            gfx.set(color[1], color[2], color[3], 0.4)
+            for i = 1, #points - 1 do
+                local x1 = points[i][1] * w
+                local y1 = points[i][2] * h
+                local x2 = points[i+1][1] * w
+                local y2 = points[i+1][2] * h
+                gfx.line(x1, y1, x2, y2)
+            end
+
+            -- Draw stars with pulse
+            for i, point in ipairs(points) do
+                local px = point[1] * w
+                local py = point[2] * h
+                local pulse = 1 + math.sin(time * 3 + i + const.color) * 0.3
+
+                -- Star glow
+                gfx.set(color[1], color[2], color[3], 0.3 * pulse)
+                gfx.circle(px, py, PS(12) * pulse, 1, 1)
+
+                -- Star core
+                gfx.set(color[1], color[2], color[3], 0.9)
+                gfx.circle(px, py, PS(5) * pulse, 1, 1)
+
+                -- Star center
+                gfx.set(1, 1, 1, 1)
+                gfx.circle(px, py, PS(2), 1, 1)
+            end
+        end
+
+        -- Legend
+        local labels = {"Vocals", "Drums", "Bass", "Other"}
+        gfx.setfont(1, "Arial", PS(10))
+        for i = 1, 4 do
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+            gfx.circle(PS(30), h - PS(90) + (i-1) * PS(18), PS(5), 1, 1)
+            gfx.x = PS(45)
+            gfx.y = h - PS(95) + (i-1) * PS(18)
+            gfx.drawstr(labels[i])
+        end
+    end
+
+    -- ============================================
+    -- UI ELEMENTS (title, navigation, etc.)
+    -- ============================================
+
+    -- Title bar background
+    gfx.set(0, 0, 0, 0.5)
+    gfx.rect(0, 0, w, PS(50), 1)
+
+    -- flarkAUDIO logo (top left)
+    gfx.setfont(1, "Arial", PS(11))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", PS(11), string.byte('b'))
+    local audioPart = "AUDIO"
+    gfx.set(1.0, 0.5, 0.1, 0.7)
+    gfx.setfont(1, "Arial", PS(11))
+    gfx.x = PS(15)
+    gfx.y = PS(15)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", PS(11), string.byte('b'))
+    gfx.x = PS(15) + flarkPartW
+    gfx.y = PS(15)
+    gfx.drawstr(audioPart)
+
+    -- Art title (center top)
+    gfx.setfont(1, "Arial", PS(18), string.byte('b'))
+    local titlePulse = 0.8 + math.sin(time * 2) * 0.2
+    gfx.set(1, 1, 1, titlePulse)
+    local titleW = gfx.measurestr(art.title)
+    gfx.x = (w - titleW) / 2
+    gfx.y = PS(12)
+    gfx.drawstr(art.title)
+
+    -- Subtitle
+    if art.subtitle then
+        gfx.setfont(1, "Arial", PS(11))
+        gfx.set(0.7, 0.7, 0.7, 1)
+        local subW = gfx.measurestr(art.subtitle)
+        gfx.x = (w - subW) / 2
+        gfx.y = PS(35)
+        gfx.drawstr(art.subtitle)
+    end
+
+    -- Navigation dots
+    local dotSpacing = PS(15)
+    local dotsStartX = (w - (#stemperatorArt - 1) * dotSpacing) / 2
+    for i = 1, #stemperatorArt do
+        local dotX = dotsStartX + (i - 1) * dotSpacing
+        local dotY = h - PS(45)
+        if i == artGalleryState.currentArt then
+            local dotPulse = 1 + math.sin(time * 4) * 0.3
+            gfx.set(1.0, 0.5, 0.1, 1)
+            gfx.circle(dotX, dotY, PS(5) * dotPulse, 1, 1)
+        else
+            gfx.set(0.5, 0.5, 0.5, 0.6)
+            gfx.circle(dotX, dotY, PS(4), 1, 1)
+        end
+    end
+
+    -- Navigation arrows
+    local arrowY = h - PS(45)
+    local prevX = PS(50)
+    local nextX = w - PS(50)
+    local arrowSize = PS(15)
+
+    local prevHover = math.abs(mx - prevX) < arrowSize * 2 and math.abs(my - arrowY) < arrowSize * 2
+    local nextHover = math.abs(mx - nextX) < arrowSize * 2 and math.abs(my - arrowY) < arrowSize * 2
+
+    -- Left arrow
+    gfx.set(stemColors[1][1], stemColors[1][2], stemColors[1][3], prevHover and 1 or 0.6)
+    gfx.line(prevX + arrowSize, arrowY - arrowSize, prevX - arrowSize, arrowY)
+    gfx.line(prevX - arrowSize, arrowY, prevX + arrowSize, arrowY + arrowSize)
+
+    -- Right arrow
+    gfx.set(stemColors[4][1], stemColors[4][2], stemColors[4][3], nextHover and 1 or 0.6)
+    gfx.line(nextX - arrowSize, arrowY - arrowSize, nextX + arrowSize, arrowY)
+    gfx.line(nextX + arrowSize, arrowY, nextX - arrowSize, arrowY + arrowSize)
+
+    -- Close button (bottom center)
+    local btnW = PS(80)
+    local btnH = PS(26)
+    local btnX = (w - btnW) / 2
+    local btnY = h - PS(80)
+    local closeHover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
+
+    if closeHover then
+        gfx.set(0.9, 0.3, 0.3, 1)
+    else
+        gfx.set(0.6, 0.2, 0.2, 0.9)
+    end
+    -- Rounded button
+    for i = 0, btnH - 1 do
+        local radius = btnH / 2
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(math.max(0, radius * radius - (radius - i) * (radius - i)))
+        elseif i > btnH - radius then
+            inset = radius - math.sqrt(math.max(0, radius * radius - (i - (btnH - radius)) * (i - (btnH - radius))))
+        end
+        gfx.line(btnX + inset, btnY + i, btnX + btnW - inset, btnY + i)
+    end
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", PS(12), string.byte('b'))
+    local closeText = "Back"
+    local closeTextW = gfx.measurestr(closeText)
+    gfx.x = btnX + (btnW - closeTextW) / 2
+    gfx.y = btnY + (btnH - PS(12)) / 2
+    gfx.drawstr(closeText)
+
+    -- Zoom indicator (top right)
+    if zoom ~= 1.0 or panX ~= 0 or panY ~= 0 then
+        gfx.set(1, 1, 1, 0.7)
+        gfx.setfont(1, "Arial", PS(10))
+        local zoomText = string.format("%.0f%%", zoom * 100)
+        local zoomTextW = gfx.measurestr(zoomText)
+        gfx.x = w - zoomTextW - PS(15)
+        gfx.y = PS(15)
+        gfx.drawstr(zoomText)
+
+        -- Reset hint
+        gfx.set(0.7, 0.7, 0.7, 0.8)
+        gfx.setfont(1, "Arial", PS(8))
+        local resetHint = "Double-click to reset"
+        local resetHintW = gfx.measurestr(resetHint)
+        gfx.x = w - resetHintW - PS(15)
+        gfx.y = PS(28)
+        gfx.drawstr(resetHint)
+    end
+
+    -- Hint (updated with camera controls)
+    gfx.set(0.5, 0.5, 0.5, 0.8)
+    gfx.setfont(1, "Arial", PS(9))
+    local hint = "< > Navigate | Scroll to zoom | Right-drag to pan | ESC to close"
+    local hintW = gfx.measurestr(hint)
+    gfx.x = (w - hintW) / 2
+    gfx.y = h - PS(15)
+    gfx.drawstr(hint)
+
+    gfx.update()
+
+    -- Helper to reset camera when changing art
+    local function resetCamera()
+        artGalleryState.targetZoom = 1.0
+        artGalleryState.targetPanX = 0
+        artGalleryState.targetPanY = 0
+    end
+
+    -- Handle clicks
+    if mouseDown and not artGalleryState.wasMouseDown then
+        if prevHover then
+            artGalleryState.currentArt = artGalleryState.currentArt - 1
+            if artGalleryState.currentArt < 1 then artGalleryState.currentArt = #stemperatorArt end
+            resetCamera()
+        elseif nextHover then
+            artGalleryState.currentArt = artGalleryState.currentArt + 1
+            if artGalleryState.currentArt > #stemperatorArt then artGalleryState.currentArt = 1 end
+            resetCamera()
+        elseif closeHover then
+            return "close"
+        end
+    end
+    artGalleryState.wasMouseDown = mouseDown
+
+    -- Keyboard navigation
+    local char = gfx.getchar()
+    if char == -1 or char == 27 then
+        return "close"
+    elseif char == 1818584692 or char == 44 or char == 60 then
+        artGalleryState.currentArt = artGalleryState.currentArt - 1
+        if artGalleryState.currentArt < 1 then artGalleryState.currentArt = #stemperatorArt end
+        resetCamera()
+    elseif char == 1919379572 or char == 46 or char == 62 then
+        artGalleryState.currentArt = artGalleryState.currentArt + 1
+        if artGalleryState.currentArt > #stemperatorArt then artGalleryState.currentArt = 1 end
+        resetCamera()
+    elseif char == 114 or char == 82 then  -- R key to reset camera
+        resetCamera()
+    end
+
+    return nil
+end
+
+-- Art Gallery window loop
+local function artGalleryLoop()
+    local result = drawArtGallery()
+    if result == "close" then
+        gfx.quit()
+        -- Reopen Start message
+        showMessage("Start", "Please select a media item, track, or make a time selection to separate.", "info", true)
+        return
+    end
+    reaper.defer(artGalleryLoop)
+end
+
+-- Show Art Gallery
+local function showArtGallery()
+    loadSettings()
+    updateTheme()
+
+    artGalleryState.currentArt = 1
+    artGalleryState.wasMouseDown = false
+    artGalleryState.startTime = os.clock()
+    -- Reset camera
+    artGalleryState.zoom = 1.0
+    artGalleryState.panX = 0
+    artGalleryState.panY = 0
+    artGalleryState.targetZoom = 1.0
+    artGalleryState.targetPanX = 0
+    artGalleryState.targetPanY = 0
+    artGalleryState.isDragging = false
+    artGalleryState.lastMouseWheel = 0
+
+    -- Use same size and position as last dialog
+    local winW = lastDialogW or 380
+    local winH = lastDialogH or 340
+    local winX, winY
+
+    if lastDialogX and lastDialogY then
+        winX = lastDialogX
+        winY = lastDialogY
+    else
+        -- Fallback to mouse position
+        local mouseX, mouseY = reaper.GetMousePosition()
+        winX = mouseX - winW / 2
+        winY = mouseY - winH / 2
+    end
+
+    gfx.init("STEMperator Art Gallery", winW, winH, 0, winX, winY)
+    reaper.defer(artGalleryLoop)
+end
+
 -- Draw message window (replaces reaper.MB for proper positioning)
+-- Styled to match main app window
 local function drawMessageWindow()
     local w, h = gfx.w, gfx.h
-    local time = os.clock()
-    local elapsed = time - messageWindowState.startTime
 
     -- Calculate scale based on window size
     local scale = math.min(w / 380, h / 340)
     scale = math.max(0.5, math.min(4.0, scale))
     local function PS(val) return math.floor(val * scale + 0.5) end
 
-    -- Determine icon colors for theming
-    local iconColor, bgTint
-    if messageWindowState.icon == "error" then
-        iconColor = {0.8, 0.2, 0.2}
-        bgTint = {0.05, 0, 0}
-    elseif messageWindowState.icon == "warning" then
-        iconColor = {0.9, 0.7, 0.1}
-        bgTint = {0.03, 0.02, 0}
-    else
-        iconColor = {0.3, 0.5, 0.8}
-        bgTint = {0, 0.01, 0.03}
-    end
-
-    -- Gradient background based on theme
-    local bgPulse = 0.01 * math.sin(time * 0.5)
-    for y = 0, h do
-        local t = y / h
-        local baseR = THEME.bgGradientTop[1] * (1-t) + THEME.bgGradientBottom[1] * t
-        local baseG = THEME.bgGradientTop[2] * (1-t) + THEME.bgGradientBottom[2] * t
-        local baseB = THEME.bgGradientTop[3] * (1-t) + THEME.bgGradientBottom[3] * t
-        gfx.set(baseR + bgTint[1] + bgPulse, baseG + bgTint[2] + bgPulse, baseB + bgTint[3] + bgPulse, 1)
-        gfx.line(0, y, w, y)
-    end
-
-    -- Subtle animated particles in background
-    for i = 1, 8 do
-        local px = (w * 0.2) + (i * w * 0.1) + math.sin(time * 0.5 + i) * 20
-        local py = h * 0.3 + math.cos(time * 0.3 + i * 0.5) * 30
-        local alpha = 0.05 + 0.03 * math.sin(time * 2 + i)
-        gfx.set(iconColor[1], iconColor[2], iconColor[3], alpha)
-        gfx.circle(px, py, PS(3 + math.sin(time + i) * 2), 1, 1)
-    end
-
-    -- Icon with animated glow
-    local iconX = w / 2
-    local iconY = PS(60)
-    local iconR = PS(28)
-    local pulseScale = 1 + 0.03 * math.sin(time * 3)
-    local glowPulse = 0.2 + 0.15 * math.sin(time * 2)
-
-    -- Outer glow
-    gfx.set(iconColor[1], iconColor[2], iconColor[3], glowPulse * 0.4)
-    gfx.circle(iconX, iconY, iconR * 1.4 * pulseScale, 1, 1)
-
-    if messageWindowState.icon == "error" then
-        -- Red circle with animated X
-        for r = iconR, 0, -1 do
-            local gradientFactor = 0.5 + 0.5 * (r / iconR)
-            gfx.set(iconColor[1] * gradientFactor, iconColor[2] * gradientFactor, iconColor[3] * gradientFactor, 1)
-            gfx.circle(iconX, iconY, r * pulseScale, 1, 1)
-        end
-
-        -- Animated X (shake effect on appear)
-        local shake = math.max(0, (0.3 - elapsed) * 5) * math.sin(elapsed * 50)
-        gfx.set(1, 1, 1, 1)
-        local xOff = shake
-        gfx.line(iconX - PS(10) + xOff, iconY - PS(10), iconX + PS(10) + xOff, iconY + PS(10))
-        gfx.line(iconX - PS(10) + xOff, iconY + PS(10), iconX + PS(10) + xOff, iconY - PS(10))
-        gfx.line(iconX - PS(9) + xOff, iconY - PS(10), iconX + PS(11) + xOff, iconY + PS(10))
-        gfx.line(iconX - PS(9) + xOff, iconY + PS(10), iconX + PS(11) + xOff, iconY - PS(10))
-
-    elseif messageWindowState.icon == "warning" then
-        -- Yellow triangle with ! (animated)
-        local bounce = math.max(0, (0.5 - elapsed) * 3) * math.abs(math.sin(elapsed * 8))
-        local triH = PS(48)
-        local triW = PS(52)
-        local triY = iconY - bounce * 5
-
-        -- Triangle glow
-        gfx.set(iconColor[1], iconColor[2], iconColor[3], 0.3)
-        gfx.triangle(iconX, triY - triH/2 - 3, iconX - triW/2 - 3, triY + triH/2 + 3, iconX + triW/2 + 3, triY + triH/2 + 3)
-
-        -- Main triangle with gradient
-        for i = 0, PS(4) do
-            local fade = 1 - i / PS(8)
-            gfx.set(iconColor[1] * fade, iconColor[2] * fade, iconColor[3] * fade, 1)
-            gfx.triangle(iconX, triY - triH/2 + i, iconX - triW/2 + i, triY + triH/2, iconX + triW/2 - i, triY + triH/2)
-        end
-
-        -- Exclamation mark
-        gfx.set(0.1, 0.1, 0.1, 1)
-        gfx.setfont(1, "Arial", PS(26), string.byte('b'))
-        local exW = gfx.measurestr("!")
-        gfx.x = iconX - exW/2
-        gfx.y = triY - PS(5)
-        gfx.drawstr("!")
-
-    else
-        -- Info: Blue circle with i (pulsing)
-        for r = iconR, 0, -1 do
-            local gradientFactor = 0.4 + 0.6 * (r / iconR)
-            gfx.set(iconColor[1] * gradientFactor, iconColor[2] * gradientFactor, iconColor[3] * gradientFactor, 1)
-            gfx.circle(iconX, iconY, r * pulseScale, 1, 1)
-        end
-
-        gfx.set(1, 1, 1, 1)
-        gfx.setfont(1, "Arial", PS(24), string.byte('b'))
-        local iW = gfx.measurestr("i")
-        gfx.x = iconX - iW/2
-        gfx.y = iconY - PS(10)
-        gfx.drawstr("i")
-    end
-
-    -- Title with glow effect
-    gfx.setfont(1, "Arial", PS(18), string.byte('b'))
-    local titleW = gfx.measurestr(messageWindowState.title)
-
-    -- Title glow
-    local titleGlow = 0.2 + 0.1 * math.sin(time * 2)
-    gfx.set(iconColor[1], iconColor[2], iconColor[3], titleGlow)
-    gfx.x = (w - titleW) / 2 + 1
-    gfx.y = PS(105) + 1
-    gfx.drawstr(messageWindowState.title)
-
-    -- Main title
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.x = (w - titleW) / 2
-    gfx.y = PS(105)
-    gfx.drawstr(messageWindowState.title)
-
-    -- Message box background
-    local msgBgAlpha = SETTINGS.darkMode and 0.7 or 0.15
-    gfx.set(THEME.checkbox[1], THEME.checkbox[2], THEME.checkbox[3], msgBgAlpha)
-    gfx.rect(PS(25), PS(135), w - PS(50), PS(80), 1)
-
-    -- Message (multi-line support)
-    gfx.set(THEME.text[1] * 0.85, THEME.text[2] * 0.85, THEME.text[3] * 0.85, 1)
-    gfx.setfont(1, "Arial", PS(12))
-    local msgY = PS(150)
-    local maxLineWidth = w - PS(60)
-
-    -- Simple word wrap
-    local words = {}
-    for word in messageWindowState.message:gmatch("%S+") do
-        table.insert(words, word)
-    end
-
-    local currentLine = ""
-    local lineCount = 0
-    for i, word in ipairs(words) do
-        local testLine = currentLine == "" and word or (currentLine .. " " .. word)
-        if gfx.measurestr(testLine) > maxLineWidth then
-            local lineW = gfx.measurestr(currentLine)
-            gfx.x = (w - lineW) / 2
-            gfx.y = msgY
-            gfx.drawstr(currentLine)
-            msgY = msgY + PS(16)
-            lineCount = lineCount + 1
-            currentLine = word
-        else
-            currentLine = testLine
-        end
-    end
-    if currentLine ~= "" then
-        local lineW = gfx.measurestr(currentLine)
-        gfx.x = (w - lineW) / 2
-        gfx.y = msgY
-        gfx.drawstr(currentLine)
-    end
-
-    -- OK button with hover effect
-    local btnW = PS(100)
-    local btnH = PS(32)
-    local btnX = (w - btnW) / 2
-    local btnY = h - PS(70)
-
     local mx, my = gfx.mouse_x, gfx.mouse_y
-    local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
     local mouseDown = gfx.mouse_cap & 1 == 1
 
-    -- Button glow on hover
-    if hover then
-        gfx.set(iconColor[1], iconColor[2], iconColor[3], 0.3)
-        gfx.rect(btnX - 3, btnY - 3, btnW + 6, btnH + 6, 1)
-        gfx.set(iconColor[1] * 0.8 + 0.2, iconColor[2] * 0.8 + 0.2, iconColor[3] * 0.8 + 0.2, 1)
+    -- STEM colors
+    local stemColors = {
+        {255/255, 100/255, 100/255},  -- S = Vocals (red)
+        {100/255, 200/255, 255/255},  -- T = Drums (blue)
+        {150/255, 100/255, 255/255},  -- E = Bass (purple)
+        {100/255, 255/255, 150/255},  -- M = Other (green)
+    }
+
+    -- Solid background
+    gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+    gfx.rect(0, 0, w, h, 1)
+
+    -- Colored STEM border at top
+    drawStemBorder(0, 0, w, 3)
+
+    -- Theme toggle button (sun/moon icon, top right)
+    local themeSize = PS(20)
+    local themeX = w - themeSize - PS(10)
+    local themeY = PS(8)
+    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
+
+    if SETTINGS.darkMode then
+        gfx.set(0.7, 0.7, 0.5, themeHover and 1 or 0.6)
+        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
+        gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
     else
-        gfx.set(iconColor[1] * 0.6 + 0.1, iconColor[2] * 0.6 + 0.1, iconColor[3] * 0.6 + 0.1, 1)
+        gfx.set(0.9, 0.7, 0.2, themeHover and 1 or 0.8)
+        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
+        for i = 0, 7 do
+            local angle = i * math.pi / 4
+            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
+            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
+            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
+            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
+            gfx.line(x1, y1, x2, y2)
+        end
     end
-    gfx.rect(btnX, btnY, btnW, btnH, 1)
 
-    -- Button border
-    gfx.set(iconColor[1] * 0.8 + 0.2, iconColor[2] * 0.8 + 0.2, iconColor[3] * 0.8 + 0.2, 0.8)
-    gfx.rect(btnX, btnY, btnW, btnH, 0)
+    if themeHover and mouseDown and not messageWindowState.wasMouseDown then
+        SETTINGS.darkMode = not SETTINGS.darkMode
+        updateTheme()
+        saveSettings()
+    end
 
-    -- Button text
-    gfx.set(1, 1, 1, 1)
+    -- Track tooltip
+    local tooltipText = nil
+    local tooltipX, tooltipY = 0, 0
+
+    if themeHover then
+        tooltipText = SETTINGS.darkMode and "Switch to light mode" or "Switch to dark mode"
+        tooltipX = mx + PS(10)
+        tooltipY = my + PS(15)
+    end
+
+    local time = os.clock() - messageWindowState.startTime
+
+    -- === STEMperator Logo (large, centered, ABOVE waveform) ===
+    gfx.setfont(1, "Arial", PS(28), string.byte('b'))
+    local logoY = PS(35)
+
+    local logoLetters = {"S", "T", "E", "M", "p", "e", "r", "a", "t", "o", "r"}
+    local logoWidths = {}
+    local logoTotalWidth = 0
+    for i, letter in ipairs(logoLetters) do
+        local lw = gfx.measurestr(letter)
+        logoWidths[i] = lw
+        logoTotalWidth = logoTotalWidth + lw
+    end
+    local logoX = (w - logoTotalWidth) / 2
+
+    -- Draw each letter with subtle animation
+    for i, letter in ipairs(logoLetters) do
+        local yOffset = math.sin(time * 3 + i * 0.5) * PS(2)
+        if i <= 4 then
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+        else
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 0.9)
+        end
+        gfx.x = logoX
+        gfx.y = logoY + yOffset
+        gfx.drawstr(letter)
+        logoX = logoX + logoWidths[i]
+    end
+
+    -- === Tagline (ABOVE waveform) ===
+    gfx.setfont(1, "Arial", PS(11))
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local tagline = "AI-Powered Stem Separation"
+    local tagW = gfx.measurestr(tagline)
+    gfx.x = (w - tagW) / 2
+    gfx.y = PS(68)
+    gfx.drawstr(tagline)
+
+    -- === Animated waveform visualization (BELOW tagline) ===
+    local waveY = PS(95)
+    local waveH = PS(50)
+    local waveW = w - PS(60)
+    local waveX = PS(30)
+
+    -- Draw 4 layered waveforms (one for each stem color)
+    for stemIdx = 1, 4 do
+        local color = stemColors[stemIdx]
+        gfx.set(color[1], color[2], color[3], 0.4)
+
+        local freq = 2 + stemIdx * 0.7
+        local amp = waveH / 4 * (1 - (stemIdx - 1) * 0.15)
+        local phase = time * 2 + stemIdx * 1.5
+
+        local prevX, prevY
+        for i = 0, waveW do
+            local x = waveX + i
+            local t = i / waveW * math.pi * freq + phase
+            local y = waveY + waveH/2 + math.sin(t) * amp * math.sin(i / waveW * math.pi)
+
+            if prevX then
+                gfx.line(prevX, prevY, x, y)
+            end
+            prevX, prevY = x, y
+        end
+    end
+
+    -- === Four stem icons ===
+    local iconY = PS(170)
+    local iconSpacing = PS(70)
+    local iconStartX = (w - iconSpacing * 3) / 2
+    local stemNames = {"Vocals", "Drums", "Bass", "Other"}
+    local stemSymbols = {"V", "D", "B", "O"}
+
+    for i = 1, 4 do
+        local ix = iconStartX + (i-1) * iconSpacing
+        local pulseScale = 1 + math.sin(time * 4 + i) * 0.1
+
+        -- Colored circle
+        gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 0.8)
+        gfx.circle(ix, iconY, PS(16) * pulseScale, 1, 1)
+
+        -- Letter
+        gfx.set(1, 1, 1, 1)
+        gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+        local symW = gfx.measurestr(stemSymbols[i])
+        gfx.x = ix - symW/2
+        gfx.y = iconY - PS(6)
+        gfx.drawstr(stemSymbols[i])
+
+        -- Label
+        gfx.setfont(1, "Arial", PS(9))
+        gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+        local nameW = gfx.measurestr(stemNames[i])
+        gfx.x = ix - nameW/2
+        gfx.y = iconY + PS(20)
+        gfx.drawstr(stemNames[i])
+    end
+
+    -- === Message (animated, bold, pulsing) ===
     gfx.setfont(1, "Arial", PS(14), string.byte('b'))
-    local okText = "OK"
-    local okW = gfx.measurestr(okText)
-    gfx.x = btnX + (btnW - okW) / 2
-    gfx.y = btnY + (btnH - PS(14)) / 2
-    gfx.drawstr(okText)
 
-    -- Hint
+    -- Pulsing effect: oscillate between dim and bright
+    local pulseAlpha = 0.6 + math.sin(time * 3) * 0.4
+
+    -- Gradient through STEM colors
+    local colorPhase = (time * 0.5) % 4
+    local colorIdx = math.floor(colorPhase) + 1
+    local nextColorIdx = (colorIdx % 4) + 1
+    local colorBlend = colorPhase % 1
+
+    local r = stemColors[colorIdx][1] * (1 - colorBlend) + stemColors[nextColorIdx][1] * colorBlend
+    local g = stemColors[colorIdx][2] * (1 - colorBlend) + stemColors[nextColorIdx][2] * colorBlend
+    local b = stemColors[colorIdx][3] * (1 - colorBlend) + stemColors[nextColorIdx][3] * colorBlend
+
+    gfx.set(r, g, b, pulseAlpha)
+
+    local msg = "Select audio to begin separation"
+    local msgW = gfx.measurestr(msg)
+    gfx.x = (w - msgW) / 2
+    gfx.y = PS(240)
+    gfx.drawstr(msg)
+
+    -- Subtle underline animation (growing/shrinking)
+    local underlineW = msgW * (0.5 + math.sin(time * 2) * 0.3)
+    local underlineX = (w - underlineW) / 2
+    gfx.set(r, g, b, pulseAlpha * 0.5)
+    gfx.line(underlineX, PS(258), underlineX + underlineW, PS(258))
+
+    -- Art Gallery link (clickable text)
+    local artLinkY = h - PS(70)
+    gfx.setfont(1, "Arial", PS(10))
+    local artLinkText = "View Art Gallery"
+    local artLinkW = gfx.measurestr(artLinkText)
+    local artLinkX = (w - artLinkW) / 2
+    local artLinkHover = mx >= artLinkX and mx <= artLinkX + artLinkW and my >= artLinkY and my <= artLinkY + PS(14)
+
+    if artLinkHover then
+        gfx.set(1.0, 0.6, 0.2, 1)  -- Brighter orange on hover
+    else
+        gfx.set(1.0, 0.5, 0.1, 0.8)  -- Orange
+    end
+    gfx.x = artLinkX
+    gfx.y = artLinkY
+    gfx.drawstr(artLinkText)
+    -- Underline
+    gfx.line(artLinkX, artLinkY + PS(12), artLinkX + artLinkW, artLinkY + PS(12))
+
+    -- Art link tooltip
+    if artLinkHover and not tooltipText then
+        tooltipText = "10 spectacular animated visualizations of STEMperator"
+        tooltipX = mx + PS(10)
+        tooltipY = my + PS(15)
+    end
+
+    -- Close button (red, rounded pill style)
+    local btnW = PS(70)
+    local btnH = PS(20)
+    local btnX = (w - btnW) / 2
+    local btnY = h - PS(40)
+
+    local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
+
+    -- Red button color
+    if hover then
+        gfx.set(0.9, 0.3, 0.3, 1)
+    else
+        gfx.set(0.7, 0.2, 0.2, 1)
+    end
+    -- Draw rounded (pill-shaped) button
+    for i = 0, btnH - 1 do
+        local radius = btnH / 2
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
+        elseif i > btnH - radius then
+            inset = radius - math.sqrt(radius * radius - (i - (btnH - radius)) * (i - (btnH - radius)))
+        end
+        gfx.line(btnX + inset, btnY + i, btnX + btnW - inset, btnY + i)
+    end
+
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", PS(13), string.byte('b'))
+    local closeText = "Close"
+    local closeW = gfx.measurestr(closeText)
+    gfx.x = btnX + (btnW - closeW) / 2
+    gfx.y = btnY + (btnH - PS(13)) / 2
+    gfx.drawstr(closeText)
+
+    -- Close button tooltip
+    if hover and not tooltipText then
+        tooltipText = "Exit STEMperator"
+        tooltipX = mx + PS(10)
+        tooltipY = my + PS(15)
+    end
+
+    -- Hint at very bottom edge
     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
     gfx.setfont(1, "Arial", PS(9))
-    local hint = "Press Enter, Space, or ESC to close"
+    local hint = "Enter / Space / ESC"
     local hintW = gfx.measurestr(hint)
     gfx.x = (w - hintW) / 2
-    gfx.y = h - PS(25)
+    gfx.y = h - PS(12)
     gfx.drawstr(hint)
+
+    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
+    gfx.setfont(1, "Arial", PS(10))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    local audioPart = "AUDIO"
+    local audioPartW = gfx.measurestr(audioPart)
+    local totalLogoW = flarkPartW + audioPartW
+    local logoStartX = (w - totalLogoW) / 2
+    -- Orange text, 50% translucent
+    gfx.set(1.0, 0.5, 0.1, 0.5)
+    gfx.setfont(1, "Arial", PS(10))
+    gfx.x = logoStartX
+    gfx.y = PS(3)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    gfx.x = logoStartX + flarkPartW
+    gfx.y = PS(3)
+    gfx.drawstr(audioPart)
+
+    -- Draw tooltip if active
+    if tooltipText then
+        gfx.setfont(1, "Arial", PS(11))
+        local padding = PS(6)
+        local tw = gfx.measurestr(tooltipText)
+        local th = PS(14)
+        local tx = tooltipX
+        local ty = tooltipY
+
+        -- Keep tooltip on screen
+        if tx + tw + padding * 2 > w then
+            tx = w - tw - padding * 2 - PS(5)
+        end
+        if ty + th + padding * 2 > h then
+            ty = tooltipY - th - padding * 2 - PS(20)
+        end
+
+        -- Background
+        gfx.set(0.15, 0.15, 0.18, 0.95)
+        gfx.rect(tx, ty, tw + padding * 2, th + padding * 2, 1)
+        -- Border
+        gfx.set(0.4, 0.4, 0.45, 1)
+        gfx.rect(tx, ty, tw + padding * 2, th + padding * 2, 0)
+        -- Text
+        gfx.set(0.9, 0.9, 0.9, 1)
+        gfx.x = tx + padding
+        gfx.y = ty + padding
+        gfx.drawstr(tooltipText)
+    end
 
     gfx.update()
 
-    -- Check for click on OK button
-    if hover and mouseDown and not messageWindowState.wasMouseDown then
-        return true  -- Close
+    -- Handle clicks
+    if mouseDown and not messageWindowState.wasMouseDown then
+        if artLinkHover then
+            return "artgallery"
+        elseif hover then
+            return "close"
+        end
     end
 
     messageWindowState.wasMouseDown = mouseDown
 
     local char = gfx.getchar()
     if char == -1 or char == 27 or char == 13 or char == 32 then
-        return true  -- Close
+        return "close"
     end
 
-    return false  -- Keep open
+    return nil
 end
+
+-- Check if there's any valid selection for processing
+local function hasAnySelection()
+    -- Check for time selection
+    if hasTimeSelection() then return true end
+    -- Check for selected items
+    if reaper.CountSelectedMediaItems(0) > 0 then return true end
+    -- Check for selected tracks with items
+    local selTrackCount = reaper.CountSelectedTracks(0)
+    if selTrackCount > 0 then
+        for t = 0, selTrackCount - 1 do
+            local track = reaper.GetSelectedTrack(0, t)
+            if reaper.CountTrackMediaItems(track) > 0 then
+                return true
+            end
+        end
+    end
+    return false
+end
+
+-- Forward declaration for main (defined later)
+local main
 
 -- Message window loop
 local function messageWindowLoop()
-    if drawMessageWindow() then
+    -- Save window position for next time
+    if reaper.JS_Window_Find then
+        local hwnd = reaper.JS_Window_Find("Stemperator", true)
+        if hwnd then
+            local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
+            if retval then
+                lastDialogX = left
+                lastDialogY = top
+                lastDialogW = right - left
+                lastDialogH = bottom - top
+            end
+        end
+    end
+
+    -- If monitoring for selection, check if user made a selection
+    if messageWindowState.monitorSelection and hasAnySelection() then
         gfx.quit()
+        messageWindowState.monitorSelection = false
+        -- Re-run main to open the dialog with the new selection
+        reaper.defer(function() main() end)
+        return
+    end
+
+    local result = drawMessageWindow()
+    if result == "close" then
+        gfx.quit()
+        messageWindowState.monitorSelection = false
         -- Return focus to REAPER main window
         local mainHwnd = reaper.GetMainHwnd()
         if mainHwnd then
             reaper.JS_Window_SetFocus(mainHwnd)
         end
+        return
+    elseif result == "artgallery" then
+        gfx.quit()
+        messageWindowState.monitorSelection = false
+        -- Open Art Gallery
+        showArtGallery()
         return
     end
     reaper.defer(messageWindowLoop)
@@ -739,12 +1962,18 @@ end
 
 -- Show a styled message window (replacement for reaper.MB)
 -- icon: "info", "warning", "error"
-local function showMessage(title, message, icon)
+-- monitorSelection: if true, window will auto-close and open main dialog when user makes a selection
+showMessage = function(title, message, icon, monitorSelection)
+    -- Load settings to get current theme
+    loadSettings()
+    updateTheme()
+
     messageWindowState.title = title or "Stemperator"
     messageWindowState.message = message or ""
     messageWindowState.icon = icon or "info"
     messageWindowState.wasMouseDown = false
     messageWindowState.startTime = os.clock()
+    messageWindowState.monitorSelection = monitorSelection or false
 
     -- Use same size as main dialog
     local winW = lastDialogW or 380
@@ -814,67 +2043,442 @@ local function makeWindowResizable()
     return true
 end
 
--- Draw a checkbox and return if it was clicked (scaled)
-local function drawCheckbox(x, y, checked, label, r, g, b)
-    local boxSize = S(18)
-    local clicked = false
-    local labelWidth = gfx.measurestr(label)
-    local totalWidth = boxSize + S(8) + labelWidth
+-- Tooltip helper: set tooltip if mouse is in area
+local function setTooltip(x, y, w, h, text)
     local mx, my = gfx.mouse_x, gfx.mouse_y
-    local mouseDown = gfx.mouse_cap & 1 == 1
-
-    if mouseDown and mx >= x and mx <= x + totalWidth and my >= y and my <= y + boxSize then
-        if not GUI.wasMouseDown then clicked = true end
+    if mx >= x and mx <= x + w and my >= y and my <= y + h then
+        GUI.tooltip = text
+        GUI.tooltipX = mx + S(10)
+        GUI.tooltipY = my + S(15)
     end
-
-    if checked then
-        gfx.set(THEME.checkboxChecked[1], THEME.checkboxChecked[2], THEME.checkboxChecked[3], 1)
-    else
-        gfx.set(THEME.checkbox[1], THEME.checkbox[2], THEME.checkbox[3], 1)
-    end
-    gfx.rect(x, y, boxSize, boxSize, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(x, y, boxSize, boxSize, 0)
-
-    if checked then
-        gfx.set(1, 1, 1, 1)
-        local s = GUI.scale
-        gfx.line(x + S(3), y + S(9), x + S(7), y + S(13))
-        gfx.line(x + S(7), y + S(13), x + S(14), y + S(4))
-        gfx.line(x + S(3), y + S(10), x + S(7), y + S(14))
-        gfx.line(x + S(7), y + S(14), x + S(14), y + S(5))
-    end
-
-    gfx.set(r/255, g/255, b/255, 1)
-    gfx.x = x + boxSize + S(8)
-    gfx.y = y + S(2)
-    gfx.drawstr(label)
-
-    return clicked
 end
 
--- Draw a radio button and return if it was clicked (scaled)
-local function drawRadio(x, y, selected, label)
-    local radius = S(8)
+-- Set a rich tooltip for STEMperate button with colored output stems and target
+local function setRichTooltip(x, y, w, h)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    if mx >= x and mx <= x + w and my >= y and my <= y + h then
+        GUI.richTooltip = true
+        GUI.tooltipX = mx + S(10)
+        GUI.tooltipY = my + S(15)
+    end
+end
+
+-- Set a tooltip with keyboard shortcut highlighted in color
+-- shortcut: the key (e.g. "K", "V", "1")
+-- color: RGB table for the shortcut color (e.g. {255, 100, 100})
+local function setTooltipWithShortcut(x, y, w, h, text, shortcut, color)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    if mx >= x and mx <= x + w and my >= y and my <= y + h then
+        GUI.shortcutTooltip = {
+            text = text,
+            shortcut = shortcut,
+            color = color or {255, 200, 100}  -- Default orange/yellow
+        }
+        GUI.tooltipX = mx + S(10)
+        GUI.tooltipY = my + S(15)
+    end
+end
+
+-- Draw the current tooltip (call at end of frame)
+local function drawTooltip()
+    -- Rich tooltip for STEMperate button
+    if GUI.richTooltip then
+        gfx.setfont(1, "Arial", S(10))
+        local padding = S(8)
+        local lineH = S(14)
+
+        -- Use global STEM border colors
+        local titleColors = STEM_BORDER_COLORS
+
+        -- Build selected stems list (use actual STEMS data)
+        local selectedStems = {}
+        for i, stem in ipairs(STEMS) do
+            if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
+                table.insert(selectedStems, {name = stem.name, color = stem.color})
+            end
+        end
+
+        -- Get target info
+        local targetText = "New tracks"
+        if SETTINGS.deleteOriginal then targetText = "Delete original"
+        elseif SETTINGS.deleteSelection then targetText = "Delete selection"
+        elseif SETTINGS.muteOriginal then targetText = "Mute original"
+        elseif SETTINGS.muteSelection then targetText = "Mute selection"
+        end
+        if SETTINGS.createFolder then targetText = targetText .. " + folder" end
+
+        -- Count selection info
+        local selTrackCount = reaper.CountSelectedTracks(0)
+        local selItemCount = 0
+        for i = 0, selTrackCount - 1 do
+            local track = reaper.GetSelectedTrack(0, i)
+            selItemCount = selItemCount + reaper.CountTrackMediaItems(track)
+        end
+
+        -- Calculate tooltip size (5 lines: header, stems, selection, takes, target)
+        local th = padding * 2 + lineH * 5 + S(10)
+
+        -- Fixed label column width
+        local labelColW = S(65)
+
+        -- Measure line widths (value column only)
+        gfx.setfont(1, "Arial", S(10), string.byte('b'))
+        local stemsValueW = 0
+        for i, stem in ipairs(selectedStems) do
+            stemsValueW = stemsValueW + gfx.measurestr(stem.name)
+            if i < #selectedStems then stemsValueW = stemsValueW + gfx.measurestr(" ") end
+        end
+
+        gfx.setfont(1, "Arial", S(10))
+        local selectionText = string.format("%d track%s, %d item%s",
+            selTrackCount, selTrackCount == 1 and "" or "s",
+            selItemCount, selItemCount == 1 and "" or "s")
+        local selValueW = gfx.measurestr(selectionText)
+        local takesText = SETTINGS.createTakes and "Yes" or "No"
+        local takesValueW = gfx.measurestr(takesText)
+        local targetValueW = gfx.measurestr(targetText)
+
+        -- Measure header
+        gfx.setfont(1, "Arial", S(11), string.byte('b'))
+        local headerText = "Click to STEMperate"
+        local headerLineW = gfx.measurestr(headerText)
+
+        -- Calculate max value width needed
+        local maxValueW = math.max(stemsValueW, selValueW, takesValueW, targetValueW)
+        -- Total width = padding + label column + value column + padding
+        local tw = math.max(headerLineW + padding * 2, padding + labelColW + maxValueW + padding)
+
+        local tx = GUI.tooltipX
+        local ty = GUI.tooltipY
+
+        -- Keep tooltip on screen
+        if tx + tw > gfx.w then tx = gfx.w - tw - S(5) end
+        if ty + th > gfx.h then ty = GUI.tooltipY - th - S(20) end
+
+        -- Background (theme-aware)
+        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        gfx.rect(tx, ty, tw, th, 1)
+
+        -- Colored top border (stem colors gradient)
+        for i = 0, tw - 1 do
+            local colorIdx = math.floor(i / tw * 4) + 1
+            colorIdx = math.min(4, math.max(1, colorIdx))
+            local c = titleColors[colorIdx]
+            gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
+            gfx.line(tx + i, ty, tx + i, ty + 2)
+        end
+
+        -- Border (theme-aware)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.rect(tx, ty, tw, th, 0)
+
+        local labelX = tx + padding
+        local valueX = tx + padding + labelColW
+        local currentY = ty + padding + S(2)
+
+        -- Header: Click to STEMperate (centered, colored letters)
+        gfx.setfont(1, "Arial", S(11), string.byte('b'))
+        local headerW = gfx.measurestr(headerText)
+        local headerX = tx + (tw - headerW) / 2
+        gfx.x = headerX
+        gfx.y = currentY
+
+        -- Draw "Click to " in theme text color
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.drawstr("Click to ")
+        -- Draw "STEM" with colored letters
+        local stemLetters = {"S", "T", "E", "M"}
+        for i, letter in ipairs(stemLetters) do
+            local c = titleColors[i]
+            gfx.set(c[1]/255, c[2]/255, c[3]/255, 1)
+            gfx.drawstr(letter)
+        end
+        -- Draw "perate" in theme text color
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.drawstr("perate")
+        currentY = currentY + lineH + S(4)
+
+        -- Line 1: Stems (colored)
+        gfx.setfont(1, "Arial", S(10))
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+        gfx.x = labelX
+        gfx.y = currentY
+        gfx.drawstr("Stems")
+
+        gfx.setfont(1, "Arial", S(10), string.byte('b'))
+        local stemX = valueX
+        for i, stem in ipairs(selectedStems) do
+            gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
+            gfx.x = stemX
+            gfx.y = currentY
+            gfx.drawstr(stem.name)
+            stemX = stemX + gfx.measurestr(stem.name)
+            if i < #selectedStems then
+                gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+                gfx.x = stemX
+                gfx.drawstr(" ")
+                stemX = stemX + gfx.measurestr(" ")
+            end
+        end
+        currentY = currentY + lineH
+
+        -- Line 2: Selection
+        gfx.setfont(1, "Arial", S(10))
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+        gfx.x = labelX
+        gfx.y = currentY
+        gfx.drawstr("Selection")
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = valueX
+        gfx.drawstr(selectionText)
+        currentY = currentY + lineH
+
+        -- Line 3: Takes
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+        gfx.x = labelX
+        gfx.y = currentY
+        gfx.drawstr("Takes")
+        if SETTINGS.createTakes then
+            gfx.set(0.4, 0.9, 0.5, 1)  -- Green for yes
+        else
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)  -- Dim for no
+        end
+        gfx.x = valueX
+        gfx.drawstr(takesText)
+        currentY = currentY + lineH
+
+        -- Line 4: Target
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+        gfx.x = labelX
+        gfx.y = currentY
+        gfx.drawstr("Target")
+        gfx.set(1.0, 0.6, 0.2, 1)  -- Orange for target (stays colored)
+        gfx.x = valueX
+        gfx.drawstr(targetText)
+
+        GUI.richTooltip = nil
+    elseif GUI.tooltip then
+        -- Use global STEM border colors
+        local tooltipColors = STEM_BORDER_COLORS
+
+        gfx.setfont(1, "Arial", S(11))
+        local padding = S(8)
+        local tw = gfx.measurestr(GUI.tooltip) + padding * 2
+        local th = S(18) + padding * 2
+        local tx = GUI.tooltipX
+        local ty = GUI.tooltipY
+
+        -- Keep tooltip on screen
+        if tx + tw > gfx.w then
+            tx = gfx.w - tw - S(5)
+        end
+        if ty + th > gfx.h then
+            ty = GUI.tooltipY - th - S(20)
+        end
+
+        -- Background (theme-aware)
+        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        gfx.rect(tx, ty, tw, th, 1)
+
+        -- Colored top border (stem colors gradient)
+        for i = 0, tw - 1 do
+            local colorIdx = math.floor(i / tw * 4) + 1
+            colorIdx = math.min(4, math.max(1, colorIdx))
+            local c = tooltipColors[colorIdx]
+            gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
+            gfx.line(tx + i, ty, tx + i, ty + 2)
+        end
+
+        -- Border (theme-aware)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.rect(tx, ty, tw, th, 0)
+
+        -- Text (theme-aware)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = tx + padding
+        gfx.y = ty + padding + S(2)
+        gfx.drawstr(GUI.tooltip)
+
+        -- Clear tooltip for next frame
+        GUI.tooltip = nil
+    elseif GUI.shortcutTooltip then
+        -- Tooltip with colored keyboard shortcut
+        local tooltipColors = STEM_BORDER_COLORS
+        local st = GUI.shortcutTooltip
+
+        gfx.setfont(1, "Arial", S(11))
+        local padding = S(8)
+        local textW = gfx.measurestr(st.text)
+        local shortcutW = gfx.measurestr(" [" .. st.shortcut .. "]")
+        local tw = textW + shortcutW + padding * 2
+        local th = S(18) + padding * 2
+        local tx = GUI.tooltipX
+        local ty = GUI.tooltipY
+
+        -- Keep tooltip on screen
+        if tx + tw > gfx.w then
+            tx = gfx.w - tw - S(5)
+        end
+        if ty + th > gfx.h then
+            ty = GUI.tooltipY - th - S(20)
+        end
+
+        -- Background (theme-aware)
+        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 0.98)
+        gfx.rect(tx, ty, tw, th, 1)
+
+        -- Colored top border (stem colors gradient)
+        for i = 0, tw - 1 do
+            local colorIdx = math.floor(i / tw * 4) + 1
+            colorIdx = math.min(4, math.max(1, colorIdx))
+            local c = tooltipColors[colorIdx]
+            gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.9)
+            gfx.line(tx + i, ty, tx + i, ty + 2)
+        end
+
+        -- Border (theme-aware)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.rect(tx, ty, tw, th, 0)
+
+        -- Text (theme-aware)
+        gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+        gfx.x = tx + padding
+        gfx.y = ty + padding + S(2)
+        gfx.drawstr(st.text .. " ")
+
+        -- Shortcut in color
+        gfx.set(st.color[1]/255, st.color[2]/255, st.color[3]/255, 1)
+        gfx.drawstr("[" .. st.shortcut .. "]")
+
+        -- Clear tooltip for next frame
+        GUI.shortcutTooltip = nil
+    end
+end
+
+-- Draw a checkbox as a toggle box (like stems/presets) and return if it was clicked (scaled)
+-- Optional fixedW parameter to set a fixed width for all boxes
+local function drawCheckbox(x, y, checked, label, r, g, b, fixedW)
     local clicked = false
+    local labelWidth = gfx.measurestr(label)
+    local boxW = fixedW or (labelWidth + S(16))
+    local boxH = S(20)
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local mouseDown = gfx.mouse_cap & 1 == 1
+    local hover = mx >= x and mx <= x + boxW and my >= y and my <= y + boxH
 
-    if mouseDown and mx >= x and mx <= x + S(150) and my >= y and my <= y + radius * 2 then
+    if mouseDown and hover then
         if not GUI.wasMouseDown then clicked = true end
     end
 
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.circle(x + radius, y + radius, radius, 0, 1)
+    -- Background color based on checked state
+    if checked then
+        local mult = hover and 1.2 or 1.0
+        gfx.set(r/255 * mult, g/255 * mult, b/255 * mult, 1)
+    else
+        local brightness = hover and 0.35 or 0.25
+        gfx.set(brightness, brightness, brightness, 1)
+    end
+    gfx.rect(x, y, boxW, boxH, 1)
 
-    if selected then
-        gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
-        gfx.circle(x + radius, y + radius, radius - S(3), 1, 1)
+    -- Border
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(x, y, boxW, boxH, 0)
+
+    -- Text - white for contrast
+    gfx.set(1, 1, 1, 1)
+    local tw = gfx.measurestr(label)
+    gfx.x = x + (boxW - tw) / 2
+    gfx.y = y + (boxH - S(14)) / 2
+    gfx.drawstr(label)
+
+    return clicked, boxW
+end
+
+-- Draw a radio button as a toggle box (like stems/presets) and return if it was clicked (scaled)
+-- Optional fixedW parameter to set a fixed width for all boxes
+local function drawRadio(x, y, selected, label, color, fixedW)
+    local clicked = false
+    local labelWidth = gfx.measurestr(label)
+    local boxW = fixedW or (labelWidth + S(16))
+    local boxH = S(20)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+    local hover = mx >= x and mx <= x + boxW and my >= y and my <= y + boxH
+
+    if mouseDown and hover then
+        if not GUI.wasMouseDown then clicked = true end
     end
 
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.x = x + radius * 2 + S(8)
-    gfx.y = y + S(2)
+    -- Use provided color or default accent color
+    local r, g, b = THEME.accent[1] * 255, THEME.accent[2] * 255, THEME.accent[3] * 255
+    if color then
+        r, g, b = color[1], color[2], color[3]
+    end
+
+    -- Background color based on selected state
+    if selected then
+        local mult = hover and 1.2 or 1.0
+        gfx.set(r/255 * mult, g/255 * mult, b/255 * mult, 1)
+    else
+        local brightness = hover and 0.35 or 0.25
+        gfx.set(brightness, brightness, brightness, 1)
+    end
+    gfx.rect(x, y, boxW, boxH, 1)
+
+    -- Border
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(x, y, boxW, boxH, 0)
+
+    -- Text - white for contrast
+    gfx.set(1, 1, 1, 1)
+    local tw = gfx.measurestr(label)
+    gfx.x = x + (boxW - tw) / 2
+    gfx.y = y + (boxH - S(14)) / 2
+    gfx.drawstr(label)
+
+    return clicked, boxW
+end
+
+-- Draw a toggle button (like stems) with selected state
+local function drawToggleButton(x, y, w, h, label, selected, color)
+    local clicked = false
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+    local hover = mx >= x and mx <= x + w and my >= y and my <= y + h
+
+    if mouseDown and hover then
+        if not GUI.wasMouseDown then clicked = true end
+    end
+
+    -- Background color based on selected state
+    if selected then
+        -- Selected: use the stem color
+        local mult = hover and 1.2 or 1.0
+        gfx.set(color[1]/255 * mult, color[2]/255 * mult, color[3]/255 * mult, 1)
+    else
+        -- Not selected: dim gray
+        local brightness = hover and 0.35 or 0.25
+        gfx.set(brightness, brightness, brightness, 1)
+    end
+    gfx.rect(x, y, w, h, 1)
+
+    -- Border - brighter when selected
+    if selected then
+        gfx.set(1, 1, 1, 0.5)
+    else
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    end
+    gfx.rect(x, y, w, h, 0)
+
+    -- Button text
+    if selected then
+        gfx.set(1, 1, 1, 1)
+    else
+        gfx.set(0.6, 0.6, 0.6, 1)
+    end
+    local tw = gfx.measurestr(label)
+    gfx.x = x + (w - tw) / 2
+    gfx.y = y + (h - S(14)) / 2
     gfx.drawstr(label)
 
     return clicked
@@ -911,9 +2515,18 @@ local function drawButton(x, y, w, h, label, isDefault, color)
             end
         end
     end
-    gfx.rect(x, y, w, h, 1)
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(x, y, w, h, 0)
+
+    -- Draw rounded (pill-shaped) button background
+    for i = 0, h - 1 do
+        local radius = h / 2
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
+        elseif i > h - radius then
+            inset = radius - math.sqrt(radius * radius - (i - (h - radius)) * (i - (h - radius)))
+        end
+        gfx.line(x + inset, y + i, x + w - inset, y + i)
+    end
 
     -- Button text - always white for good contrast on colored buttons
     gfx.set(1, 1, 1, 1)
@@ -930,17 +2543,53 @@ local function dialogLoop()
     -- Try to make window resizable (needs to be called after window is visible)
     makeWindowResizable()
 
+    -- Save window position continuously (for when window loses focus)
+    if reaper.JS_Window_GetRect then
+        local hwnd = reaper.JS_Window_Find(SCRIPT_NAME, true)
+        if hwnd then
+            local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
+            if retval then
+                lastDialogX = left
+                lastDialogY = top
+                lastDialogW = right - left
+                lastDialogH = bottom - top
+            end
+        end
+    end
+
+    -- Check if settings changed and save periodically (throttled to avoid excessive writes)
+    if not GUI.lastSaveTime then GUI.lastSaveTime = 0 end
+    local now = os.clock()
+    if now - GUI.lastSaveTime > 0.5 then  -- Save at most every 0.5 seconds
+        saveSettings()
+        GUI.lastSaveTime = now
+    end
+
     -- Update scale based on current window size
     updateScale()
+
+    -- Check if selection was lost - switch to "Start" message
+    if not hasAnySelection() then
+        gfx.quit()
+        -- Clear auto-selection tracking (user already deselected everything)
+        autoSelectedItems = {}
+        autoSelectionTracks = {}
+        -- Show "Start" with monitoring enabled
+        showMessage("Start", "Please select a media item, track, or make a time selection to separate.", "info", true)
+        return
+    end
 
     -- Background
     gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
     gfx.rect(0, 0, gfx.w, gfx.h, 1)
 
-    -- Theme toggle button (sun/moon icon in top right)
-    local themeX = gfx.w - S(32)
-    local themeY = S(8)
+    -- Colored STEM border at top
+    drawStemBorder(0, 0, gfx.w, 3)
+
+    -- Theme toggle button (sun/moon icon, aligned with column 4)
     local themeSize = S(20)
+    local themeX = S(260) + S(70) - themeSize  -- col4X + outBoxW - themeSize (right-aligned)
+    local themeY = S(8)
     local mx, my = gfx.mouse_x, gfx.mouse_y
     local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
     local mouseDown = gfx.mouse_cap & 1 == 1
@@ -967,66 +2616,196 @@ local function dialogLoop()
         end
     end
 
-    -- Handle theme toggle click
-    if themeHover and mouseDown and not GUI.wasMouseDown then
-        SETTINGS.darkMode = not SETTINGS.darkMode
-        updateTheme()
+    -- Handle theme toggle click and tooltip
+    if themeHover then
+        local themeTip = SETTINGS.darkMode and "Switch to light mode" or "Switch to dark mode"
+        setTooltip(themeX, themeY, themeSize, themeSize, themeTip)
+        if mouseDown and not GUI.wasMouseDown then
+            SETTINGS.darkMode = not SETTINGS.darkMode
+            updateTheme()
+            saveSettings()  -- Persist theme change
+        end
     end
 
-    -- Title
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.setfont(1, "Arial", S(18), string.byte('b'))
-    gfx.x = S(20)
-    gfx.y = S(12)
-    gfx.drawstr("Stemperator - AI Stem Separation")
+    -- === LOGO: Centered "STEMperator" at top ===
+    gfx.setfont(1, "Arial", S(24), string.byte('b'))  -- Bold, large font
+    local logoY = S(12)
+
+    -- Calculate total width of logo text to center it
+    local logoLetters = {"S", "T", "E", "M", "p", "e", "r", "a", "t", "o", "r"}
+    local logoWidths = {}
+    local logoTotalWidth = 0
+    for i, letter in ipairs(logoLetters) do
+        local w, _ = gfx.measurestr(letter)
+        logoWidths[i] = w
+        logoTotalWidth = logoTotalWidth + w
+    end
+    local logoX = (gfx.w - logoTotalWidth) / 2
+
+    -- STEM colors (Vocals red, Drums blue, Bass purple, Other green)
+    local logoColors = {
+        {255/255, 100/255, 100/255},  -- S = Vocals (red)
+        {100/255, 200/255, 255/255},  -- T = Drums (blue)
+        {150/255, 100/255, 255/255},  -- E = Bass (purple)
+        {100/255, 255/255, 150/255},  -- M = Other (green)
+    }
+
+    -- Store logo start position for click detection
+    local logoStartX = logoX
+
+    -- Draw each letter
+    for i, letter in ipairs(logoLetters) do
+        if i <= 4 then
+            -- Colored STEM letters
+            gfx.set(logoColors[i][1], logoColors[i][2], logoColors[i][3], 1)
+        else
+            -- White/gray "perator"
+            gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 0.9)
+        end
+        gfx.x = logoX
+        gfx.y = logoY
+        gfx.drawstr(letter)
+        logoX = logoX + logoWidths[i]
+    end
+
+    -- Logo click detection and tooltip
+    local logoH = S(28)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local logoHover = mx >= logoStartX and mx <= logoStartX + logoTotalWidth and my >= logoY and my <= logoY + logoH
+    if logoHover then
+        setTooltip(logoStartX, logoY, logoTotalWidth, logoH, "Click for help - Select tracks/items, choose stems, click STEMperate!")
+        -- Check for click
+        if gfx.mouse_cap & 1 == 1 and not GUI.logoWasClicked then
+            GUI.logoWasClicked = true
+        elseif gfx.mouse_cap & 1 == 0 and GUI.logoWasClicked then
+            GUI.logoWasClicked = false
+            -- Set flag to show help (handled after dialog loop exits)
+            GUI.result = "help"
+        end
+    end
+
+    -- Content starts below logo
+    local contentTop = S(45)
 
     gfx.setfont(1, "Arial", S(13))
 
-    -- === LEFT COLUMN: Stems ===
+    -- Determine 6-stem mode early (needed for stem display)
     local is6Stem = (SETTINGS.model == "htdemucs_6s")
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    gfx.x = S(20)
-    gfx.y = S(45)
-    gfx.drawstr(is6Stem and "Stems (1-6):" or "Stems (1-4):")
 
-    local y = S(65)
-    for i, stem in ipairs(STEMS) do
-        -- Only show Guitar/Piano if 6-stem model selected
-        if not stem.sixStemOnly or is6Stem then
-            local label = stem.key .. " " .. stem.name
-            if drawCheckbox(S(25), y, stem.selected, label, stem.color[1], stem.color[2], stem.color[3]) then
-                STEMS[i].selected = not STEMS[i].selected
-            end
-            y = y + S(24)
-        end
-    end
+    -- Column positions (4 columns)
+    local col1X = S(10)   -- Presets
+    local col2X = S(90)   -- Stems
+    local col3X = S(175)  -- Model
+    local col4X = S(260)  -- Output
+    local colW = S(70)
+    local btnH = S(20)
 
-    -- Presets section
+    -- === COLUMN 1: Presets ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    gfx.x = S(20)
-    gfx.y = y + S(8)
+    gfx.x = col1X
+    gfx.y = contentTop
     gfx.drawstr("Presets:")
 
-    y = y + S(28)
-    if drawButton(S(25), y, S(60), S(22), "All", false) then applyPresetAll() end
-    if drawButton(S(90), y, S(70), S(22), "Karaoke", false, {100, 180, 100}) then applyPresetKaraoke() end
-    y = y + S(26)
-    if drawButton(S(25), y, S(60), S(22), "Vocals", false, {255, 100, 100}) then applyPresetVocalsOnly() end
-    if drawButton(S(90), y, S(70), S(22), "Drums", false, {100, 200, 255}) then applyPresetDrumsOnly() end
+    local presetY = contentTop + S(20)
 
-    -- === RIGHT COLUMN: Model & Options ===
+    -- Combo presets first (most common use cases)
+    if drawButton(col1X, presetY, colW, btnH, "Karaoke (K)", false, {80, 80, 90}) then applyPresetKaraoke() end
+    setTooltipWithShortcut(col1X, presetY, colW, btnH, "Everything except vocals", "K", {255, 200, 100})
+    presetY = presetY + S(22)
+    if drawButton(col1X, presetY, colW, btnH, "All (A)", false, {80, 80, 90}) then applyPresetAll() end
+    setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select all available stems", "A", {255, 200, 100})
+
+    -- Separator
+    presetY = presetY + S(28)
+
+    -- Stem presets (colored by stem)
+    if drawButton(col1X, presetY, colW, btnH, "Vocals (V)", false, {255, 100, 100}) then applyPresetVocalsOnly() end
+    setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select only Vocals stem", "V", {255, 100, 100})
+    presetY = presetY + S(22)
+    if drawButton(col1X, presetY, colW, btnH, "Drums (D)", false, {100, 200, 255}) then applyPresetDrumsOnly() end
+    setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select only Drums stem", "D", {100, 200, 255})
+    presetY = presetY + S(22)
+    if drawButton(col1X, presetY, colW, btnH, "Bass (B)", false, {150, 100, 255}) then applyPresetBassOnly() end
+    setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select only Bass stem", "B", {150, 100, 255})
+    presetY = presetY + S(22)
+    if drawButton(col1X, presetY, colW, btnH, "Other (O)", false, {100, 255, 150}) then applyPresetOtherOnly() end
+    setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select only Other stem", "O", {100, 255, 150})
+    presetY = presetY + S(22)
+
+    -- Piano and Guitar only show for 6-stem model
+    if is6Stem then
+        if drawButton(col1X, presetY, colW, btnH, "Piano (P)", false, {255, 120, 200}) then applyPresetPianoOnly() end
+        setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select only Piano stem", "P", {255, 120, 200})
+        presetY = presetY + S(22)
+        if drawButton(col1X, presetY, colW, btnH, "Guitar (G)", false, {255, 180, 100}) then applyPresetGuitarOnly() end
+        setTooltipWithShortcut(col1X, presetY, colW, btnH, "Select only Guitar stem", "G", {255, 180, 100})
+        presetY = presetY + S(22)
+    end
+
+    -- === COLUMN 2: Stems ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    gfx.x = S(180)
-    gfx.y = S(45)
-    gfx.drawstr("AI Model:")
+    gfx.x = col2X
+    gfx.y = contentTop
+    gfx.drawstr(is6Stem and "Stems (1-6):" or "Stems (1-4):")
 
-    y = S(65)
+    local stemY = contentTop + S(20)
+    local stemTooltips = {
+        Vocals = "Voice, lead vocals, backing vocals",
+        Drums = "Drums, percussion, cymbals",
+        Bass = "Bass guitar, synth bass",
+        Other = "Synths, strings, keys, effects",
+        Guitar = "Electric and acoustic guitars",
+        Piano = "Piano, keys, Rhodes"
+    }
+    for i, stem in ipairs(STEMS) do
+        if not stem.sixStemOnly or is6Stem then
+            local label = stem.name .. " (" .. stem.key .. ")"
+            if drawToggleButton(col2X, stemY, colW, btnH, label, stem.selected, stem.color) then
+                STEMS[i].selected = not STEMS[i].selected
+            end
+            setTooltipWithShortcut(col2X, stemY, colW, btnH, stemTooltips[stem.name] or stem.name, stem.key, stem.color)
+            stemY = stemY + S(22)
+        end
+    end
+
+    -- === COLUMN 3: Model ===
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = col3X
+    gfx.y = contentTop
+    gfx.drawstr("Model:")
+
+    -- Fixed width for all Model column boxes
+    local modelBoxW = S(70)
+
+    local modelY = contentTop + S(20)
     for _, model in ipairs(MODELS) do
-        if drawRadio(S(185), y, SETTINGS.model == model.id, model.name) then
+        if drawRadio(col3X, modelY, SETTINGS.model == model.id, model.name, nil, modelBoxW) then
             SETTINGS.model = model.id
         end
-        y = y + S(24)
+        setTooltip(col3X, modelY, modelBoxW, btnH, model.desc)
+        modelY = modelY + S(22)
     end
+
+    -- Processing mode
+    modelY = modelY + S(8)
+    local parallelColor = SETTINGS.parallelProcessing and {100, 180, 255} or {160, 160, 160}
+    local parallelLabel = SETTINGS.parallelProcessing and "Parallel" or "Sequential"
+    if drawCheckbox(col3X, modelY, SETTINGS.parallelProcessing, parallelLabel, parallelColor[1], parallelColor[2], parallelColor[3], modelBoxW) then
+        SETTINGS.parallelProcessing = not SETTINGS.parallelProcessing
+    end
+    local parallelTip = SETTINGS.parallelProcessing
+        and "Process all tracks at once (12GB+ VRAM)"
+        or "Process one track at a time (4-8GB VRAM)"
+    setTooltip(col3X, modelY, modelBoxW, btnH, parallelTip)
+
+    -- === COLUMN 4: Output ===
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = col4X
+    gfx.y = contentTop
+    gfx.drawstr("Output:")
+
+    -- Fixed width for all Output column boxes
+    local outBoxW = S(70)
 
     -- Count selected stems for plural labels
     local stemCount = 0
@@ -1037,139 +2816,239 @@ local function dialogLoop()
     end
     local stemPlural = stemCount ~= 1
     local newTracksLabel = stemPlural and "New tracks" or "New track"
-    local inPlaceLabel = stemPlural and "In-place (takes)" or "In-place (take)"
+    local inPlaceLabel = "In-place"
 
-    -- Output mode
-    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-    gfx.x = S(180)
-    gfx.y = y + S(10)
-    gfx.drawstr("Output:")
-
-    y = y + S(28)
-    if drawRadio(S(185), y, SETTINGS.createNewTracks, newTracksLabel) then
+    local outY = contentTop + S(20)
+    if drawRadio(col4X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW) then
         SETTINGS.createNewTracks = true
     end
-    y = y + S(22)
-    if drawRadio(S(185), y, not SETTINGS.createNewTracks, inPlaceLabel) then
+    setTooltip(col4X, outY, outBoxW, btnH, "Create separate tracks for each stem")
+    outY = outY + S(22)
+    if drawRadio(col4X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW) then
         SETTINGS.createNewTracks = false
     end
+    setTooltip(col4X, outY, outBoxW, btnH, "Replace original with stems as takes")
 
     -- Options (only when creating new tracks)
     if SETTINGS.createNewTracks then
-        y = y + S(28)
-        if drawCheckbox(S(185), y, SETTINGS.createFolder, "Group in folder", 160, 160, 160) then
+        outY = outY + S(28)
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        gfx.x = col4X
+        gfx.y = outY
+        gfx.drawstr("After:")
+
+        outY = outY + S(20)
+        if drawCheckbox(col4X, outY, SETTINGS.createFolder, "Folder", 160, 160, 160, outBoxW) then
             SETTINGS.createFolder = not SETTINGS.createFolder
         end
-        -- Check if there's a time selection (for selection-specific options)
-        local hasTimeSel = hasTimeSelection()
+        setTooltip(col4X, outY, outBoxW, btnH, "Group stem tracks in a folder track")
 
-        -- Count SELECTED items in time selection for plural labels
-        local itemCount = 1
-        if hasTimeSel then
-            local selStart, selEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
-            local numTracks = reaper.CountTracks(0)
-            itemCount = 0
-            for t = 0, numTracks - 1 do
-                local track = reaper.GetTrack(0, t)
-                local numItems = reaper.CountTrackMediaItems(track)
-                for i = 0, numItems - 1 do
-                    local item = reaper.GetTrackMediaItem(track, i)
-                    -- Only count items that are SELECTED
-                    if reaper.IsMediaItemSelected(item) then
-                        local itemStart = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
-                        local itemEnd = itemStart + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
-                        if itemStart < selEnd and itemEnd > selStart then
-                            itemCount = itemCount + 1
-                        end
-                    end
-                end
-            end
-            if itemCount == 0 then itemCount = 1 end
-        end
-        local plural = itemCount > 1
-        local muteItemLabel = plural and "Mute items" or "Mute item"
-        local deleteItemLabel = plural and "Delete items" or "Delete item"
-        local deleteTrackLabel = plural and "Delete tracks" or "Delete track"
-
-        -- Item-level options (mutually exclusive with each other and selection options)
-        y = y + S(22)
-        if drawCheckbox(S(185), y, SETTINGS.muteOriginal, muteItemLabel, 160, 160, 160) then
+        outY = outY + S(22)
+        if drawCheckbox(col4X, outY, SETTINGS.muteOriginal, "Mute orig", 160, 160, 160, outBoxW) then
             SETTINGS.muteOriginal = not SETTINGS.muteOriginal
             if SETTINGS.muteOriginal then
                 SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        y = y + S(22)
+        setTooltip(col4X, outY, outBoxW, btnH, "Mute original items after separation")
+
+        outY = outY + S(22)
         local delItemColor = SETTINGS.deleteOriginal and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(S(185), y, SETTINGS.deleteOriginal, deleteItemLabel, delItemColor[1], delItemColor[2], delItemColor[3]) then
+        if drawCheckbox(col4X, outY, SETTINGS.deleteOriginal, "Delete orig", delItemColor[1], delItemColor[2], delItemColor[3], outBoxW) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
             if SETTINGS.deleteOriginal then
                 SETTINGS.muteOriginal = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        y = y + S(22)
+        setTooltip(col4X, outY, outBoxW, btnH, "Delete original items after separation")
+
+        outY = outY + S(22)
         local delTrackColor = SETTINGS.deleteOriginalTrack and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(S(185), y, SETTINGS.deleteOriginalTrack, deleteTrackLabel, delTrackColor[1], delTrackColor[2], delTrackColor[3]) then
+        if drawCheckbox(col4X, outY, SETTINGS.deleteOriginalTrack, "Del track", delTrackColor[1], delTrackColor[2], delTrackColor[3], outBoxW) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then
                 SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
+        setTooltip(col4X, outY, outBoxW, btnH, "Delete original tracks after separation")
 
-        -- Selection-level options (can be combined with each other, but not with item-level)
+        -- Selection-level options (only if time selection exists)
+        local hasTimeSel = hasTimeSelection()
         if hasTimeSel then
-            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-            gfx.x = S(180)
-            gfx.y = y + S(36)
-            gfx.drawstr("Selection only:")
-            y = y + S(54)
-            gfx.setfont(1, "Arial", S(13))
-            if drawCheckbox(S(185), y, SETTINGS.muteSelection, "Mute selection", 160, 160, 160) then
+            outY = outY + S(22)
+            if drawCheckbox(col4X, outY, SETTINGS.muteSelection, "Mute sel", 160, 160, 160, outBoxW) then
                 SETTINGS.muteSelection = not SETTINGS.muteSelection
                 if SETTINGS.muteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
-                    SETTINGS.deleteSelection = false  -- Can't mute AND delete
+                    SETTINGS.deleteSelection = false
                 end
             end
-            y = y + S(22)
+            setTooltip(col4X, outY, outBoxW, btnH, "Mute only the time selection part")
+
+            outY = outY + S(22)
             local delSelColor = SETTINGS.deleteSelection and {255, 120, 120} or {160, 160, 160}
-            if drawCheckbox(S(185), y, SETTINGS.deleteSelection, "Delete selection", delSelColor[1], delSelColor[2], delSelColor[3]) then
+            if drawCheckbox(col4X, outY, SETTINGS.deleteSelection, "Del sel", delSelColor[1], delSelColor[2], delSelColor[3], outBoxW) then
                 SETTINGS.deleteSelection = not SETTINGS.deleteSelection
                 if SETTINGS.deleteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
-                    SETTINGS.muteSelection = false  -- Can't delete AND mute
+                    SETTINGS.muteSelection = false
                 end
             end
+            setTooltip(col4X, outY, outBoxW, btnH, "Delete only the time selection part")
         end
     end
 
-    -- Keyboard shortcuts hint
-    gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-    gfx.setfont(1, "Arial", S(10))
-    gfx.x = S(20)
-    gfx.y = gfx.h - S(85)
-    if is6Stem then
-        gfx.drawstr("1-6 = stems  |  K = karaoke  |  A = all")
-    else
-        gfx.drawstr("1-4 = stems  |  K = karaoke  |  A = all")
-    end
-    gfx.x = S(20)
-    gfx.y = gfx.h - S(70)
-    gfx.set(THEME.buttonPrimary[1] * 1.3, THEME.buttonPrimary[2] * 1.3, THEME.buttonPrimary[3] * 1.3, 1)
-    gfx.drawstr("Enter/Space = start  |  ESC = cancel")
 
     -- Buttons
     gfx.setfont(1, "Arial", S(13))
-    local btnY = gfx.h - S(40)
+    local btnY = gfx.h - S(32)
     local btnW = S(80)
-    local btnH = S(28)
-    if drawButton(gfx.w - S(185), btnY, btnW, btnH, "Cancel", false) then
-        GUI.result = false
+    local btnH = S(20)
+    local stemBtnW = S(70)  -- Same width as Cancel button
+
+    -- Footer layout: 2 rows
+    -- Row 1: Selected info (col1-2) + Output info (col3-4)
+    -- Row 2: Target info (col1-4)
+    -- Row 3: STEMperate button (col3) + Cancel button (col4)
+    local footerRow1Y = btnY - S(32)
+    local footerRow2Y = btnY - S(16)
+    local footerRow3Y = btnY
+
+    local selTrackCount = reaper.CountSelectedTracks(0)
+    local selItemCount = reaper.CountSelectedMediaItems(0)
+    local trackLabel = selTrackCount == 1 and "track" or "tracks"
+    local itemLabel = selItemCount == 1 and "item" or "items"
+
+    -- Count selected stems for output calculation
+    local selectedStemCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and (not stem.sixStemOnly or is6Stem) then
+            selectedStemCount = selectedStemCount + 1
+        end
     end
-    if drawButton(gfx.w - S(95), btnY, btnW, btnH, "Separate", true) then
+
+    -- Calculate expected output
+    local outTrackCount = SETTINGS.createNewTracks and (selTrackCount * selectedStemCount) or 0
+    local outItemCount = selItemCount * selectedStemCount
+    local outTrackLabel = outTrackCount == 1 and "track" or "tracks"
+    local outItemLabel = outItemCount == 1 and "item" or "items"
+
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.setfont(1, "Arial", S(11))
+
+    -- Row 1, Col 1: Selected label
+    gfx.x = col1X
+    gfx.y = footerRow1Y
+    gfx.drawstr("Selected:")
+
+    -- Row 1, Col 2: Selection values
+    local selInfoText = string.format("%d %s, %d %s", selTrackCount, trackLabel, selItemCount, itemLabel)
+    gfx.x = col2X
+    gfx.y = footerRow1Y
+    gfx.drawstr(selInfoText)
+
+    -- Row 1, Col 3: Output label
+    gfx.x = col3X
+    gfx.y = footerRow1Y
+    gfx.drawstr("Output:")
+
+    -- Row 1, Col 4: Output values
+    local outInfoText
+    if SETTINGS.createNewTracks then
+        outInfoText = string.format("%d trk, %d itm", outTrackCount, outItemCount)
+    else
+        outInfoText = string.format("%d takes", outItemCount)
+    end
+    gfx.x = col4X
+    gfx.y = footerRow1Y
+    gfx.drawstr(outInfoText)
+
+    setTooltip(col1X, footerRow1Y - S(2), gfx.w - col1X - S(10), S(16), "Input selection → Expected output")
+
+    -- Row 2: Target info
+    gfx.x = col1X
+    gfx.y = footerRow2Y
+    gfx.drawstr("Target:")
+
+    -- Determine target description based on output mode
+    local targetText
+    if SETTINGS.createNewTracks then
+        if SETTINGS.createFolder then
+            targetText = "New folder with stem tracks"
+        else
+            targetText = "New tracks below source"
+        end
+    else
+        targetText = "In-place (as takes on source)"
+    end
+    gfx.x = col2X
+    gfx.y = footerRow2Y
+    gfx.drawstr(targetText)
+
+    -- Row 3, Col 3: STEMperate button
+    local stemBtnX = col3X
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local stemBtnHover = mx >= stemBtnX and mx <= stemBtnX + stemBtnW and my >= footerRow3Y and my <= footerRow3Y + btnH
+    local stemBtnColor = stemBtnHover and THEME.buttonPrimaryHover or THEME.buttonPrimary
+
+    -- Draw button background
+    gfx.set(stemBtnColor[1], stemBtnColor[2], stemBtnColor[3], 1)
+    for i = 0, btnH - 1 do
+        local radius = btnH / 2
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
+        elseif i > btnH - radius then
+            inset = radius - math.sqrt(radius * radius - (i - (btnH - radius)) * (i - (btnH - radius)))
+        end
+        gfx.line(stemBtnX + inset, footerRow3Y + i, stemBtnX + stemBtnW - inset, footerRow3Y + i)
+    end
+
+    -- Draw "STEMperate" with colored STEM letters
+    gfx.setfont(1, "Arial", S(13), string.byte('b'))
+    local textY = footerRow3Y + (btnH - gfx.texth) / 2
+
+    -- Calculate total width to center
+    local letters = {"S", "T", "E", "M", "p", "e", "r", "a", "t", "e"}
+    local letterWidths = {}
+    local totalWidth = 0
+    for i, letter in ipairs(letters) do
+        local w, _ = gfx.measurestr(letter)
+        letterWidths[i] = w
+        totalWidth = totalWidth + w
+    end
+    local textX = stemBtnX + (stemBtnW - totalWidth) / 2
+
+    -- STEM colors (Vocals, Drums, Bass, Other)
+    local stemColors = {
+        {255/255, 100/255, 100/255},  -- S = Vocals (red)
+        {100/255, 200/255, 255/255},  -- T = Drums (blue)
+        {150/255, 100/255, 255/255},  -- E = Bass (purple)
+        {100/255, 255/255, 150/255},  -- M = Other (green)
+    }
+
+    for i, letter in ipairs(letters) do
+        if i <= 4 then
+            -- Colored STEM letters
+            gfx.set(stemColors[i][1], stemColors[i][2], stemColors[i][3], 1)
+        else
+            -- White "perate"
+            gfx.set(1, 1, 1, 1)
+        end
+        gfx.x = textX
+        gfx.y = textY
+        gfx.drawstr(letter)
+        textX = textX + letterWidths[i]
+    end
+
+    -- Rich tooltip for STEMperate button (shows output stems + target with colors)
+    setRichTooltip(stemBtnX, footerRow3Y, stemBtnW, btnH)
+
+    -- Handle STEMperate click
+    if stemBtnHover and GUI.wasMouseDown and (gfx.mouse_cap & 1 == 0) then
         local anySelected = false
         for _, stem in ipairs(STEMS) do
             if stem.selected then anySelected = true; break end
@@ -1181,6 +3060,43 @@ local function dialogLoop()
             showMessage("No Stems Selected", "Please select at least one stem.", "warning")
         end
     end
+
+    -- Row 3, Col 4: Close button (red, like Start window)
+    local closeBtnX = col4X
+    local closeBtnW = outBoxW
+    local closeBtnHover = mx >= closeBtnX and mx <= closeBtnX + closeBtnW and my >= footerRow3Y and my <= footerRow3Y + btnH
+
+    -- Red button color
+    if closeBtnHover then
+        gfx.set(0.9, 0.3, 0.3, 1)
+    else
+        gfx.set(0.7, 0.2, 0.2, 1)
+    end
+    -- Draw rounded (pill-shaped) button
+    for i = 0, btnH - 1 do
+        local radius = btnH / 2
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
+        elseif i > btnH - radius then
+            inset = radius - math.sqrt(radius * radius - (i - (btnH - radius)) * (i - (btnH - radius)))
+        end
+        gfx.line(closeBtnX + inset, footerRow3Y + i, closeBtnX + closeBtnW - inset, footerRow3Y + i)
+    end
+
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", S(13), string.byte('b'))
+    local closeText = "Close"
+    local closeTextW = gfx.measurestr(closeText)
+    gfx.x = closeBtnX + (closeBtnW - closeTextW) / 2
+    gfx.y = footerRow3Y + (btnH - S(13)) / 2
+    gfx.drawstr(closeText)
+
+    -- Handle Close button click
+    if closeBtnHover and GUI.wasMouseDown and (gfx.mouse_cap & 1 == 0) then
+        GUI.result = false
+    end
+    setTooltip(closeBtnX, footerRow3Y, closeBtnW, btnH, "Close STEMperator (ESC)")
 
     GUI.wasMouseDown = (gfx.mouse_cap & 1 == 1)
 
@@ -1202,11 +3118,20 @@ local function dialogLoop()
     elseif char == 52 then STEMS[4].selected = not STEMS[4].selected  -- 4: Other
     elseif char == 53 and SETTINGS.model == "htdemucs_6s" then STEMS[5].selected = not STEMS[5].selected  -- 5: Guitar (6-stem only)
     elseif char == 54 and SETTINGS.model == "htdemucs_6s" then STEMS[6].selected = not STEMS[6].selected  -- 6: Piano (6-stem only)
-    elseif char == 107 or char == 75 then applyPresetKaraoke()  -- K
-    elseif char == 105 or char == 73 then applyPresetInstrumental()  -- I
-    elseif char == 100 or char == 68 then applyPresetDrumsOnly()  -- D
-    elseif char == 118 or char == 86 then applyPresetVocalsOnly()  -- V
-    elseif char == 97 or char == 65 then applyPresetAll()  -- A
+    -- Preset shortcuts: first letter of preset name
+    elseif char == 118 or char == 86 then applyPresetVocalsOnly()  -- V: Vocals
+    elseif char == 100 or char == 68 then applyPresetDrumsOnly()  -- D: Drums
+    elseif char == 98 or char == 66 then applyPresetBassOnly()  -- B: Bass
+    elseif char == 111 or char == 79 then applyPresetOtherOnly()  -- O: Other
+    elseif char == 112 or char == 80 then applyPresetPianoOnly()  -- P: Piano (6-stem only)
+    elseif char == 103 or char == 71 then applyPresetGuitarOnly()  -- G: Guitar (6-stem only)
+    elseif char == 107 or char == 75 then applyPresetKaraoke()  -- K: Karaoke
+    elseif char == 105 or char == 73 then applyPresetKaraoke()  -- I: Instrumental (alias for Karaoke)
+    elseif char == 97 or char == 65 then applyPresetAll()  -- A: All
+    -- Model shortcuts: F=Fast, Q=Quality, S=6-stem
+    elseif char == 102 or char == 70 then SETTINGS.model = "htdemucs"  -- F: Fast
+    elseif char == 113 or char == 81 then SETTINGS.model = "htdemucs_ft"  -- Q: Quality
+    elseif char == 115 or char == 83 then SETTINGS.model = "htdemucs_6s"  -- S: 6-stem
     elseif char == 43 or char == 61 then  -- + or = to grow window
         local newW = math.min(GUI.maxW, gfx.w + 76)
         local newH = math.min(GUI.maxH, gfx.h + 68)
@@ -1216,6 +3141,29 @@ local function dialogLoop()
         local newH = math.max(GUI.minH, gfx.h - 68)
         gfx.init(SCRIPT_NAME, newW, newH)
     end
+
+    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
+    gfx.setfont(1, "Arial", S(10))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", S(10), string.byte('b'))
+    local audioPart = "AUDIO"
+    local audioPartW = gfx.measurestr(audioPart)
+    local totalLogoW = flarkPartW + audioPartW
+    local logoStartX = (gfx.w - totalLogoW) / 2
+    -- Orange text, 50% translucent
+    gfx.set(1.0, 0.5, 0.1, 0.5)
+    gfx.setfont(1, "Arial", S(10))
+    gfx.x = logoStartX
+    gfx.y = S(3)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", S(10), string.byte('b'))
+    gfx.x = logoStartX + flarkPartW
+    gfx.y = S(3)
+    gfx.drawstr(audioPart)
+
+    -- Draw tooltip on top of everything
+    drawTooltip()
 
     gfx.update()
 
@@ -1244,8 +3192,66 @@ local function dialogLoop()
         -- Always save settings (including position) when dialog closes
         saveSettings()
         gfx.quit()
-        if GUI.result then
+        if GUI.result == "help" then
+            -- Show help window, then return to main dialog
+            local helpText = [[STEMperator - AI Stem Separation for REAPER
+
+BASIC WORKFLOW:
+1. Select one or more tracks with audio items
+2. Optionally make a time selection to process only that part
+3. Choose which stems you want (or use a preset)
+4. Select a model (Fast, Quality, or 6-Stem)
+5. Click STEMperate to start separation
+
+KEYBOARD SHORTCUTS:
+1-4: Toggle Vocals/Drums/Bass/Other stems
+5-6: Toggle Guitar/Piano (6-stem model only)
+K: Karaoke preset (instrumental)
+V: Vocals only    D: Drums only
+B: Bass only      O: Other only
+A: All stems
+Enter: Start separation
+Escape: Cancel
+
+MODELS:
+- Fast: Quick processing, good quality (4 stems)
+- Quality: Best results, slower (4 stems)
+- 6-Stem: Adds Guitar and Piano separation
+
+OUTPUT OPTIONS:
+- New tracks: Creates separate tracks for each stem
+- In-place: Replaces original with stems as takes
+- Folder: Groups stem tracks in a folder
+- Mute/Delete: Handle original after separation
+
+TIPS:
+- Use Parallel mode for 12GB+ VRAM GPUs
+- Use Sequential mode for 4-8GB VRAM GPUs
+- Time selection lets you process just a section
+- Undo (Ctrl+Z) to restore if needed]]
+            showMessage("STEMperator Help", helpText, "info")
+        elseif GUI.result then
             reaper.defer(runSeparationWorkflow)
+        else
+            -- User cancelled: restore original selection state if items were auto-selected
+            if #autoSelectedItems > 0 then
+                for _, item in ipairs(autoSelectedItems) do
+                    if reaper.ValidatePtr(item, "MediaItem*") then
+                        reaper.SetMediaItemSelected(item, false)
+                    end
+                end
+                autoSelectedItems = {}
+            end
+            -- Also deselect the tracks that triggered auto-selection
+            if #autoSelectionTracks > 0 then
+                for _, track in ipairs(autoSelectionTracks) do
+                    if reaper.ValidatePtr(track, "MediaTrack*") then
+                        reaper.SetTrackSelected(track, false)
+                    end
+                end
+                autoSelectionTracks = {}
+            end
+            reaper.UpdateArrange()
         end
     end
 end
@@ -1445,7 +3451,48 @@ local function renderTimeSelectionToWav(outputPath)
         end
     end
 
-    if #selectedItems == 0 then return nil, "No selected audio items in time selection" end
+    -- If no items selected but tracks are selected and In-place mode is on,
+    -- find items on those tracks that overlap the time selection
+    if #selectedItems == 0 then
+        local selTrackCount = reaper.CountSelectedTracks(0)
+        local selItemCount = reaper.CountSelectedMediaItems(0)
+
+        -- In-place mode with track selected: auto-find overlapping items on selected tracks
+        if selTrackCount > 0 and selItemCount == 0 and not SETTINGS.createNewTracks then
+            debugLog("In-place mode: finding items on selected tracks overlapping time selection")
+            for t = 0, selTrackCount - 1 do
+                local track = reaper.GetSelectedTrack(0, t)
+                local numItems = reaper.CountTrackMediaItems(track)
+                for i = 0, numItems - 1 do
+                    local item = reaper.GetTrackMediaItem(track, i)
+                    local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+                    local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+                    local iEnd = iPos + iLen
+                    -- Check if item overlaps time selection
+                    if iPos < endTime and iEnd > startTime then
+                        table.insert(selectedItems, {item = item, track = track})
+                        if not foundItem then foundItem = item end
+                        debugLog("Found overlapping item on selected track at pos " .. iPos)
+                    end
+                end
+            end
+        end
+
+        -- Still no items found - show appropriate error
+        if #selectedItems == 0 then
+            if selTrackCount == 0 and selItemCount == 0 then
+                return nil, "No tracks or items selected"
+            elseif selTrackCount == 0 then
+                return nil, "No tracks selected (select tracks with items)"
+            elseif selItemCount == 0 and not SETTINGS.createNewTracks then
+                return nil, "No items on selected tracks overlap time selection"
+            elseif selItemCount == 0 then
+                return nil, "No items selected on tracks"
+            else
+                return nil, "No selected items overlap the time selection"
+            end
+        end
+    end
 
     -- If only one item, use simple ffmpeg extraction (faster)
     if #selectedItems == 1 then
@@ -1587,6 +3634,98 @@ local function renderTrackTimeSelectionToWav(track, outputPath)
     else return nil, "Failed to extract audio", nil, nil end
 end
 
+-- Render selected items on a track to WAV (no time selection needed)
+-- Used when items are selected but no time selection exists
+local function renderTrackSelectedItemsToWav(track, outputPath)
+    -- Find ALL selected items on this track
+    local numItems = reaper.CountTrackMediaItems(track)
+    local foundItem = nil
+    local allFoundItems = {}
+    local minPos = math.huge
+    local maxEnd = 0
+
+    for i = 0, numItems - 1 do
+        local item = reaper.GetTrackMediaItem(track, i)
+        if reaper.IsMediaItemSelected(item) then
+            local iPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+            local iLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+            local iEnd = iPos + iLen
+            if not foundItem then
+                foundItem = item  -- Keep first for audio extraction
+            end
+            table.insert(allFoundItems, item)
+            minPos = math.min(minPos, iPos)
+            maxEnd = math.max(maxEnd, iEnd)
+        end
+    end
+
+    if not foundItem then return nil, "No selected items on track" end
+
+    local take = reaper.GetActiveTake(foundItem)
+    if not take then return nil, "No active take" end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    if not source then return nil, "No source" end
+
+    local sourceFile = reaper.GetMediaSourceFileName(source, "")
+    if not sourceFile or sourceFile == "" then return nil, "No source file" end
+
+    local itemPos = reaper.GetMediaItemInfo_Value(foundItem, "D_POSITION")
+    local itemLen = reaper.GetMediaItemInfo_Value(foundItem, "D_LENGTH")
+    local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+    local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+
+    -- Extract the full item (not a sub-selection)
+    local duration = itemLen * playrate
+    local sourceOffset = takeOffset
+
+    local ffmpegCmd = string.format(
+        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"' .. suppressStderr(),
+        sourceFile, sourceOffset, duration, outputPath
+    )
+
+    execHidden(ffmpegCmd)
+
+    local f = io.open(outputPath, "r")
+    if f then f:close(); return outputPath, nil, foundItem, allFoundItems
+    else return nil, "Failed to extract audio", nil, nil end
+end
+
+-- Render a single item to WAV (for in-place multi-item processing)
+local function renderSingleItemToWav(item, outputPath)
+    if not item or not reaper.ValidatePtr(item, "MediaItem*") then
+        return nil, "Invalid item"
+    end
+
+    local take = reaper.GetActiveTake(item)
+    if not take then return nil, "No active take" end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    if not source then return nil, "No source" end
+
+    local sourceFile = reaper.GetMediaSourceFileName(source, "")
+    if not sourceFile or sourceFile == "" then return nil, "No source file" end
+
+    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+    local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+
+    local duration = itemLen * playrate
+    local sourceOffset = takeOffset
+
+    local ffmpegCmd = string.format(
+        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s"' .. suppressStderr(),
+        sourceFile, sourceOffset, duration, outputPath
+    )
+
+    execHidden(ffmpegCmd)
+
+    local f = io.open(outputPath, "r")
+    if f then f:close(); return outputPath, nil
+    else return nil, "Failed to extract audio" end
+end
+
 -- Progress window state
 local progressState = {
     running = false,
@@ -1667,7 +3806,6 @@ end
 -- Draw progress window with stem colors and eye candy (scalable)
 local function drawProgressWindow()
     local w, h = gfx.w, gfx.h
-    local time = os.clock()
 
     -- Calculate scale based on window size
     local scaleW = w / PROGRESS_BASE_W
@@ -1681,33 +3819,12 @@ local function drawProgressWindow()
     -- Try to make window resizable
     makeProgressWindowResizable()
 
-    -- Initialize waveform bars if needed
-    local barCount = math.floor(w / PS(8))
-    if #waveformState.bars ~= barCount then
-        initWaveformBars(barCount)
-    end
+    -- Solid background (matching main app)
+    gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+    gfx.rect(0, 0, w, h, 1)
 
-    -- Gradient background with subtle animation (theme-aware)
-    local bgPulse = 0.02 * math.sin(time * 0.5)
-    for y = 0, h do
-        local t = y / h
-        local baseR = THEME.bgGradientTop[1] * (1-t) + THEME.bgGradientBottom[1] * t
-        local baseG = THEME.bgGradientTop[2] * (1-t) + THEME.bgGradientBottom[2] * t
-        local baseB = THEME.bgGradientTop[3] * (1-t) + THEME.bgGradientBottom[3] * t
-        local blueShift = 0.02 + 0.01 * math.sin(time * 0.3 + y * 0.01)
-        if SETTINGS.darkMode then
-            gfx.set(baseR + bgPulse, baseG + bgPulse, baseB + bgPulse + blueShift, 1)
-        else
-            gfx.set(baseR - bgPulse * 0.5, baseG - bgPulse * 0.5, baseB - bgPulse * 0.5 + blueShift * 0.3, 1)
-        end
-        gfx.line(0, y, w, y)
-    end
-
-    -- Animated background waveform visualization (bottom area)
-    local waveY = h - PS(80)
-    local waveH = PS(50)
-    local barWidth = PS(4)
-    local barGap = PS(4)
+    -- Colored STEM border at top
+    drawStemBorder(0, 0, w, 3)
 
     -- Get selected stems for colors
     local selectedStems = {}
@@ -1717,137 +3834,40 @@ local function drawProgressWindow()
         end
     end
 
-    -- Draw animated waveform bars
-    for i, bar in ipairs(waveformState.bars) do
-        -- Smooth animation towards target
-        local diff = bar.targetHeight - bar.height
-        bar.velocity = bar.velocity * 0.85 + diff * 0.15
-        bar.height = bar.height + bar.velocity
-
-        -- Randomly change target
-        if math.random() < 0.05 then
-            bar.targetHeight = math.random() * 0.8 + 0.2
-        end
-
-        -- Calculate bar position and height
-        local barX = (i - 1) * (barWidth + barGap)
-        local barH = bar.height * waveH
-        local barY = waveY + (waveH - barH) / 2
-
-        -- Color based on position (blend through stem colors)
-        local colorIdx = ((i - 1) / math.max(1, #waveformState.bars - 1)) * (#selectedStems - 1) + 1
-        local idx1 = math.floor(colorIdx)
-        local idx2 = math.min(idx1 + 1, #selectedStems)
-        local blend = colorIdx - idx1
-
-        if #selectedStems > 0 then
-            idx1 = math.max(1, math.min(idx1, #selectedStems))
-            idx2 = math.max(1, math.min(idx2, #selectedStems))
-
-            local r = (selectedStems[idx1].color[1] * (1 - blend) + selectedStems[idx2].color[1] * blend) / 255
-            local g = (selectedStems[idx1].color[2] * (1 - blend) + selectedStems[idx2].color[2] * blend) / 255
-            local b = (selectedStems[idx1].color[3] * (1 - blend) + selectedStems[idx2].color[3] * blend) / 255
-
-            -- Pulsing glow effect
-            local pulse = 0.3 + 0.2 * math.sin(time * 3 + bar.phase)
-            gfx.set(r * pulse, g * pulse, b * pulse, 0.6)
-            gfx.rect(barX, barY, barWidth, barH, 1)
-
-            -- Brighter center line
-            gfx.set(r * 0.8, g * 0.8, b * 0.8, 0.9)
-            gfx.rect(barX + 1, barY + 2, barWidth - 2, barH - 4, 1)
-        end
-    end
-
-    -- Floating particles effect
-    if #waveformState.particles < 20 and math.random() < 0.1 then
-        table.insert(waveformState.particles, {
-            x = math.random() * w,
-            y = h,
-            vx = (math.random() - 0.5) * 2,
-            vy = -math.random() * 2 - 1,
-            life = 1.0,
-            size = math.random() * PS(3) + PS(1),
-            colorIdx = math.random(1, math.max(1, #selectedStems)),
-        })
-    end
-
-    -- Update and draw particles
-    for i = #waveformState.particles, 1, -1 do
-        local p = waveformState.particles[i]
-        p.x = p.x + p.vx
-        p.y = p.y + p.vy
-        p.vy = p.vy - 0.02  -- Gravity (upward)
-        p.life = p.life - 0.015
-
-        if p.life <= 0 or p.y < 0 then
-            table.remove(waveformState.particles, i)
-        else
-            local stem = selectedStems[p.colorIdx] or selectedStems[1]
-            if stem then
-                gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, p.life * 0.5)
-                gfx.circle(p.x, p.y, p.size * p.life, 1, 1)
-            end
-        end
-    end
-
-    -- Scanning line effect
-    local scanX = ((time * 100) % w)
-    gfx.set(1, 1, 1, 0.03)
-    gfx.rect(scanX, 0, PS(2), h, 1)
-
-    -- Model badge (top right) with glow
+    -- Model badge (top right)
     local modelText = SETTINGS.model or "htdemucs"
     gfx.setfont(1, "Arial", PS(11))
     local modelW = gfx.measurestr(modelText) + PS(16)
     local badgeX = w - modelW - PS(20)
     local badgeY = PS(18)
-    -- Glow
-    gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 0.3)
-    gfx.rect(badgeX - 2, badgeY - 2, modelW + 4, PS(26), 1)
-    -- Badge
-    if SETTINGS.darkMode then
-        gfx.set(0.15, 0.25, 0.35, 1)
-    else
-        gfx.set(0.85, 0.88, 0.92, 1)
-    end
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
     gfx.rect(badgeX, badgeY, modelW, PS(22), 1)
-    gfx.set(THEME.accent[1] + 0.2, THEME.accent[2] + 0.2, THEME.accent[3] + 0.2, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(badgeX, badgeY, modelW, PS(22), 0)
+    gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], 1)
     gfx.x = badgeX + PS(8)
     gfx.y = PS(22)
     gfx.drawstr(modelText)
 
-    -- Title with glow effect
+    -- Title
     gfx.setfont(1, "Arial", PS(18), string.byte('b'))
     local title = "AI Stem Separation"
     -- In multi-track mode, show which track
     if multiTrackQueue.active then
         title = "Track " .. multiTrackQueue.currentIndex .. "/" .. multiTrackQueue.totalTracks .. ": " .. (multiTrackQueue.currentTrackName or "")
     end
-    local titleW = gfx.measurestr(title)
-    -- Glow
-    local glowIntensity = 0.3 + 0.1 * math.sin(time * 2)
-    gfx.set(THEME.accent[1], THEME.accent[2], THEME.accent[3], glowIntensity)
-    gfx.x = PS(25) + 1
-    gfx.y = PS(20) + 1
-    gfx.drawstr(title)
-    -- Main text
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.x = PS(25)
     gfx.y = PS(20)
     gfx.drawstr(title)
 
-    -- Stem indicators (colored boxes showing which stems are selected)
+    -- Stem indicators (simple colored boxes)
     local stemX = PS(25)
     local stemY = PS(55)
     local stemBoxSize = PS(14)
     gfx.setfont(1, "Arial", PS(11))
-    for idx, stem in ipairs(STEMS) do
+    for _, stem in ipairs(STEMS) do
         if stem.selected and (not stem.sixStemOnly or SETTINGS.model == "htdemucs_6s") then
-            -- Animated glow behind stem box
-            local pulseAlpha = 0.3 + 0.2 * math.sin(time * 3 + idx)
-            gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, pulseAlpha)
-            gfx.rect(stemX - 2, stemY - 2, stemBoxSize + 4, stemBoxSize + 4, 1)
             -- Stem color box
             gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
             gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
@@ -1860,164 +3880,138 @@ local function drawProgressWindow()
         end
     end
 
-    -- Progress bar background with rounded look
+    -- Progress bar
     local barX = PS(25)
     local barY = PS(90)
     local barW = w - PS(50)
-    local barH = PS(35)
+    local barH = PS(28)
 
-    -- Outer glow
-    if SETTINGS.darkMode then
-        gfx.set(0.1, 0.15, 0.2, 1)
-    else
-        gfx.set(0.7, 0.72, 0.75, 1)
-    end
-    gfx.rect(barX - 2, barY - 2, barW + 4, barH + 4, 1)
-    -- Inner background
-    if SETTINGS.darkMode then
-        gfx.set(0.12, 0.12, 0.14, 1)
-    else
-        gfx.set(0.82, 0.82, 0.84, 1)
-    end
+    -- Progress bar background
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
     gfx.rect(barX, barY, barW, barH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(barX, barY, barW, barH, 0)
 
-    -- Progress bar fill with gradient based on stem colors
+    -- Progress bar fill with stem color gradient
     local fillWidth = math.floor(barW * progressState.percent / 100)
-    if fillWidth > 0 then
-        if #selectedStems > 0 then
-            for x = 0, fillWidth - 1 do
-                local pos = x / math.max(1, fillWidth - 1)
-                local idx = math.floor(pos * (#selectedStems - 1)) + 1
-                local nextIdx = math.min(idx + 1, #selectedStems)
-                local blend = (pos * (#selectedStems - 1)) % 1
+    if fillWidth > 0 and #selectedStems > 0 then
+        for x = 0, fillWidth - 1 do
+            local pos = x / math.max(1, fillWidth - 1)
+            local idx = math.floor(pos * (#selectedStems - 1)) + 1
+            local nextIdx = math.min(idx + 1, #selectedStems)
+            local blend = (pos * (#selectedStems - 1)) % 1
 
-                local r = selectedStems[idx].color[1] * (1 - blend) + selectedStems[nextIdx].color[1] * blend
-                local g = selectedStems[idx].color[2] * (1 - blend) + selectedStems[nextIdx].color[2] * blend
-                local b = selectedStems[idx].color[3] * (1 - blend) + selectedStems[nextIdx].color[3] * blend
+            idx = math.max(1, math.min(idx, #selectedStems))
+            nextIdx = math.max(1, math.min(nextIdx, #selectedStems))
 
-                -- Enhanced shimmer effect
-                local shimmer = 0.85 + 0.15 * math.sin((x * 0.1) + (time * 8))
-                local vertGrad = 1.0
+            local r = (selectedStems[idx].color[1] * (1 - blend) + selectedStems[nextIdx].color[1] * blend) / 255
+            local g = (selectedStems[idx].color[2] * (1 - blend) + selectedStems[nextIdx].color[2] * blend) / 255
+            local b = (selectedStems[idx].color[3] * (1 - blend) + selectedStems[nextIdx].color[3] * blend) / 255
 
-                for y = 0, barH - 1 do
-                    -- Vertical gradient for 3D effect
-                    if y < barH * 0.3 then
-                        vertGrad = 1.1 + 0.1 * (1 - y / (barH * 0.3))
-                    elseif y > barH * 0.7 then
-                        vertGrad = 1.0 - 0.2 * ((y - barH * 0.7) / (barH * 0.3))
-                    else
-                        vertGrad = 1.0
-                    end
-
-                    gfx.set(r/255 * shimmer * vertGrad, g/255 * shimmer * vertGrad, b/255 * shimmer * vertGrad, 1)
-                    gfx.rect(barX + x, barY + y, 1, 1, 1)
-                end
-            end
-
-            -- Animated highlight sweep
-            local sweepPos = ((time * 150) % (barW + 100)) - 50
-            if sweepPos < fillWidth then
-                for sx = math.max(0, sweepPos - 30), math.min(fillWidth, sweepPos + 30) do
-                    local alpha = 0.3 * (1 - math.abs(sx - sweepPos) / 30)
-                    gfx.set(1, 1, 1, alpha)
-                    gfx.line(barX + sx, barY + 2, barX + sx, barY + barH - 3)
-                end
-            end
+            gfx.set(r, g, b, 1)
+            gfx.rect(barX + x, barY + 1, 1, barH - 2, 1)
         end
     end
 
-    -- Progress percentage in center of bar with shadow
-    gfx.setfont(1, "Arial", PS(15), string.byte('b'))
+    -- Progress percentage in center of bar
+    gfx.setfont(1, "Arial", PS(14), string.byte('b'))
     local percentText = string.format("%d%%", progressState.percent)
     local tw = gfx.measurestr(percentText)
-    -- Shadow
-    gfx.set(0, 0, 0, 0.5)
-    gfx.x = barX + (barW - tw) / 2 + 1
-    gfx.y = barY + (barH - PS(15)) / 2 + 1
-    gfx.drawstr(percentText)
-    -- Text
     gfx.set(1, 1, 1, 1)
     gfx.x = barX + (barW - tw) / 2
-    gfx.y = barY + (barH - PS(15)) / 2
+    gfx.y = barY + (barH - PS(14)) / 2
     gfx.drawstr(percentText)
 
     -- Stage text
-    gfx.setfont(1, "Arial", PS(12))
+    gfx.setfont(1, "Arial", PS(11))
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     gfx.x = PS(25)
-    gfx.y = PS(138)
+    gfx.y = PS(130)
     local stageDisplay = progressState.stage or "Starting..."
     local maxStageLen = math.floor(70 * scale)
     if #stageDisplay > maxStageLen then stageDisplay = stageDisplay:sub(1, maxStageLen - 3) .. "..." end
     gfx.drawstr(stageDisplay)
 
-    -- Animated processing indicator (spinning dots)
-    if progressState.percent < 100 then
-        local dotRadius = PS(12)
-        local dotCenterX = w - PS(40)
-        local dotCenterY = PS(143)
-        for i = 0, 7 do
-            local angle = (i / 8) * math.pi * 2 + time * 5
-            local dx = math.cos(angle) * dotRadius
-            local dy = math.sin(angle) * dotRadius
-            local alpha = ((i / 8 + time * 0.8) % 1)
-            gfx.set(THEME.accent[1] + 0.1, THEME.accent[2] + 0.1, THEME.accent[3] + 0.2, alpha * 0.8)
-            gfx.circle(dotCenterX + dx, dotCenterY + dy, PS(2), 1, 1)
-        end
-    end
+    -- Info boxes row
+    local infoY = PS(155)
+    local infoH = PS(22)
+    local infoGap = PS(8)
 
     -- Time info box
     local elapsed = os.time() - progressState.startTime
     local mins = math.floor(elapsed / 60)
     local secs = elapsed % 60
 
-    if SETTINGS.darkMode then
-        gfx.set(0.15, 0.18, 0.22, 1)
-    else
-        gfx.set(0.82, 0.84, 0.87, 1)
-    end
-    gfx.rect(PS(25), PS(160), PS(100), PS(22), 1)
-    gfx.set(THEME.accent[1] + 0.3, THEME.accent[2] + 0.2, THEME.accent[3], 1)
-    gfx.setfont(1, "Arial", PS(11))
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+    gfx.rect(PS(25), infoY, PS(95), infoH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(PS(25), infoY, PS(95), infoH, 0)
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.x = PS(32)
-    gfx.y = PS(165)
+    gfx.y = infoY + PS(4)
     gfx.drawstr(string.format("Elapsed: %d:%02d", mins, secs))
 
     -- ETA box (if available)
     local eta = progressState.stage:match("ETA ([%d:]+)")
     if eta then
-        if SETTINGS.darkMode then
-            gfx.set(0.15, 0.20, 0.18, 1)
-        else
-            gfx.set(0.82, 0.87, 0.84, 1)
-        end
-        gfx.rect(PS(135), PS(160), PS(80), PS(22), 1)
-        gfx.set(0.2, 0.7, 0.4, 1)
-        gfx.x = PS(142)
-        gfx.y = PS(165)
+        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+        gfx.rect(PS(128), infoY, PS(75), infoH, 1)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.rect(PS(128), infoY, PS(75), infoH, 0)
+        gfx.set(0.3, 0.75, 0.45, 1)
+        gfx.x = PS(135)
+        gfx.y = infoY + PS(4)
         gfx.drawstr("ETA: " .. eta)
     end
 
-    -- GPU indicator with icon
-    if SETTINGS.darkMode then
-        gfx.set(0.12, 0.20, 0.15, 1)
-    else
-        gfx.set(0.82, 0.88, 0.84, 1)
-    end
-    gfx.rect(w - PS(130), PS(160), PS(105), PS(22), 1)
-    gfx.set(0.2, 0.7, 0.3, 1)
-    gfx.x = w - PS(123)
-    gfx.y = PS(165)
+    -- Segment size indicator
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+    gfx.rect(w - PS(190), infoY, PS(60), infoH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(w - PS(190), infoY, PS(60), infoH, 0)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = w - PS(183)
+    gfx.y = infoY + PS(4)
+    gfx.drawstr("Seg: 30")
+
+    -- GPU indicator
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+    gfx.rect(w - PS(122), infoY, PS(97), infoH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(w - PS(122), infoY, PS(97), infoH, 0)
+    gfx.set(0.3, 0.75, 0.45, 1)
+    gfx.x = w - PS(115)
+    gfx.y = infoY + PS(4)
     gfx.drawstr("GPU: DirectML")
 
     -- Cancel hint
     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
     gfx.setfont(1, "Arial", PS(9))
-    local hintText = "Drag edges to resize  |  Press ESC or close window to cancel"
+    local hintText = "Press ESC or close window to cancel"
     local hintW = gfx.measurestr(hintText)
     gfx.x = (w - hintW) / 2
-    gfx.y = h - PS(18)
+    gfx.y = h - PS(32)
     gfx.drawstr(hintText)
+
+    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
+    gfx.setfont(1, "Arial", PS(10))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    local audioPart = "AUDIO"
+    local audioPartW = gfx.measurestr(audioPart)
+    local totalLogoW = flarkPartW + audioPartW
+    local logoStartX = (w - totalLogoW) / 2
+    -- Orange text, 50% translucent
+    gfx.set(1.0, 0.5, 0.1, 0.5)
+    gfx.setfont(1, "Arial", PS(10))
+    gfx.x = logoStartX
+    gfx.y = PS(3)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    gfx.x = logoStartX + flarkPartW
+    gfx.y = PS(3)
+    gfx.drawstr(audioPart)
 
     gfx.update()
 end
@@ -2079,7 +4073,7 @@ local function startSeparationProcess(inputFile, outputDir, model)
         if batFile then
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. inputFile .. '" "' .. outputDir .. '" --model ' .. model .. ' --segment-size 40 ')
+            batFile:write('"' .. inputFile .. '" "' .. outputDir .. '" --model ' .. model .. ' --segment-size 30 ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -2105,7 +4099,7 @@ local function startSeparationProcess(inputFile, outputDir, model)
         -- Unix: run in background
         -- Single-track mode uses larger segment size (40) for better GPU utilization
         local cmd = string.format(
-            '"%s" -u "%s" "%s" "%s" --model %s --segment-size 40 >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
+            '"%s" -u "%s" "%s" "%s" --model %s --segment-size 30 >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
             PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile, outputDir
         )
         os.execute(cmd)
@@ -2188,6 +4182,10 @@ finishSeparation = finishSeparationCallback
 
 -- Run AI separation with progress UI
 local function runSeparationWithProgress(inputFile, outputDir, model)
+    -- Load settings to get current theme
+    loadSettings()
+    updateTheme()
+
     -- Start the process
     startSeparationProcess(inputFile, outputDir, model)
 
@@ -2859,6 +4857,13 @@ function processStemsResult(stems)
         end
     end
 
+    -- Calculate and add timing info
+    local totalTime = os.time() - (progressState.startTime or os.time())
+    local totalMins = math.floor(totalTime / 60)
+    local totalSecs = totalTime % 60
+    local timeStr = string.format("%d:%02d", totalMins, totalSecs)
+    resultMsg = resultMsg .. "\nTime: " .. timeStr
+
     reaper.UpdateArrange()
 
     -- Show custom result window
@@ -2906,162 +4911,131 @@ local function initCelebration()
     end
 end
 
--- Draw result window (same style as progress window)
+-- Draw result window (clean style matching main app)
 local function drawResultWindow()
     local w, h = gfx.w, gfx.h
-    local time = os.clock()
-    local elapsed = time - resultWindowState.startTime
 
     -- Calculate scale
     local scale = math.min(w / 380, h / 340)
     scale = math.max(0.5, math.min(4.0, scale))
     local function PS(val) return math.floor(val * scale + 0.5) end
 
-    -- Gradient background with celebration tint (theme-aware)
-    local celebrationGlow = math.max(0, 0.05 * (1 - elapsed * 0.5))
-    for y = 0, h do
-        local t = y / h
-        local baseR = THEME.bgGradientTop[1] * (1-t) + THEME.bgGradientBottom[1] * t
-        local baseG = THEME.bgGradientTop[2] * (1-t) + THEME.bgGradientBottom[2] * t
-        local baseB = THEME.bgGradientTop[3] * (1-t) + THEME.bgGradientBottom[3] * t
-        local greenTint = celebrationGlow * (1 - t)
-        gfx.set(baseR, baseG + greenTint, baseB, 1)
-        gfx.line(0, y, w, y)
+    -- Solid background (matching main app)
+    gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+    gfx.rect(0, 0, w, h, 1)
+
+    -- Colored STEM border at top
+    drawStemBorder(0, 0, w, 3)
+
+    -- Theme toggle button (sun/moon icon, top right)
+    local themeSize = PS(20)
+    local themeX = w - themeSize - PS(10)
+    local themeY = PS(8)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
+    local mouseDown = gfx.mouse_cap & 1 == 1
+
+    -- Draw theme toggle (circle with rays for sun, crescent for moon)
+    if SETTINGS.darkMode then
+        -- Moon icon (crescent)
+        gfx.set(0.7, 0.7, 0.5, themeHover and 1 or 0.6)
+        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
+        gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
+    else
+        -- Sun icon
+        gfx.set(0.9, 0.7, 0.2, themeHover and 1 or 0.8)
+        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
+        -- Rays
+        for i = 0, 7 do
+            local angle = i * math.pi / 4
+            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
+            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
+            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
+            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
+            gfx.line(x1, y1, x2, y2)
+        end
     end
 
-    -- Get stem colors for effects
-    local stemColors = {}
-    for _, stem in ipairs(resultWindowState.selectedStems) do
-        table.insert(stemColors, stem.color)
-    end
-    if #stemColors == 0 then
-        stemColors = {{100, 255, 150}, {255, 100, 100}, {100, 200, 255}, {150, 100, 255}}
+    -- Handle theme toggle click
+    if themeHover and mouseDown and not resultWindowState.wasMouseDown then
+        SETTINGS.darkMode = not SETTINGS.darkMode
+        updateTheme()
+        saveSettings()  -- Persist theme change
     end
 
-    -- Draw expanding celebration rings
+    -- Success icon (simple green circle with checkmark)
     local iconX = w / 2
     local iconY = PS(50)
-    for _, ring in ipairs(resultWindowState.rings) do
-        if elapsed > ring.delay then
-            local ringTime = elapsed - ring.delay
-            ring.radius = ringTime * 80
-            ring.alpha = math.max(0, 1 - ringTime * 0.8)
+    local iconR = PS(28)
 
-            if ring.alpha > 0 then
-                local colorIdx = math.floor(ringTime * 3) % #stemColors + 1
-                local color = stemColors[colorIdx]
-                gfx.set(color[1]/255, color[2]/255, color[3]/255, ring.alpha * 0.3)
-                gfx.circle(iconX, iconY, ring.radius, 0, 1)
-                gfx.circle(iconX, iconY, ring.radius + 1, 0, 1)
-            end
-        end
-    end
+    -- Green circle
+    gfx.set(0.2, 0.65, 0.35, 1)
+    gfx.circle(iconX, iconY, iconR, 1, 1)
 
-    -- Draw confetti
-    for _, c in ipairs(resultWindowState.confetti) do
-        if elapsed > c.delay then
-            local confettiTime = elapsed - c.delay
-            c.y = c.y + c.vy
-            c.x = c.x + c.vx + math.sin(confettiTime * 3 + c.rotation) * 0.5
-            c.vy = c.vy + 0.1  -- Gravity
-            c.rotation = c.rotation + c.rotSpeed
-
-            if c.y < h + 50 then
-                local color = stemColors[((c.colorIdx - 1) % #stemColors) + 1]
-                local alpha = math.min(1, confettiTime * 2) * math.max(0, 1 - (c.y - h * 0.7) / (h * 0.3))
-
-                gfx.set(color[1]/255, color[2]/255, color[3]/255, alpha * 0.8)
-
-                -- Draw rotated rectangle (confetti piece)
-                local cx, cy = c.x * w / 500, c.y
-                local sz = c.size * scale
-                local cos_r = math.cos(c.rotation)
-                local sin_r = math.sin(c.rotation)
-
-                -- Simple confetti shape
-                gfx.rect(cx - sz/2, cy - sz/4, sz, sz/2, 1)
-            end
-        end
-    end
-
-    -- Success checkmark icon area with animated glow
-    local iconR = PS(30)
-    local pulseScale = 1 + 0.05 * math.sin(time * 4)
-    local glowPulse = 0.3 + 0.2 * math.sin(time * 3)
-
-    -- Outer glow
-    gfx.set(0.2, 0.8, 0.4, glowPulse * 0.5)
-    gfx.circle(iconX, iconY, iconR * 1.3 * pulseScale, 1, 1)
-
-    -- Green circle with gradient effect
-    for r = iconR, 0, -1 do
-        local gradientFactor = 1 - (iconR - r) / iconR * 0.3
-        gfx.set(0.15 * gradientFactor, 0.65 * gradientFactor, 0.3 * gradientFactor, 1)
-        gfx.circle(iconX, iconY, r * pulseScale, 1, 1)
-    end
-
-    -- Animated checkmark (draws in)
-    local checkProgress = math.min(1, elapsed * 3)
+    -- White checkmark
     gfx.set(1, 1, 1, 1)
     local cx, cy = iconX, iconY
+    -- First part of checkmark
+    local x1, y1 = cx - PS(10), cy
+    local x2, y2 = cx - PS(3), cy + PS(8)
+    gfx.line(x1, y1, x2, y2)
+    gfx.line(x1, y1+1, x2, y2+1)
+    -- Second part of checkmark
+    local x3, y3 = cx + PS(10), cy - PS(7)
+    gfx.line(x2, y2, x3, y3)
+    gfx.line(x2, y2+1, x3, y3+1)
 
-    if checkProgress > 0 then
-        local p1 = math.min(1, checkProgress * 2)
-        local p2 = math.max(0, math.min(1, (checkProgress - 0.3) * 2))
+    -- Title with colored STEM letters: "STEMperation Complete!"
+    gfx.setfont(1, "Arial", PS(18), string.byte('b'))
 
-        -- First part of checkmark
-        if p1 > 0 then
-            local x1, y1 = cx - PS(12), cy
-            local x2, y2 = cx - PS(4), cy + PS(10)
-            gfx.line(x1, y1, x1 + (x2-x1)*p1, y1 + (y2-y1)*p1)
-            gfx.line(x1, y1+1, x1 + (x2-x1)*p1, y1+1 + (y2-y1)*p1)
-        end
+    -- STEM colors (same as STEMperate button)
+    local stemLetterColors = {
+        {255, 100, 100},  -- S = Vocals (red)
+        {100, 200, 255},  -- T = Drums (blue)
+        {150, 100, 255},  -- E = Bass (purple)
+        {100, 255, 150},  -- M = Other (green)
+    }
 
-        -- Second part of checkmark
-        if p2 > 0 then
-            local x1, y1 = cx - PS(4), cy + PS(10)
-            local x2, y2 = cx + PS(12), cy - PS(8)
-            gfx.line(x1, y1, x1 + (x2-x1)*p2, y1 + (y2-y1)*p2)
-            gfx.line(x1, y1+1, x1 + (x2-x1)*p2, y1+1 + (y2-y1)*p2)
-        end
+    local stemPart = "STEM"
+    local restPart = "peration Complete!"
+    local stemW = gfx.measurestr(stemPart)
+    local restW = gfx.measurestr(restPart)
+    local totalW = stemW + restW
+    local titleX = (w - totalW) / 2
+    local titleY = PS(90)
+
+    -- Draw STEM with individual colored letters
+    local charX = titleX
+    for i = 1, 4 do
+        local char = stemPart:sub(i, i)
+        local color = stemLetterColors[i]
+        gfx.set(color[1]/255, color[2]/255, color[3]/255, 1)
+        gfx.x = charX
+        gfx.y = titleY
+        gfx.drawstr(char)
+        charX = charX + gfx.measurestr(char)
     end
 
-    -- Title with glow
-    gfx.setfont(1, "Arial", PS(18), string.byte('b'))
-    local title = "Separation Complete!"
-    local titleW = gfx.measurestr(title)
-
-    -- Title glow
-    local titleGlow = 0.3 + 0.15 * math.sin(time * 2)
-    gfx.set(0.2, 0.6, 0.3, titleGlow)
-    gfx.x = (w - titleW) / 2 + 1
-    gfx.y = PS(90) + 1
-    gfx.drawstr(title)
-
-    -- Main title
+    -- Draw rest of title in normal text color
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
-    gfx.x = (w - titleW) / 2
-    gfx.y = PS(90)
-    gfx.drawstr(title)
+    gfx.x = charX
+    gfx.y = titleY
+    gfx.drawstr(restPart)
 
-    -- Stem indicators with animated glow
+    -- Stem indicators (simple colored boxes)
     local stemY = PS(125)
-    local stemBoxSize = PS(16)
-    gfx.setfont(1, "Arial", PS(12))
+    local stemBoxSize = PS(14)
+    gfx.setfont(1, "Arial", PS(11))
 
     -- Calculate total width to center
     local totalStemWidth = 0
     for _, stem in ipairs(resultWindowState.selectedStems) do
-        totalStemWidth = totalStemWidth + stemBoxSize + gfx.measurestr(stem.name) + PS(18)
+        totalStemWidth = totalStemWidth + stemBoxSize + gfx.measurestr(stem.name) + PS(16)
     end
     local stemX = (w - totalStemWidth) / 2
 
-    for idx, stem in ipairs(resultWindowState.selectedStems) do
-        -- Animated glow behind each stem
-        local stemPulse = 0.3 + 0.2 * math.sin(time * 3 + idx * 0.5)
-        gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, stemPulse)
-        gfx.rect(stemX - 3, stemY - 3, stemBoxSize + 6, stemBoxSize + 6, 1)
-
+    for _, stem in ipairs(resultWindowState.selectedStems) do
         -- Stem color box
         gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 1)
         gfx.rect(stemX, stemY, stemBoxSize, stemBoxSize, 1)
@@ -3071,117 +5045,130 @@ local function drawResultWindow()
         gfx.x = stemX + stemBoxSize + PS(5)
         gfx.y = stemY + PS(1)
         gfx.drawstr(stem.name)
-        stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(18)
+        stemX = stemX + stemBoxSize + gfx.measurestr(stem.name) + PS(16)
     end
 
-    -- Result message with styled background
-    if SETTINGS.darkMode then
-        gfx.set(0.08, 0.10, 0.12, 0.8)
-    else
-        gfx.set(0.95, 0.95, 0.97, 0.9)
-    end
-    gfx.rect(PS(20), PS(155), w - PS(40), PS(60), 1)
-
+    -- Target info (output mode)
+    local targetY = PS(150)
+    gfx.setfont(1, "Arial", PS(10))
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    local targetText = "Target: "
+    if SETTINGS.createNewTracks then
+        targetText = targetText .. "New tracks"
+        if SETTINGS.createFolder then targetText = targetText .. " (folder)" end
+    else
+        targetText = targetText .. "In-place (as takes)"
+    end
+    -- Add action info
+    if SETTINGS.muteOriginal then
+        targetText = targetText .. " | Mute original"
+    elseif SETTINGS.muteSelection then
+        targetText = targetText .. " | Mute selection"
+    elseif SETTINGS.deleteOriginal then
+        targetText = targetText .. " | Delete original"
+    elseif SETTINGS.deleteSelection then
+        targetText = targetText .. " | Delete selection"
+    elseif SETTINGS.deleteOriginalTrack then
+        targetText = targetText .. " | Delete track"
+    end
+    local targetW = gfx.measurestr(targetText)
+    gfx.x = (w - targetW) / 2
+    gfx.y = targetY
+    gfx.drawstr(targetText)
+
+    -- Result message box
+    local msgBoxY = PS(170)
+    local msgBoxH = PS(70)
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+    gfx.rect(PS(20), msgBoxY, w - PS(40), msgBoxH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(PS(20), msgBoxY, w - PS(40), msgBoxH, 0)
+
+    -- Result message text
+    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.setfont(1, "Arial", PS(11))
     local msgLines = {}
     for line in (resultWindowState.message .. "\n"):gmatch("([^\n]*)\n") do
         table.insert(msgLines, line)
     end
-    local msgY = PS(165)
+    local msgY = msgBoxY + PS(8)
     for _, line in ipairs(msgLines) do
         local lineW = gfx.measurestr(line)
         gfx.x = (w - lineW) / 2
         gfx.y = msgY
         gfx.drawstr(line)
-        msgY = msgY + PS(16)
+        msgY = msgY + PS(13)
     end
 
-    -- Animated stem visualization at bottom
-    local vizY = h - PS(90)
-    local vizH = PS(30)
-    local vizW = w - PS(60)
-    local barWidth = vizW / math.max(1, #resultWindowState.selectedStems)
-
-    for idx, stem in ipairs(resultWindowState.selectedStems) do
-        local barX = PS(30) + (idx - 1) * barWidth
-        local animHeight = vizH * (0.3 + 0.7 * math.abs(math.sin(time * 2 + idx)))
-
-        -- Bar glow
-        gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 0.2)
-        gfx.rect(barX + 2, vizY + (vizH - animHeight) / 2, barWidth - 8, animHeight, 1)
-
-        -- Main bar
-        gfx.set(stem.color[1]/255, stem.color[2]/255, stem.color[3]/255, 0.7)
-        gfx.rect(barX + 4, vizY + (vizH - animHeight * 0.8) / 2, barWidth - 12, animHeight * 0.8, 1)
-    end
-
-    -- OK button with hover effect
-    local btnW = PS(100)
-    local btnH = PS(32)
+    -- OK button (rounded pill style like main app)
+    local btnW = PS(70)
+    local btnH = PS(20)
     local btnX = (w - btnW) / 2
-    local btnY = h - PS(50)
+    local btnY = h - PS(40)
 
-    local mx, my = gfx.mouse_x, gfx.mouse_y
     local hover = mx >= btnX and mx <= btnX + btnW and my >= btnY and my <= btnY + btnH
-    local mouseDown = gfx.mouse_cap & 1 == 1
 
-    -- Button glow on hover
+    -- Button background
     if hover then
-        gfx.set(THEME.buttonHover[1], THEME.buttonHover[2], THEME.buttonHover[3], 0.3)
-        gfx.rect(btnX - 3, btnY - 3, btnW + 6, btnH + 6, 1)
-        gfx.set(THEME.buttonHover[1], THEME.buttonHover[2], THEME.buttonHover[3], 1)
+        gfx.set(THEME.buttonPrimaryHover[1], THEME.buttonPrimaryHover[2], THEME.buttonPrimaryHover[3], 1)
     else
-        gfx.set(THEME.button[1], THEME.button[2], THEME.button[3], 1)
+        gfx.set(THEME.buttonPrimary[1], THEME.buttonPrimary[2], THEME.buttonPrimary[3], 1)
     end
-    gfx.rect(btnX, btnY, btnW, btnH, 1)
-
-    -- Button border
-    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
-    gfx.rect(btnX, btnY, btnW, btnH, 0)
+    -- Draw rounded (pill-shaped) button
+    for i = 0, btnH - 1 do
+        local radius = btnH / 2
+        local inset = 0
+        if i < radius then
+            inset = radius - math.sqrt(radius * radius - (radius - i) * (radius - i))
+        elseif i > btnH - radius then
+            inset = radius - math.sqrt(radius * radius - (i - (btnH - radius)) * (i - (btnH - radius)))
+        end
+        gfx.line(btnX + inset, btnY + i, btnX + btnW - inset, btnY + i)
+    end
 
     -- Button text
     gfx.set(1, 1, 1, 1)
-    gfx.setfont(1, "Arial", PS(14), string.byte('b'))
+    gfx.setfont(1, "Arial", PS(13), string.byte('b'))
     local okText = "OK"
     local okW = gfx.measurestr(okText)
     gfx.x = btnX + (btnW - okW) / 2
-    gfx.y = btnY + (btnH - PS(14)) / 2
+    gfx.y = btnY + (btnH - PS(13)) / 2
     gfx.drawstr(okText)
 
-    -- Hint
+    -- Hint at very bottom edge
     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
     gfx.setfont(1, "Arial", PS(9))
-    local hint = "Press Enter, Space, or click OK to close"
+    local hint = "Enter / Space / ESC"
     local hintW = gfx.measurestr(hint)
     gfx.x = (w - hintW) / 2
-    gfx.y = h - PS(15)
+    gfx.y = h - PS(12)
     gfx.drawstr(hint)
+
+    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
+    gfx.setfont(1, "Arial", PS(10))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    local audioPart = "AUDIO"
+    local audioPartW = gfx.measurestr(audioPart)
+    local totalLogoW = flarkPartW + audioPartW
+    local logoStartX = (w - totalLogoW) / 2
+    -- Orange text, 50% translucent
+    gfx.set(1.0, 0.5, 0.1, 0.5)
+    gfx.setfont(1, "Arial", PS(10))
+    gfx.x = logoStartX
+    gfx.y = PS(3)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    gfx.x = logoStartX + flarkPartW
+    gfx.y = PS(3)
+    gfx.drawstr(audioPart)
 
     gfx.update()
 
     -- Check for click on OK button
     if hover and mouseDown and not resultWindowState.wasMouseDown then
         return true  -- Close
-    end
-
-    -- Check for click outside window (but still in REAPER)
-    if mouseDown and not resultWindowState.wasMouseDown then
-        -- Check if click is outside our window bounds
-        if mx < 0 or mx > w or my < 0 or my > h then
-            -- Click is outside - check if REAPER is still focused
-            if reaper.JS_Window_GetFocus then
-                local focusedWnd = reaper.JS_Window_GetFocus()
-                local reaperMain = reaper.GetMainHwnd()
-                -- Check if focus is on REAPER or its children (not another app)
-                if focusedWnd then
-                    return true  -- Close when clicking outside in REAPER
-                end
-            else
-                -- No JS API, just close on outside click
-                return true
-            end
-        end
     end
 
     resultWindowState.wasMouseDown = mouseDown
@@ -3196,13 +5183,35 @@ end
 
 -- Result window loop
 local function resultWindowLoop()
+    -- Save window position for next time
+    if reaper.JS_Window_GetRect then
+        local hwnd = reaper.JS_Window_Find("Stemperator - Complete", true)
+        if hwnd then
+            local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
+            if retval then
+                lastDialogX = left
+                lastDialogY = top
+                lastDialogW = right - left
+                lastDialogH = bottom - top
+            end
+
+            -- Check if window lost focus - close and reopen main dialog
+            if reaper.JS_Window_GetFocus then
+                local focusedHwnd = reaper.JS_Window_GetFocus()
+                if focusedHwnd and focusedHwnd ~= hwnd then
+                    -- Window lost focus, close and reopen main app
+                    gfx.quit()
+                    reaper.defer(function() main() end)
+                    return
+                end
+            end
+        end
+    end
+
     if drawResultWindow() then
         gfx.quit()
-        -- Return focus to REAPER main window
-        local mainHwnd = reaper.GetMainHwnd()
-        if mainHwnd then
-            reaper.JS_Window_SetFocus(mainHwnd)
-        end
+        -- Reopen main dialog (if there's still a selection)
+        reaper.defer(function() main() end)
         return
     end
     reaper.defer(resultWindowLoop)
@@ -3210,6 +5219,10 @@ end
 
 -- Show result window
 function showResultWindow(selectedStems, message)
+    -- Load settings to get current theme
+    loadSettings()
+    updateTheme()
+
     resultWindowState.selectedStems = selectedStems
     resultWindowState.message = message
     resultWindowState.wasMouseDown = false
@@ -3217,59 +5230,186 @@ function showResultWindow(selectedStems, message)
     -- Initialize celebration effects
     initCelebration()
 
+    -- Restore playback state if it was playing before processing
+    if savedPlaybackState == 1 then
+        -- Was playing, resume playback
+        reaper.OnPlayButton()
+    elseif savedPlaybackState == 2 then
+        -- Was paused, start and pause (to restore paused state)
+        reaper.OnPlayButton()
+        reaper.OnPauseButton()
+    end
+
+    -- Return focus to REAPER main window so user can interact
+    local mainHwnd = reaper.GetMainHwnd()
+    if mainHwnd and reaper.JS_Window_SetFocus then
+        reaper.JS_Window_SetFocus(mainHwnd)
+    end
+
     -- Use same size as main dialog
     local winW = lastDialogW or 380
     local winH = lastDialogH or 340
     local winX, winY
 
-    -- Use last dialog position if available
-    local refX, refY  -- reference point for screen detection
+    -- Use last dialog position if available (exact position, no clamping)
     if lastDialogX and lastDialogY then
         winX = lastDialogX
         winY = lastDialogY
-        refX = lastDialogX + winW / 2
-        refY = lastDialogY + winH / 2
     else
+        -- Fallback to mouse position with clamping
         local mouseX, mouseY = reaper.GetMousePosition()
         winX = mouseX - winW / 2
         winY = mouseY - winH / 2
-        refX, refY = mouseX, mouseY
+        winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
     end
-
-    -- Clamp to current monitor
-    winX, winY = clampToScreen(winX, winY, winW, winH, refX, refY)
 
     gfx.init("Stemperator - Complete", winW, winH, 0, winX, winY)
     reaper.defer(resultWindowLoop)
 end
 
--- Run parallel multi-track separation
+-- Run multi-track separation (parallel or sequential based on setting)
 runSingleTrackSeparation = function(trackList)
-    -- This function now handles ALL tracks in parallel
     local baseTempDir = getTempDir() .. PATH_SEP .. "stemperator_" .. os.time()
     makeDir(baseTempDir)
 
-    -- Prepare all tracks: extract audio and start separation processes
+    -- Check if we have a time selection
+    local hasTimeSel = hasTimeSelection()
+
+    -- In-place mode with no time selection: process each item separately
+    -- This ensures each item gets its own stems as takes
+    local inPlaceMultiItem = not SETTINGS.createNewTracks and not hasTimeSel
+
+    -- Prepare all tracks: extract audio
     local trackJobs = {}
+    local jobIndex = 0
+
     for i, track in ipairs(trackList) do
         local _, trackName = reaper.GetTrackName(track)
         if trackName == "" then trackName = "Track " .. math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER")) end
 
-        local trackDir = baseTempDir .. PATH_SEP .. "track_" .. i
-        makeDir(trackDir)
-        local inputFile = trackDir .. PATH_SEP .. "input.wav"
+        if inPlaceMultiItem then
+            -- In-place mode: create a separate job for EACH selected item on the track
+            local numItems = reaper.CountTrackMediaItems(track)
+            local selectedItems = {}
+            for j = 0, numItems - 1 do
+                local item = reaper.GetTrackMediaItem(track, j)
+                if reaper.IsMediaItemSelected(item) then
+                    table.insert(selectedItems, item)
+                end
+            end
 
-        local extracted, err, sourceItem, allSourceItems = renderTrackTimeSelectionToWav(track, inputFile)
-        if extracted then
-            table.insert(trackJobs, {
-                track = track,
-                trackName = trackName,
-                trackDir = trackDir,
-                inputFile = inputFile,
-                sourceItem = sourceItem,
-                sourceItems = allSourceItems or {sourceItem},  -- All items for mute/delete
-                index = i,
-            })
+            for itemIdx, item in ipairs(selectedItems) do
+                jobIndex = jobIndex + 1
+                local itemDir = baseTempDir .. PATH_SEP .. "item_" .. jobIndex
+                makeDir(itemDir)
+                local inputFile = itemDir .. PATH_SEP .. "input.wav"
+
+                local extracted, err = renderSingleItemToWav(item, inputFile)
+                if extracted then
+                    -- Get item name for display
+                    local itemName = "Unknown"
+                    local take = reaper.GetActiveTake(item)
+                    if take then
+                        local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                        if takeName and takeName ~= "" then
+                            itemName = takeName
+                        else
+                            local source = reaper.GetMediaItemTake_Source(take)
+                            if source then
+                                local sourcePath = reaper.GetMediaSourceFileName(source, "")
+                                if sourcePath and sourcePath ~= "" then
+                                    itemName = sourcePath:match("([^/\\]+)$") or sourcePath
+                                end
+                            end
+                        end
+                    end
+
+                    -- Get audio duration
+                    local audioDuration = 0
+                    local f = io.popen('ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "' .. inputFile .. '" 2>nul')
+                    if f then
+                        local dur = f:read("*a")
+                        f:close()
+                        audioDuration = tonumber(dur) or 0
+                    end
+
+                    table.insert(trackJobs, {
+                        track = track,
+                        trackName = trackName .. " [" .. itemIdx .. "/" .. #selectedItems .. "]",
+                        trackDir = itemDir,
+                        inputFile = inputFile,
+                        sourceItem = item,
+                        sourceItems = {item},  -- Only this one item
+                        itemNames = itemName,
+                        itemCount = 1,
+                        index = jobIndex,
+                        audioDuration = audioDuration,
+                    })
+                end
+            end
+        else
+            -- Original behavior: one job per track (combines items or uses time selection)
+            jobIndex = jobIndex + 1
+            local trackDir = baseTempDir .. PATH_SEP .. "track_" .. jobIndex
+            makeDir(trackDir)
+            local inputFile = trackDir .. PATH_SEP .. "input.wav"
+
+            -- Use appropriate render function based on whether time selection exists
+            local extracted, err, sourceItem, allSourceItems
+            if hasTimeSel then
+                extracted, err, sourceItem, allSourceItems = renderTrackTimeSelectionToWav(track, inputFile)
+            else
+                extracted, err, sourceItem, allSourceItems = renderTrackSelectedItemsToWav(track, inputFile)
+            end
+            if extracted then
+                -- Get media item name(s) for display
+                local itemNames = {}
+                local items = allSourceItems or {sourceItem}
+                for _, item in ipairs(items) do
+                    if item and reaper.ValidatePtr(item, "MediaItem*") then
+                        local take = reaper.GetActiveTake(item)
+                        if take then
+                            local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                            if takeName and takeName ~= "" then
+                                table.insert(itemNames, takeName)
+                            else
+                                -- Try to get source filename
+                                local source = reaper.GetMediaItemTake_Source(take)
+                                if source then
+                                    local sourcePath = reaper.GetMediaSourceFileName(source, "")
+                                    if sourcePath and sourcePath ~= "" then
+                                        local fileName = sourcePath:match("([^/\\]+)$") or sourcePath
+                                        table.insert(itemNames, fileName)
+                                    end
+                                end
+                            end
+                        end
+                    end
+                end
+                local itemNamesStr = #itemNames > 0 and table.concat(itemNames, ", ") or "Unknown"
+
+                -- Get audio duration from the input file
+                local audioDuration = 0
+                local f = io.popen('ffprobe -v error -show_entries format=duration -of default=noprint_wrappers=1:nokey=1 "' .. inputFile .. '" 2>nul')
+                if f then
+                    local dur = f:read("*a")
+                    f:close()
+                    audioDuration = tonumber(dur) or 0
+                end
+
+                table.insert(trackJobs, {
+                    track = track,
+                    trackName = trackName,
+                    trackDir = trackDir,
+                    inputFile = inputFile,
+                    sourceItem = sourceItem,
+                    sourceItems = allSourceItems or {sourceItem},  -- All items for mute/delete
+                    itemNames = itemNamesStr,
+                    itemCount = #items,
+                    index = jobIndex,
+                    audioDuration = audioDuration,  -- Duration in seconds
+                })
+            end
         end
     end
 
@@ -3284,10 +5424,20 @@ runSingleTrackSeparation = function(trackList)
     multiTrackQueue.completedCount = 0
     multiTrackQueue.baseTempDir = baseTempDir
     multiTrackQueue.active = true
+    multiTrackQueue.sequentialMode = not SETTINGS.parallelProcessing
+    multiTrackQueue.currentJobIndex = 0
+    multiTrackQueue.globalStartTime = os.time()  -- Track total elapsed time
+    multiTrackQueue.totalAudioDuration = 0  -- Will be updated when jobs start
 
-    -- Start all separation processes in parallel
-    for _, job in ipairs(trackJobs) do
-        startSeparationProcessForJob(job)
+    if SETTINGS.parallelProcessing then
+        -- Start all separation processes in parallel (uses more VRAM)
+        for _, job in ipairs(trackJobs) do
+            startSeparationProcessForJob(job, 25)  -- Smaller segments for parallel
+        end
+    else
+        -- Sequential mode: start only the first job (uses less VRAM)
+        startSeparationProcessForJob(trackJobs[1], 40)  -- Larger segments for sequential
+        multiTrackQueue.currentJobIndex = 1
     end
 
     -- Show progress window that monitors all jobs
@@ -3295,7 +5445,9 @@ runSingleTrackSeparation = function(trackList)
 end
 
 -- Start a separation process for one job (no window, just background process)
-startSeparationProcessForJob = function(job)
+-- segmentSize: optional, defaults to 25 for parallel, 40 for sequential
+startSeparationProcessForJob = function(job, segmentSize)
+    segmentSize = segmentSize or 25
     local logFile = job.trackDir .. PATH_SEP .. "separation_log.txt"
     local stdoutFile = job.trackDir .. PATH_SEP .. "stdout.txt"
     local doneFile = job.trackDir .. PATH_SEP .. "done.txt"
@@ -3309,13 +5461,12 @@ startSeparationProcessForJob = function(job)
 
     if OS == "Windows" then
         -- Create batch file to run Python with output redirection
-        -- Multi-track mode uses smaller segment size (25) to fit multiple processes in VRAM
         local batPath = job.trackDir .. PATH_SEP .. "run_separation.bat"
         local batFile = io.open(batPath, "w")
         if batFile then
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size 25 ')
+            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize .. ' ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -3338,9 +5489,8 @@ startSeparationProcessForJob = function(job)
         end
     else
         -- macOS/Linux
-        -- Multi-track mode uses smaller segment size (25) to fit multiple processes in VRAM
         local cmd = '"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" '
-        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size 25'
+        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize
         cmd = cmd .. ' >"' .. stdoutFile .. '" 2>"' .. logFile .. '" && echo DONE >"' .. doneFile .. '" &'
         os.execute(cmd)
     end
@@ -3349,27 +5499,45 @@ end
 -- Update progress for all jobs from their stdout files
 updateAllJobsProgress = function()
     for _, job in ipairs(multiTrackQueue.jobs) do
-        local f = io.open(job.stdoutFile, "r")
-        if f then
-            local lastProgress = nil
-            for line in f:lines() do
-                local percent, stage = line:match("PROGRESS:(%d+):(.+)")
-                if percent then
-                    lastProgress = { percent = tonumber(percent), stage = stage }
+        -- Only check progress for jobs that have been started
+        if job.startTime then
+            local f = io.open(job.stdoutFile, "r")
+            if f then
+                local lastProgress = nil
+                for line in f:lines() do
+                    local percent, stage = line:match("PROGRESS:(%d+):(.+)")
+                    if percent then
+                        lastProgress = { percent = tonumber(percent), stage = stage }
+                    end
+                end
+                f:close()
+                if lastProgress then
+                    job.percent = lastProgress.percent
+                    job.stage = lastProgress.stage
                 end
             end
-            f:close()
-            if lastProgress then
-                job.percent = lastProgress.percent
-                job.stage = lastProgress.stage
-            end
-        end
 
-        -- Check if done
-        local doneFile = io.open(job.doneFile, "r")
-        if doneFile then
-            doneFile:close()
-            job.done = true
+            -- Check if done
+            local doneFile = io.open(job.doneFile, "r")
+            if doneFile then
+                doneFile:close()
+                if not job.done then
+                    job.done = true
+                    -- In sequential mode, start the next job when this one completes
+                    if multiTrackQueue.sequentialMode then
+                        local nextIndex = multiTrackQueue.currentJobIndex + 1
+                        if nextIndex <= #multiTrackQueue.jobs then
+                            local nextJob = multiTrackQueue.jobs[nextIndex]
+                            startSeparationProcessForJob(nextJob, 40)  -- Larger segments for sequential
+                            multiTrackQueue.currentJobIndex = nextIndex
+                        end
+                    end
+                end
+            end
+        else
+            -- Job not yet started (sequential mode)
+            job.percent = 0
+            job.stage = "Waiting..."
         end
     end
 end
@@ -3394,26 +5562,23 @@ end
 -- Draw multi-track progress window
 local function drawMultiTrackProgressWindow()
     local w, h = gfx.w, gfx.h
-    local time = os.clock()
 
     -- Scale
     local scale = math.min(w / 480, h / 280)
     scale = math.max(0.5, math.min(4.0, scale))
     local function PS(val) return math.floor(val * scale + 0.5) end
 
-    -- Background gradient (theme-aware)
-    for y = 0, h do
-        local t = y / h
-        local baseR = THEME.bgGradientTop[1] * (1-t) + THEME.bgGradientBottom[1] * t
-        local baseG = THEME.bgGradientTop[2] * (1-t) + THEME.bgGradientBottom[2] * t
-        local baseB = THEME.bgGradientTop[3] * (1-t) + THEME.bgGradientBottom[3] * t
-        gfx.set(baseR, baseG, baseB, 1)
-        gfx.line(0, y, w, y)
-    end
+    -- Solid background (matching main app)
+    gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+    gfx.rect(0, 0, w, h, 1)
+
+    -- Colored STEM border at top
+    drawStemBorder(0, 0, w, 3)
 
     -- Title
     gfx.setfont(1, "Arial", PS(16), string.byte('b'))
-    local title = string.format("Multi-Track Separation (%d tracks)", #multiTrackQueue.jobs)
+    local modeStr = multiTrackQueue.sequentialMode and "Sequential" or "Parallel"
+    local title = string.format("Multi-Track Separation - %s (%d tracks)", modeStr, #multiTrackQueue.jobs)
     gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
     gfx.x = PS(20)
     gfx.y = PS(15)
@@ -3426,23 +5591,22 @@ local function drawMultiTrackProgressWindow()
     local barH = PS(20)
     local overallProgress = getOverallProgress()
 
-    if SETTINGS.darkMode then
-        gfx.set(0.12, 0.12, 0.14, 1)
-    else
-        gfx.set(0.82, 0.82, 0.84, 1)
-    end
+    -- Progress bar background
+    gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
     gfx.rect(barX, barY, barW, barH, 1)
+    gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+    gfx.rect(barX, barY, barW, barH, 0)
 
     -- Progress fill
     local fillW = math.floor(barW * overallProgress / 100)
     if fillW > 0 then
-        gfx.set(0.3, 0.6, 0.4, 1)
-        gfx.rect(barX, barY, fillW, barH, 1)
+        gfx.set(0.3, 0.65, 0.4, 1)
+        gfx.rect(barX + 1, barY + 1, fillW - 2, barH - 2, 1)
     end
 
     -- Progress text
     gfx.setfont(1, "Arial", PS(11))
-    gfx.set(THEME.text[1], THEME.text[2], THEME.text[3], 1)
+    gfx.set(1, 1, 1, 1)
     local progText = string.format("%d%%", overallProgress)
     local progW = gfx.measurestr(progText)
     gfx.x = barX + (barW - progW) / 2
@@ -3451,8 +5615,7 @@ local function drawMultiTrackProgressWindow()
 
     -- Individual track progress
     local trackY = PS(80)
-    local trackH = PS(22)
-    local trackSpacing = PS(26)
+    local trackSpacing = PS(30)
 
     gfx.setfont(1, "Arial", PS(10))
     for i, job in ipairs(multiTrackQueue.jobs) do
@@ -3468,14 +5631,14 @@ local function drawMultiTrackProgressWindow()
 
         -- Track progress bar
         local tBarX = barX + PS(120)
-        local tBarW = barW - PS(120)
+        local tBarW = barW - PS(150)
+        local tBarH = PS(18)
 
-        if SETTINGS.darkMode then
-            gfx.set(0.15, 0.15, 0.17, 1)
-        else
-            gfx.set(0.85, 0.85, 0.87, 1)
-        end
-        gfx.rect(tBarX, yPos, tBarW, PS(14), 1)
+        -- Progress bar background
+        gfx.set(THEME.inputBg[1], THEME.inputBg[2], THEME.inputBg[3], 1)
+        gfx.rect(tBarX, yPos, tBarW, tBarH, 1)
+        gfx.set(THEME.border[1], THEME.border[2], THEME.border[3], 1)
+        gfx.rect(tBarX, yPos, tBarW, tBarH, 0)
 
         -- Fill
         local tFillW = math.floor(tBarW * (job.percent or 0) / 100)
@@ -3483,33 +5646,242 @@ local function drawMultiTrackProgressWindow()
             -- Color based on stem being processed
             local stemIdx = (i - 1) % #STEMS + 1
             local stemColor = STEMS[stemIdx].color
-            gfx.set(stemColor[1]/255, stemColor[2]/255, stemColor[3]/255, 0.8)
-            gfx.rect(tBarX, yPos, tFillW, PS(14), 1)
+            gfx.set(stemColor[1]/255, stemColor[2]/255, stemColor[3]/255, 0.85)
+            gfx.rect(tBarX + 1, yPos + 1, tFillW - 2, tBarH - 2, 1)
+        end
+
+        -- Stage text inside progress bar
+        if not job.done and job.stage and job.stage ~= "" then
+            gfx.setfont(1, "Arial", PS(9))
+            gfx.set(1, 1, 1, 0.95)
+            local stageText = job.stage
+            if #stageText > 35 then stageText = stageText:sub(1, 32) .. "..." end
+            gfx.x = tBarX + PS(5)
+            gfx.y = yPos + PS(3)
+            gfx.drawstr(stageText)
         end
 
         -- Done checkmark or percentage
+        gfx.setfont(1, "Arial", PS(10))
         if job.done then
-            gfx.set(0.3, 0.8, 0.4, 1)
-            gfx.x = tBarX + tBarW + PS(5)
-            gfx.y = yPos
-            gfx.drawstr("✓")
+            gfx.set(0.3, 0.75, 0.4, 1)
+            gfx.x = tBarX + tBarW + PS(8)
+            gfx.y = yPos + PS(2)
+            gfx.drawstr("Done")
         else
-            gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-            gfx.x = tBarX + tBarW + PS(5)
-            gfx.y = yPos
+            gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+            gfx.x = tBarX + tBarW + PS(8)
+            gfx.y = yPos + PS(2)
             gfx.drawstr(string.format("%d%%", job.percent or 0))
         end
     end
 
-    -- Elapsed time
-    local elapsed = os.time() - (multiTrackQueue.jobs[1] and multiTrackQueue.jobs[1].startTime or os.time())
-    local mins = math.floor(elapsed / 60)
-    local secs = elapsed % 60
+    -- Current processing info (positioned below progress bars)
+    local numJobs = #multiTrackQueue.jobs
+    local infoY = trackY + numJobs * trackSpacing + PS(8)  -- Below last progress bar
+
+    -- Calculate stats
+    local globalElapsed = os.time() - (multiTrackQueue.globalStartTime or os.time())
+    local completedJobs = 0
+    local activeJobs = 0
+    local totalAudioDur = 0
+    local completedAudioDur = 0
+    local activeJob = nil
+
+    -- Get system CPU, GPU, and Memory usage (Windows) - cached to avoid overhead
+    local cpuUsage = nil
+    local gpuUsage = nil
+    local memUsage = nil
+    if not multiTrackQueue.lastCpuCheck or (os.time() - multiTrackQueue.lastCpuCheck) >= 2 then
+        local tempDir = os.getenv("TEMP")
+        -- Query CPU via WMIC
+        local cpuFile = tempDir .. "\\stemperator_cpu.txt"
+        execHidden('wmic cpu get loadpercentage /value > "' .. cpuFile .. '"')
+        local f = io.open(cpuFile, "r")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            local load = content:match("LoadPercentage=(%d+)")
+            if load then
+                multiTrackQueue.cachedCpuUsage = tonumber(load)
+            end
+        end
+
+        -- Query GPU usage via PowerShell (works for AMD and NVIDIA)
+        local gpuFile = tempDir .. "\\stemperator_gpu.txt"
+        local gpuCmd = 'powershell -NoProfile -Command "(Get-Counter \'\\GPU Engine(*engtype_3D)\\Utilization Percentage\' -ErrorAction SilentlyContinue).CounterSamples | Measure-Object -Property CookedValue -Sum | Select-Object -ExpandProperty Sum" > "' .. gpuFile .. '"'
+        execHidden(gpuCmd)
+        local gf = io.open(gpuFile, "r")
+        if gf then
+            local gpuContent = gf:read("*a")
+            gf:close()
+            local gpuLoad = gpuContent:match("(%d+)")
+            if gpuLoad then
+                multiTrackQueue.cachedGpuUsage = tonumber(gpuLoad)
+            end
+        end
+
+        -- Query Memory usage via WMIC
+        local memFile = tempDir .. "\\stemperator_mem.txt"
+        execHidden('wmic OS get FreePhysicalMemory,TotalVisibleMemorySize /value > "' .. memFile .. '"')
+        local mf = io.open(memFile, "r")
+        if mf then
+            local memContent = mf:read("*a")
+            mf:close()
+            local freeMem = memContent:match("FreePhysicalMemory=(%d+)")
+            local totalMem = memContent:match("TotalVisibleMemorySize=(%d+)")
+            if freeMem and totalMem then
+                local freeKB = tonumber(freeMem)
+                local totalKB = tonumber(totalMem)
+                local usedKB = totalKB - freeKB
+                multiTrackQueue.cachedMemUsage = math.floor(usedKB / totalKB * 100)
+                multiTrackQueue.cachedMemUsedGB = usedKB / 1024 / 1024
+                multiTrackQueue.cachedMemTotalGB = totalKB / 1024 / 1024
+            end
+        end
+
+        multiTrackQueue.lastCpuCheck = os.time()
+    end
+    cpuUsage = multiTrackQueue.cachedCpuUsage
+    gpuUsage = multiTrackQueue.cachedGpuUsage
+    memUsage = multiTrackQueue.cachedMemUsage
+    local memUsedGB = multiTrackQueue.cachedMemUsedGB
+    local memTotalGB = multiTrackQueue.cachedMemTotalGB
+
+    for _, job in ipairs(multiTrackQueue.jobs) do
+        totalAudioDur = totalAudioDur + (job.audioDuration or 0)
+        if job.done then
+            completedJobs = completedJobs + 1
+            completedAudioDur = completedAudioDur + (job.audioDuration or 0)
+        elseif job.startTime then
+            activeJobs = activeJobs + 1
+            if not activeJob then activeJob = job end
+            -- Estimate completed audio based on progress %
+            completedAudioDur = completedAudioDur + (job.audioDuration or 0) * (job.percent or 0) / 100
+        end
+    end
+
+    -- Calculate processing speed (realtime factor)
+    local realtimeFactor = 0
+    if globalElapsed > 5 and completedAudioDur > 0 then
+        realtimeFactor = completedAudioDur / globalElapsed
+    end
+
+    -- Estimate ETA
+    local eta = 0
+    local remainingAudio = totalAudioDur - completedAudioDur
+    if realtimeFactor > 0 then
+        eta = remainingAudio / realtimeFactor
+    elseif globalElapsed > 0 and overallProgress > 5 then
+        -- Fallback: estimate from progress %
+        local totalEstimate = globalElapsed * 100 / overallProgress
+        eta = totalEstimate - globalElapsed
+    end
+
+    gfx.setfont(1, "Arial", PS(11))
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+
+    -- Count expected stems
+    local stemsPerTrack = SETTINGS.model == "htdemucs_6s" and 6 or 4
+    local selectedStemCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then selectedStemCount = selectedStemCount + 1 end
+    end
+    local expectedStems = numJobs * selectedStemCount
+
+    -- Line 1: Status overview
+    local statusText = string.format("Tracks: %d/%d | Audio: %.1fs/%.1fs | Stems: %d expected",
+        completedJobs, numJobs, completedAudioDur, totalAudioDur, expectedStems)
+    gfx.x = barX
+    gfx.y = infoY
+    gfx.drawstr(statusText)
+
+    -- Line 2: Speed and ETA
+    local speedText = ""
+    if realtimeFactor > 0 then
+        speedText = string.format("Speed: %.2fx realtime", realtimeFactor)
+    else
+        speedText = "Speed: calculating..."
+    end
+    local etaText = ""
+    if eta > 0 then
+        local etaMins = math.floor(eta / 60)
+        local etaSecs = math.floor(eta % 60)
+        etaText = string.format(" | ETA: %d:%02d remaining", etaMins, etaSecs)
+    end
+    gfx.x = barX
+    gfx.y = infoY + PS(16)
+    gfx.drawstr(speedText .. etaText)
+
+    -- Line 3: System resources (CPU, GPU, RAM)
+    local sysText = "System: "
+    if cpuUsage then
+        sysText = sysText .. string.format("CPU %d%%", cpuUsage)
+    end
+    if gpuUsage then
+        sysText = sysText .. string.format(" | GPU %d%%", gpuUsage)
+    end
+    if memUsedGB and memTotalGB then
+        sysText = sysText .. string.format(" | RAM %.1f/%.1fGB", memUsedGB, memTotalGB)
+    end
+    gfx.x = barX
+    gfx.y = infoY + PS(32)
+    gfx.drawstr(sysText)
+
+    -- Line 4: Current job info (if active)
+    if activeJob then
+        local jobElapsed = os.time() - (activeJob.startTime or os.time())
+        local jobMins = math.floor(jobElapsed / 60)
+        local jobSecs = jobElapsed % 60
+        local audioDurStr = activeJob.audioDuration and string.format("%.1fs", activeJob.audioDuration) or "?"
+        local infoText = string.format("Current: %s (%s) | %d:%02d elapsed",
+            activeJob.trackName or "?",
+            audioDurStr,
+            jobMins, jobSecs)
+        gfx.x = barX
+        gfx.y = infoY + PS(48)
+        gfx.drawstr(infoText)
+
+        -- Line 5: Media item info
+        local itemInfo = activeJob.itemNames or "Unknown"
+        if #itemInfo > 55 then itemInfo = itemInfo:sub(1, 52) .. "..." end
+        gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
+        gfx.x = barX
+        gfx.y = infoY + PS(64)
+        gfx.drawstr("Media: " .. itemInfo)
+    end
+
+    -- Bottom line: Total elapsed, model, segment and cancel hint
+    local totalMins = math.floor(globalElapsed / 60)
+    local totalSecs = globalElapsed % 60
     gfx.set(THEME.textHint[1], THEME.textHint[2], THEME.textHint[3], 1)
-    gfx.setfont(1, "Arial", PS(9))
+    gfx.setfont(1, "Arial", PS(10))
     gfx.x = PS(20)
     gfx.y = h - PS(20)
-    gfx.drawstr(string.format("Elapsed: %d:%02d  |  Press ESC to cancel", mins, secs))
+    local segSize = multiTrackQueue.sequentialMode and "40" or "25"
+    local modeStr = multiTrackQueue.sequentialMode and "Seq" or "Par"
+    gfx.drawstr(string.format("Time: %d:%02d | %s | Seg:%s | %s | ESC=cancel",
+        totalMins, totalSecs, SETTINGS.model or "?", segSize, modeStr))
+
+    -- flarkAUDIO logo at top (translucent) - "flark" regular, "AUDIO" bold
+    gfx.setfont(1, "Arial", PS(10))
+    local flarkPart = "flark"
+    local flarkPartW = gfx.measurestr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    local audioPart = "AUDIO"
+    local audioPartW = gfx.measurestr(audioPart)
+    local totalLogoW = flarkPartW + audioPartW
+    local logoStartX = (w - totalLogoW) / 2
+    -- Orange text, 50% translucent
+    gfx.set(1.0, 0.5, 0.1, 0.5)
+    gfx.setfont(1, "Arial", PS(10))
+    gfx.x = logoStartX
+    gfx.y = PS(3)
+    gfx.drawstr(flarkPart)
+    gfx.setfont(1, "Arial", PS(10), string.byte('b'))
+    gfx.x = logoStartX + flarkPartW
+    gfx.y = PS(3)
+    gfx.drawstr(audioPart)
 
     gfx.update()
 
@@ -3550,9 +5922,14 @@ end
 
 -- Show multi-track progress window
 showMultiTrackProgressWindow = function()
+    -- Load settings to get current theme
+    loadSettings()
+    updateTheme()
+
     -- Use saved dialog size/position like other windows
-    local winW = lastDialogW or 380
-    local winH = lastDialogH or 340
+    -- Increased height for stats display (5 lines of info + track bars)
+    local winW = lastDialogW or 480
+    local winH = lastDialogH or 460
 
     local winX, winY
     if lastDialogX and lastDialogY then
@@ -3589,7 +5966,10 @@ processAllStemsResult = function()
         end
     end
 
-    if SETTINGS.muteOriginal then
+    -- Skip item-level processing if deleteOriginalTrack is set (tracks will be deleted after stems created)
+    if SETTINGS.deleteOriginalTrack then
+        -- Do nothing here - track deletion happens after stems are created
+    elseif SETTINGS.muteOriginal then
         -- Mute all source items from all jobs
         for _, item in ipairs(allItems) do
             if reaper.ValidatePtr(item, "MediaItem*") then
@@ -3716,30 +6096,134 @@ processAllStemsResult = function()
     local totalStemsCreated = 0
     local trackNames = {}
 
-    for _, job in ipairs(multiTrackQueue.jobs) do
+    debugLog("=== processAllStemsResult: Creating stem tracks ===")
+    debugLog("Number of jobs: " .. #multiTrackQueue.jobs)
+    debugLog("itemPos: " .. tostring(itemPos) .. ", itemLen: " .. tostring(itemLen))
+    debugLog("createNewTracks: " .. tostring(SETTINGS.createNewTracks))
+
+    local is6Stem = (SETTINGS.model == "htdemucs_6s")
+
+    for jobIdx, job in ipairs(multiTrackQueue.jobs) do
+        debugLog("Job " .. jobIdx .. ": trackDir=" .. tostring(job.trackDir))
         -- Find stem files in job directory
         local stems = {}
+        local selectedCount = 0
+        local foundCount = 0
         for _, stem in ipairs(STEMS) do
-            if stem.selected then
+            -- Skip 6-stem-only stems if not using 6-stem model
+            local stemApplies = stem.selected and (not stem.sixStemOnly or is6Stem)
+            if stemApplies then
+                selectedCount = selectedCount + 1
                 local stemPath = job.trackDir .. PATH_SEP .. stem.name:lower() .. ".wav"
                 local f = io.open(stemPath, "r")
                 if f then
                     f:close()
                     stems[stem.name:lower()] = stemPath
+                    foundCount = foundCount + 1
+                    debugLog("  Found stem: " .. stem.name:lower() .. " at " .. stemPath)
+                else
+                    debugLog("  MISSING stem: " .. stem.name:lower() .. " at " .. stemPath)
                 end
             end
         end
+        debugLog("  Selected stems: " .. selectedCount .. ", Found: " .. foundCount)
 
-        -- Create tracks for this job's stems
+        -- Create stems based on output mode
         if next(stems) then
-            local count = createStemTracksForSelection(stems, itemPos, itemLen, job.track)
-            totalStemsCreated = totalStemsCreated + count
+            if SETTINGS.createNewTracks then
+                -- New tracks mode: create separate tracks for each stem
+                debugLog("  Calling createStemTracksForSelection...")
+                local count = createStemTracksForSelection(stems, itemPos, itemLen, job.track)
+                debugLog("  Created " .. count .. " stem tracks")
+                totalStemsCreated = totalStemsCreated + count
+            else
+                -- In-place mode: replace source item with stems as takes
+                -- Note: We only replace the primary source item (job.sourceItem) because
+                -- the stems were extracted from that item's audio. Other items in sourceItems
+                -- are tracked for mute/delete operations but not for in-place replacement.
+                debugLog("  In-place mode: processing source item...")
+                local sourceItem = job.sourceItem
+                if sourceItem and reaper.ValidatePtr(sourceItem, "MediaItem*") then
+                    local srcItemPos = reaper.GetMediaItemInfo_Value(sourceItem, "D_POSITION")
+                    local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
+                    debugLog("  Replacing item at pos=" .. srcItemPos .. ", len=" .. srcItemLen)
+                    local count = replaceInPlace(sourceItem, stems, srcItemPos, srcItemLen)
+                    debugLog("  Replaced with " .. count .. " stems as takes")
+                    totalStemsCreated = totalStemsCreated + count
+                else
+                    debugLog("  ERROR: No valid source item for in-place replacement")
+                end
+            end
             table.insert(trackNames, job.trackName)
+        else
+            debugLog("  No stems found, skipping")
         end
+    end
+    debugLog("Total stems created: " .. totalStemsCreated)
+
+    -- Handle deleteOriginalTrack AFTER stems are created (deletes entire source tracks)
+    if SETTINGS.deleteOriginalTrack then
+        -- Collect unique tracks from jobs (delete in reverse order to avoid index issues)
+        local tracksToDelete = {}
+        for _, job in ipairs(multiTrackQueue.jobs) do
+            if job.track and reaper.ValidatePtr(job.track, "MediaTrack*") then
+                -- Check if track is not already in list
+                local found = false
+                for _, t in ipairs(tracksToDelete) do
+                    if t == job.track then found = true; break end
+                end
+                if not found then
+                    table.insert(tracksToDelete, job.track)
+                end
+            end
+        end
+        -- Delete tracks in reverse order (higher indices first)
+        for i = #tracksToDelete, 1, -1 do
+            local track = tracksToDelete[i]
+            if reaper.ValidatePtr(track, "MediaTrack*") then
+                reaper.DeleteTrack(track)
+                actionCount = actionCount + 1
+            end
+        end
+        local trackWord = actionCount == 1 and "track" or "tracks"
+        actionMsg = "\n" .. actionCount .. " source " .. trackWord .. " deleted."
     end
 
     reaper.Undo_EndBlock("Stemperator: Multi-track stem separation", -1)
     reaper.UpdateArrange()
+
+    -- Calculate total processing time
+    local totalTime = os.time() - (multiTrackQueue.globalStartTime or os.time())
+    local totalMins = math.floor(totalTime / 60)
+    local totalSecs = totalTime % 60
+
+    -- Calculate total audio duration processed
+    local totalAudioDur = 0
+    for _, job in ipairs(multiTrackQueue.jobs) do
+        totalAudioDur = totalAudioDur + (job.audioDuration or 0)
+    end
+
+    -- Calculate realtime factor
+    local realtimeFactor = totalAudioDur > 0 and (totalAudioDur / totalTime) or 0
+
+    -- Log benchmark result
+    local modeStr = multiTrackQueue.sequentialMode and "Sequential" or "Parallel"
+    local segSize = multiTrackQueue.sequentialMode and "40" or "25"
+    local benchmarkLog = os.getenv("TEMP") .. "\\stemperator_benchmark.txt"
+    local bf = io.open(benchmarkLog, "a")
+    if bf then
+        bf:write(string.format("\n=== Benchmark Result ===\n"))
+        bf:write(string.format("Date: %s\n", os.date("%Y-%m-%d %H:%M:%S")))
+        bf:write(string.format("Mode: %s (segment size: %s)\n", modeStr, segSize))
+        bf:write(string.format("Model: %s\n", SETTINGS.model or "?"))
+        bf:write(string.format("Tracks: %d\n", #multiTrackQueue.jobs))
+        bf:write(string.format("Audio duration: %.1fs\n", totalAudioDur))
+        bf:write(string.format("Processing time: %d:%02d (%ds)\n", totalMins, totalSecs, totalTime))
+        bf:write(string.format("Speed: %.2fx realtime\n", realtimeFactor))
+        bf:write(string.format("Stems created: %d\n", totalStemsCreated))
+        bf:write("========================\n")
+        bf:close()
+    end
 
     multiTrackQueue.active = false
 
@@ -3752,18 +6236,50 @@ processAllStemsResult = function()
         end
     end
 
-    local trackWord = totalStemsCreated == 1 and "track" or "tracks"
-    local resultMsg = string.format("%d stem %s created from %d source tracks.%s", totalStemsCreated, trackWord, #multiTrackQueue.jobs, actionMsg)
+    local timeStr = string.format("%d:%02d", totalMins, totalSecs)
+    local speedStr = string.format("%.2fx", realtimeFactor)
+    local resultMsg
+    if SETTINGS.createNewTracks then
+        local trackWord = totalStemsCreated == 1 and "track" or "tracks"
+        resultMsg = string.format("%d stem %s created from %d source tracks.\nTime: %s | Speed: %s realtime | Mode: %s%s",
+            totalStemsCreated, trackWord, #multiTrackQueue.jobs, timeStr, speedStr, modeStr, actionMsg)
+    else
+        local itemWord = #multiTrackQueue.jobs == 1 and "item" or "items"
+        resultMsg = string.format("%d %s replaced with stems as takes.\nTime: %s | Speed: %s realtime | Mode: %s%s",
+            #multiTrackQueue.jobs, itemWord, timeStr, speedStr, modeStr, actionMsg)
+    end
     showResultWindow(selectedStemData, resultMsg)
 end
 
 -- Separation workflow
 function runSeparationWorkflow()
     debugLog("=== runSeparationWorkflow started ===")
+
+    -- Save playback state to restore after processing
+    savedPlaybackState = reaper.GetPlayState()
+    debugLog("Saved playback state: " .. savedPlaybackState)
+
     -- Re-fetch the current selection at processing time (user may have changed it)
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
     timeSelectionMode = false
     debugLog("Selected item: " .. tostring(selectedItem))
+
+    -- If no items selected but tracks are selected (and no time selection),
+    -- auto-select all items on those tracks
+    if not selectedItem and not hasTimeSelection() and reaper.CountSelectedTracks(0) > 0 then
+        debugLog("No items/time selection, but tracks selected - auto-selecting items on tracks")
+        for t = 0, reaper.CountSelectedTracks(0) - 1 do
+            local track = reaper.GetSelectedTrack(0, t)
+            local numItems = reaper.CountTrackMediaItems(track)
+            for i = 0, numItems - 1 do
+                local item = reaper.GetTrackMediaItem(track, i)
+                reaper.SetMediaItemSelected(item, true)
+            end
+        end
+        reaper.UpdateArrange()
+        selectedItem = reaper.GetSelectedMediaItem(0, 0)
+        debugLog("After auto-select, selected item: " .. tostring(selectedItem))
+    end
 
     -- Time selection takes priority over item selection
     -- This allows processing a specific region regardless of which item is selected
@@ -3778,8 +6294,8 @@ function runSeparationWorkflow()
         itemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
         itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
     else
-        -- No time selection and no item selected
-        showMessage("No Selection", "Please select a media item or make a time selection to separate.", "info")
+        -- No time selection and no item selected (and no track with items)
+        showMessage("Start", "Please select a media item, track, or make a time selection to separate.", "info")
         return
     end
 
@@ -3805,7 +6321,34 @@ function runSeparationWorkflow()
 
         timeSelectionSourceItem = sourceItem  -- Store for later use
     else
-        -- Get original item bounds to compare
+        -- No time selection - check if we have multiple items selected (multi-track mode)
+        local selItemCount = reaper.CountSelectedMediaItems(0)
+        debugLog("No time selection, selected items: " .. selItemCount)
+
+        if selItemCount > 1 then
+            -- Multiple items selected - group by track and use multi-track mode
+            local trackItems = {}  -- track -> list of items
+            for i = 0, selItemCount - 1 do
+                local item = reaper.GetSelectedMediaItem(0, i)
+                local track = reaper.GetMediaItem_Track(item)
+                if not trackItems[track] then
+                    trackItems[track] = {}
+                end
+                table.insert(trackItems[track], item)
+            end
+
+            -- Build track list
+            local trackList = {}
+            for track in pairs(trackItems) do
+                table.insert(trackList, track)
+            end
+
+            debugLog("Multi-item mode: " .. #trackList .. " tracks with items")
+            runSingleTrackSeparation(trackList)
+            return
+        end
+
+        -- Single item mode
         local origItemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
         local origItemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
 
@@ -3871,12 +6414,31 @@ local function checkQuickPreset()
 end
 
 -- Main
-local function main()
+main = function()
     -- Load settings first (needed for window position in error messages)
     loadSettings()
 
     selectedItem = reaper.GetSelectedMediaItem(0, 0)
     timeSelectionMode = false
+    autoSelectedItems = {}  -- Reset auto-selected items tracking
+    autoSelectionTracks = {}  -- Reset auto-selection tracks tracking
+
+    -- If no items selected but tracks are selected (and no time selection),
+    -- auto-select all items on those tracks
+    if not selectedItem and not hasTimeSelection() and reaper.CountSelectedTracks(0) > 0 then
+        for t = 0, reaper.CountSelectedTracks(0) - 1 do
+            local track = reaper.GetSelectedTrack(0, t)
+            table.insert(autoSelectionTracks, track)  -- Track this track for potential restore
+            local numItems = reaper.CountTrackMediaItems(track)
+            for i = 0, numItems - 1 do
+                local item = reaper.GetTrackMediaItem(track, i)
+                reaper.SetMediaItemSelected(item, true)
+                table.insert(autoSelectedItems, item)  -- Track this item for potential restore
+            end
+        end
+        reaper.UpdateArrange()
+        selectedItem = reaper.GetSelectedMediaItem(0, 0)
+    end
 
     -- Time selection takes priority over item selection
     -- This allows processing a specific region regardless of which item is selected
@@ -3890,8 +6452,9 @@ local function main()
         itemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
         itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
     else
-        -- No time selection and no item selected
-        showMessage("No Selection", "Please select a media item or make a time selection to separate.", "info")
+        -- No time selection, no item selected, no track with items
+        -- Enable selection monitoring so dialog auto-opens when user makes a selection
+        showMessage("Start", "Please select a media item, track, or make a time selection to separate.", "info", true)
         return
     end
 

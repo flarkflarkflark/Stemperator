@@ -153,7 +153,7 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
     demucs_config = {
         "segment_size": actual_segment_size,
-        "shifts": 2,
+        "shifts": 1,  # Reduced from 2 for faster processing on DirectML
         "overlap": 0.25,
         "segments_enabled": True,
     }
