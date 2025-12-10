@@ -2,8 +2,8 @@
 <index version="1" name="Stemperator">
   <category name="Scripts">
     <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation">
-      <version name="1.4.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
-        <changelog><![CDATA[v1.4.0: MilkDrop visuals + FX toggle
+      <version name="1.5.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.5.0: MilkDrop visuals + FX toggle
 - 100 MilkDrop-inspired patterns (1000 unique styles!)
 - Smooth crossfade transitions with zoom effect (1.5s)
 - FX toggle icon on all pages (below day/night icon)

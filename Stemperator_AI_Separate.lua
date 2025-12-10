@@ -193,6 +193,9 @@ local STEMS = {
     { name = "Piano",  color = {255, 120, 200}, file = "piano.wav", selected = true, key = "6", sixStemOnly = true },
 }
 
+-- App version (single source of truth)
+local APP_VERSION = "1.5.0"
+
 -- Available models
 local MODELS = {
     { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
@@ -4972,7 +4975,7 @@ local function drawArtGallery()
 
         -- Version info (bottom right with orange flarkAUDIO) - uses UI(), does NOT zoom
         gfx.setfont(1, "Arial", UI(10))
-        local versionPart = "STEMperator v1.0 - "
+        local versionPart = "STEMperator v" .. APP_VERSION .. " - "
         local flarkPart = "flarkAUDIO"
         local vpW = gfx.measurestr(versionPart)
         local fpW = gfx.measurestr(flarkPart)
@@ -5624,7 +5627,7 @@ local function drawArtGallery()
         -- Version info
         gfx.setfont(1, "Arial", PS(11), string.byte('b'))
         gfx.set(stemColors[5][1], stemColors[5][2], stemColors[5][3], 1)
-        local versionLabel = T("about_version") .. ": 1.5.0"
+        local versionLabel = T("about_version") .. ": " .. APP_VERSION
         local vW = gfx.measurestr(versionLabel)
         gfx.x = centerX - vW / 2
         gfx.y = contentY
