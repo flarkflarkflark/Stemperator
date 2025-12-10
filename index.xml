@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1" name="Stemperator">
   <category name="Scripts">
-    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation">
+    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation (Main Dialog)">
       <version name="1.5.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
         <changelog><![CDATA[v1.5.0: MilkDrop visuals + FX toggle
 - 100 MilkDrop-inspired patterns (1000 unique styles!)
@@ -10,6 +10,11 @@
 - Gallery controls fade out when mouse leaves
 - Multilingual FX tooltips (EN/NL/DE)
 - Fixed "AI STEMperator - Processing..." window title
+
+v1.4.0: Time selection support
+- Can now separate time selections (not just media items)
+- If no item selected, uses time selection instead
+- Stems are placed at the time selection position
 
 v1.3.0: 6-stem model support with Guitar/Piano
 - Guitar and Piano checkboxes appear when 6-stem model selected
@@ -22,20 +27,23 @@ v1.2.0: Scalable/resizable GUI
 - Minimum size: 380x340, Maximum: 760x680
 - Window size persists between sessions
 
-v1.1.1: Cross-platform support
-- Full Windows, Linux, and macOS compatibility
-- Auto-detect Python and ffmpeg paths per platform
-
 v1.1.0: Major update
 - Persist settings between sessions
 - Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental
-- Added 6-stem model (htdemucs_6s)
-- Quick preset buttons
 
 v1.0.0: Initial release]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Stemperator_AI_Separate.lua</source>
         <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Source/AI/audio_separator_process.py</source>
         <source file="lang/i18n.lua">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/lang/i18n.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Installation.lua" type="script" desc="Stemperator - Installation &amp; Setup (Run First!)">
+      <version name="1.0.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.0.0: Initial release
+- Cross-platform Python/audio-separator installation
+- GPU detection (NVIDIA CUDA, AMD ROCm, Apple MPS)
+- Automatic venv creation and dependency install]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Stemperator_Installation.lua</source>
       </version>
     </reapack>
   </category>
