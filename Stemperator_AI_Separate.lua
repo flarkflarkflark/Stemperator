@@ -7,7 +7,7 @@
 --   - Added ~/.stemperator/.venv support for global installation
 --   - macOS: Added /opt/homebrew paths for Apple Silicon
 --   - Windows: Better AppData Python detection
---   - Run "Stemperator: Setup AI Backend" to verify installation
+--   - Run "Stemperator: Installation & Setup" to verify installation
 --   v1.4.0: Time selection support
 --   - Can now separate time selections (not just media items)
 --   - If no item selected, uses time selection instead

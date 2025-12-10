@@ -62,7 +62,7 @@ Stemperator integrates directly into REAPER, letting you:
    - Extensions → ReaPack → Browse packages → Search "Stemperator" → Install
 
 3. **Verify Setup**:
-   - Actions → Run: "Stemperator: Setup AI Backend"
+   - Actions → Run: "Stemperator: Installation & Setup"
    - Should show all green checkmarks ✓
 
 4. **Use It**:
