@@ -35,6 +35,17 @@ v1.0.0: Initial release]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Stemperator_AI_Separate.lua</source>
         <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Source/AI/audio_separator_process.py</source>
         <source file="lang/i18n.lua">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/lang/i18n.lua</source>
+        <source file="toolbar/toolbar_6stem.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_6stem.png</source>
+        <source file="toolbar/toolbar_allstems.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_allstems.png</source>
+        <source file="toolbar/toolbar_bass.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_bass.png</source>
+        <source file="toolbar/toolbar_drums.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_drums.png</source>
+        <source file="toolbar/toolbar_explode.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_explode.png</source>
+        <source file="toolbar/toolbar_guitar.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_guitar.png</source>
+        <source file="toolbar/toolbar_karaoke.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_karaoke.png</source>
+        <source file="toolbar/toolbar_other.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_other.png</source>
+        <source file="toolbar/toolbar_piano.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_piano.png</source>
+        <source file="toolbar/toolbar_settings.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_settings.png</source>
+        <source file="toolbar/toolbar_vocals.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_vocals.png</source>
       </version>
     </reapack>
     <reapack name="Stemperator_Installation.lua" type="script" desc="Stemperator - Installation &amp; Setup (Run First!)">
