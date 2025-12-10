@@ -2,8 +2,16 @@
 <index version="1" name="Stemperator">
   <category name="Scripts">
     <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation">
-      <version name="1.3.0" author="flarkAUDIO" time="2025-12-05T11:00:00Z">
-        <changelog><![CDATA[v1.3.0: 6-stem model support with Guitar/Piano
+      <version name="1.4.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.4.0: MilkDrop visuals + FX toggle
+- 100 MilkDrop-inspired patterns (1000 unique styles!)
+- Smooth crossfade transitions with zoom effect (1.5s)
+- FX toggle icon on all pages (below day/night icon)
+- Gallery controls fade out when mouse leaves
+- Multilingual FX tooltips (EN/NL/DE)
+- Fixed "AI STEMperator - Processing..." window title
+
+v1.3.0: 6-stem model support with Guitar/Piano
 - Guitar and Piano checkboxes appear when 6-stem model selected
 - Keys 5/6 toggle Guitar/Piano stems
 - Presets updated to include Guitar/Piano when using 6-stem model
@@ -25,8 +33,9 @@ v1.1.0: Major update
 - Quick preset buttons
 
 v1.0.0: Initial release]]></changelog>
-        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/fix-linux-fontconfig-dependency/scripts/reaper/Stemperator_AI_Separate.lua</source>
-        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/fix-linux-fontconfig-dependency/Source/AI/audio_separator_process.py</source>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Stemperator_AI_Separate.lua</source>
+        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Source/AI/audio_separator_process.py</source>
+        <source file="lang/i18n.lua">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/lang/i18n.lua</source>
       </version>
     </reapack>
   </category>
