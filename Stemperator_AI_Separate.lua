@@ -206,7 +206,8 @@ local MODELS = {
 -- Settings (persist between runs)
 local SETTINGS = {
     model = "htdemucs",
-    createNewTracks = true,
+    outputMode = "new_tracks",  -- "new_tracks", "in_place", "blended"
+    autoExplode = false,       -- Auto-explode takes to tracks after in_place mode
     createFolder = false,
     muteOriginal = false,      -- Mute original item(s) after separation
     muteSelection = false,     -- Mute only the selection portion (splits item)
@@ -376,8 +377,17 @@ local function loadSettings()
     local model = reaper.GetExtState(EXT_SECTION, "model")
     if model ~= "" then SETTINGS.model = model end
 
-    local createNewTracks = reaper.GetExtState(EXT_SECTION, "createNewTracks")
-    if createNewTracks ~= "" then SETTINGS.createNewTracks = (createNewTracks == "1") end
+    local outputMode = reaper.GetExtState(EXT_SECTION, "outputMode")
+    if outputMode ~= "" then
+        SETTINGS.outputMode = outputMode
+    else
+        -- Migration from old createNewTracks setting
+        local createNewTracks = reaper.GetExtState(EXT_SECTION, "createNewTracks")
+        if createNewTracks == "0" then SETTINGS.outputMode = "in_place" end
+    end
+
+    local autoExplode = reaper.GetExtState(EXT_SECTION, "autoExplode")
+    if autoExplode ~= "" then SETTINGS.autoExplode = (autoExplode == "1") end
 
     local createFolder = reaper.GetExtState(EXT_SECTION, "createFolder")
     if createFolder ~= "" then SETTINGS.createFolder = (createFolder == "1") end
@@ -444,7 +454,8 @@ end
 -- Save settings to ExtState
 local function saveSettings()
     reaper.SetExtState(EXT_SECTION, "model", SETTINGS.model, true)
-    reaper.SetExtState(EXT_SECTION, "createNewTracks", SETTINGS.createNewTracks and "1" or "0", true)
+    reaper.SetExtState(EXT_SECTION, "outputMode", SETTINGS.outputMode, true)
+    reaper.SetExtState(EXT_SECTION, "autoExplode", SETTINGS.autoExplode and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "createFolder", SETTINGS.createFolder and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "muteOriginal", SETTINGS.muteOriginal and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "muteSelection", SETTINGS.muteSelection and "1" or "0", true)
@@ -474,6 +485,267 @@ local function saveSettings()
     if lastDialogX and lastDialogY then
         reaper.SetExtState(EXT_SECTION, "windowX", tostring(math.floor(lastDialogX)), true)
         reaper.SetExtState(EXT_SECTION, "windowY", tostring(math.floor(lastDialogY)), true)
+    end
+end
+
+-- Settings menu state
+local settingsMenuState = {
+    open = false,
+    x = 0,
+    y = 0,
+    S = nil,
+    hoverItem = 0,
+    openTime = 0
+}
+
+-- Draw custom settings menu in our style (called at end of frame)
+local function drawSettingsMenu()
+    if not settingsMenuState.open then return end
+
+    local S = settingsMenuState.S
+    if not S then return end
+
+    local iconX = settingsMenuState.x
+    local iconY = settingsMenuState.y
+    local iconSize = settingsMenuState.iconSize
+
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+
+    local padding = S(8)
+    local itemH = S(30)
+    local menuW = S(60)
+
+    -- Menu items (icon-only: EN/NL/DE text, moon, FX text)
+    local items = {
+        {icon = "EN", type = "lang", checked = SETTINGS.language == "en", lang = "en", tooltip = "English"},
+        {icon = "NL", type = "lang", checked = SETTINGS.language == "nl", lang = "nl", tooltip = "Nederlands"},
+        {icon = "DE", type = "lang", checked = SETTINGS.language == "de", lang = "de", tooltip = "Deutsch"},
+        {label = "separator"},
+        {icon = "moon", type = "toggle", key = "darkMode", checked = SETTINGS.darkMode, tooltip = T and T("dark_mode") or "Dark mode"},
+        {icon = "FX", type = "toggle", key = "visualFX", checked = SETTINGS.visualFX, tooltip = T and T("visual_fx") or "Visual FX"}
+    }
+
+    -- Calculate menu height
+    local menuH = padding * 2
+    for _, item in ipairs(items) do
+        if item.label == "separator" then
+            menuH = menuH + S(8)
+        else
+            menuH = menuH + itemH
+        end
+    end
+
+    -- Position menu above icon
+    local menuX = iconX
+    local menuY = iconY - menuH - S(4)
+    if menuY < S(4) then menuY = S(4) end
+
+    -- Check if mouse is in menu or on icon
+    local inMenu = mx >= menuX and mx <= menuX + menuW and my >= menuY and my <= menuY + menuH
+    local inIcon = mx >= iconX and mx <= iconX + iconSize and my >= iconY and my <= iconY + iconSize
+
+    -- Draw menu background
+    if SETTINGS.darkMode then
+        gfx.set(0.12, 0.12, 0.15, 1)
+    else
+        gfx.set(0.95, 0.95, 0.96, 1)
+    end
+    gfx.rect(menuX, menuY, menuW, menuH, 1)
+
+    -- Colored top border (stem colors gradient)
+    local tooltipColors = STEM_BORDER_COLORS or {{229, 115, 115}, {100, 181, 246}, {186, 104, 200}, {129, 199, 132}}
+    for i = 0, menuW - 1 do
+        local colorIdx = math.floor(i / menuW * 4) + 1
+        colorIdx = math.min(4, math.max(1, colorIdx))
+        local c = tooltipColors[colorIdx]
+        gfx.set(c[1]/255, c[2]/255, c[3]/255, 1)
+        gfx.line(menuX + i, menuY, menuX + i, menuY + 2)
+    end
+
+    -- Border
+    if SETTINGS.darkMode then
+        gfx.set(0.3, 0.3, 0.35, 1)
+    else
+        gfx.set(0.75, 0.75, 0.78, 1)
+    end
+    gfx.rect(menuX, menuY, menuW, menuH, 0)
+
+    -- Draw items
+    local currentY = menuY + padding
+    local clickedItem = nil
+
+    for i, item in ipairs(items) do
+        if item.label == "separator" then
+            -- Draw separator
+            if SETTINGS.darkMode then
+                gfx.set(0.25, 0.25, 0.28, 1)
+            else
+                gfx.set(0.8, 0.8, 0.82, 1)
+            end
+            gfx.line(menuX + padding, currentY + S(4), menuX + menuW - padding, currentY + S(4))
+            currentY = currentY + S(8)
+        else
+            local itemY = currentY
+            local hover = mx >= menuX and mx <= menuX + menuW and my >= itemY and my < itemY + itemH
+
+            -- Hover background
+            if hover then
+                local c = tooltipColors[((i-1) % 4) + 1]
+                gfx.set(c[1]/255, c[2]/255, c[3]/255, 0.2)
+                gfx.rect(menuX + S(3), itemY, menuW - S(6), itemH, 1)
+            end
+
+            -- Icon (centered in menu item)
+            local iconCenterX = menuX + menuW / 2
+            local iconCenterY = itemY + itemH / 2
+            local iconSize = S(7)
+
+            if item.icon == "EN" or item.icon == "NL" or item.icon == "DE" then
+                -- Language code as bold text
+                gfx.setfont(1, "Arial", S(12), string.byte('b'))
+                if SETTINGS.darkMode then
+                    gfx.set(0.5, 0.7, 0.9, hover and 1 or 0.7)
+                else
+                    gfx.set(0.3, 0.5, 0.8, hover and 1 or 0.7)
+                end
+                local tw, th = gfx.measurestr(item.icon)
+                gfx.x = iconCenterX - tw / 2
+                gfx.y = iconCenterY - th / 2
+                gfx.drawstr(item.icon)
+            elseif item.icon == "moon" then
+                -- Moon icon: crescent shape (yellow/orange) - larger to match text
+                local moonR = S(8)
+                gfx.set(0.95, 0.75, 0.2, hover and 1 or 0.7)
+                gfx.circle(iconCenterX - S(2), iconCenterY, moonR, 1)  -- filled circle
+                if SETTINGS.darkMode then
+                    gfx.set(0.12, 0.12, 0.15, 1)  -- dark bg color
+                else
+                    gfx.set(0.95, 0.95, 0.96, 1)  -- light bg color
+                end
+                gfx.circle(iconCenterX + S(3), iconCenterY - S(3), moonR, 1)  -- cutout for crescent
+            elseif item.icon == "FX" then
+                -- FX as bold text (purple/pink) - same size as EN/NL/DE
+                gfx.setfont(1, "Arial", S(12), string.byte('b'))
+                if SETTINGS.darkMode then
+                    gfx.set(0.8, 0.5, 0.9, hover and 1 or 0.7)
+                else
+                    gfx.set(0.6, 0.3, 0.7, hover and 1 or 0.7)
+                end
+                local tw, th = gfx.measurestr(item.icon)
+                gfx.x = iconCenterX - tw / 2
+                gfx.y = iconCenterY - th / 2
+                gfx.drawstr(item.icon)
+            end
+
+            -- Selection indicator: green checkmark to the right of icon (thick)
+            if item.checked then
+                gfx.set(0.3, 0.85, 0.4, 1)  -- Green
+                local checkX = menuX + menuW - padding - S(10)
+                local checkY = iconCenterY
+                -- Draw multiple lines for thickness (5 lines)
+                for offset = -2, 2 do
+                    gfx.line(checkX, checkY + offset, checkX + S(3), checkY + S(3) + offset)
+                    gfx.line(checkX + S(3), checkY + S(3) + offset, checkX + S(8), checkY - S(4) + offset)
+                end
+            end
+
+            -- Tooltip on hover (show to the right of menu)
+            if hover and item.tooltip and GUI then
+                GUI.tooltip = item.tooltip
+                GUI.tooltipX = menuX + menuW + S(5)
+                GUI.tooltipY = itemY
+            end
+
+            -- Handle click
+            if hover and mouseDown and not settingsMenuState.wasMouseDown then
+                clickedItem = item
+            end
+
+            currentY = currentY + itemH
+        end
+    end
+
+    -- Process click
+    if clickedItem then
+        if clickedItem.type == "toggle" then
+            if clickedItem.key == "darkMode" then
+                SETTINGS.darkMode = not SETTINGS.darkMode
+                updateTheme()
+                saveSettings()
+            elseif clickedItem.key == "visualFX" then
+                SETTINGS.visualFX = not SETTINGS.visualFX
+                saveSettings()
+            end
+        elseif clickedItem.type == "lang" then
+            setLanguage(clickedItem.lang)
+            saveSettings()
+        end
+        settingsMenuState.open = false
+    end
+
+    -- Close if clicked outside (but not on first frame)
+    local timeSinceOpen = os.clock() - settingsMenuState.openTime
+    if mouseDown and not settingsMenuState.wasMouseDown and not inMenu and not inIcon and timeSinceOpen > 0.1 then
+        settingsMenuState.open = false
+    end
+
+    settingsMenuState.wasMouseDown = mouseDown
+end
+
+-- Draw settings gear icon (call from any window, bottom-left)
+local function drawSettingsIcon(S, mx, my, mouseDown, wasMouseDown)
+    local size = S(18)
+    local padding = S(8)
+    local x = padding
+    local y = gfx.h - size - padding
+
+    local hover = mx >= x and mx <= x + size and my >= y and my <= y + size
+
+    -- Draw gear icon
+    local alpha = hover and 1 or 0.6
+    if settingsMenuState.open then alpha = 1 end
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], alpha)
+
+    local cx, cy = x + size/2, y + size/2
+    local outerR = size/2 - 2
+    local innerR = size/4
+
+    -- Outer gear teeth
+    for i = 0, 7 do
+        local angle = i * math.pi / 4
+        local x1 = cx + math.cos(angle) * innerR
+        local y1 = cy + math.sin(angle) * innerR
+        local x2 = cx + math.cos(angle) * outerR
+        local y2 = cy + math.sin(angle) * outerR
+        gfx.line(x1, y1, x2, y2)
+    end
+
+    -- Center circle
+    gfx.circle(cx, cy, innerR, 1, 1)
+
+    -- Inner hole (background color)
+    gfx.set(THEME.bg[1], THEME.bg[2], THEME.bg[3], 1)
+    gfx.circle(cx, cy, innerR/2, 1, 1)
+
+    -- Handle click to toggle menu
+    if hover and mouseDown and not wasMouseDown then
+        settingsMenuState.open = not settingsMenuState.open
+        settingsMenuState.x = x
+        settingsMenuState.y = y
+        settingsMenuState.iconSize = size
+        settingsMenuState.S = S
+        settingsMenuState.openTime = os.clock()
+        settingsMenuState.wasMouseDown = true
+    end
+
+    -- Tooltip when hovering (only if menu is closed)
+    if hover and not settingsMenuState.open then
+        if GUI and GUI.tooltip == nil then
+            GUI.tooltip = T and T("settings") or "Settings"
+            GUI.tooltipX = x + size + S(5)
+            GUI.tooltipY = y
+        end
     end
 end
 
@@ -1322,7 +1594,7 @@ local function drawProceduralArtInternal(x, y, w, h, time, rotation, skipBackgro
     elseif basePattern == 6 then
         for idx, elem in ipairs(proceduralArt.elements) do
             if idx > 60 then break end  -- Limit for performance
-            local col = colors[elem.colorIdx]
+            local col = colors[elem.colorIdx] or colors[1]  -- Fallback to first color if colorIdx invalid
             local audioBoost = elem.audioSensitivity * (
                 elem.frequencyBand == 1 and audioBass or
                 elem.frequencyBand == 2 and audioMid or audioHigh
@@ -2170,7 +2442,7 @@ local function drawProceduralArtInternal(x, y, w, h, time, rotation, skipBackgro
         local loops = 3 + (variation % 3)
         for loop = 1, loops do
             local loopPhase = (loop / loops) * math.pi * 2
-            local col = colors[loop]
+            local col = colors[((loop - 1) % 4) + 1]
             local prevX, prevY
             for t = 0, math.pi * 2, 0.02 do
                 -- Figure-8 / infinity shape
@@ -3738,124 +4010,8 @@ local function drawArtGallery()
         tabX = tabX + tabWidths[i]
     end
 
-    -- === THEME TOGGLE (top right) - uses UI(), does NOT zoom ===
-    local themeSize = UI(24)
-    local themeX = w - themeSize - UI(10)
-    local themeY = UI(6)
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    if SETTINGS.darkMode then
-        gfx.set(0.8, 0.8, 0.5, (themeHover and 1 or 0.7) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 3, 1, 1)
-        gfx.set(0.12, 0.12, 0.14, controlsOpacity)
-        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 5, 1, 1)
-    else
-        gfx.set(1.0, 0.8, 0.2, (themeHover and 1 or 0.85) * controlsOpacity)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    -- Theme click handling and tooltip
-    if themeHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
-        tooltipX, tooltipY = mx + UI(10), my + UI(15)
-        if mouseDown and not helpState.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()
-        end
-    end
-
-    -- === LANGUAGE TOGGLE (next to theme) - uses UI(), does NOT zoom ===
-    local langCode = string.upper(SETTINGS.language or "EN")
-    gfx.setfont(1, "Arial", UI(12), string.byte('b'))
-    local langW = gfx.measurestr(langCode)
-    local langX = themeX - langW - UI(12)
-    local langY = themeY + UI(5)
-    local langHover = mx >= langX - UI(4) and mx <= langX + langW + UI(4) and my >= langY - UI(3) and my <= langY + UI(16)
-
-    -- Draw language badge background
-    if langHover and controlsOpacity > 0.3 then
-        gfx.set(0.3, 0.4, 0.6, 0.5 * controlsOpacity)
-        gfx.rect(langX - UI(4), langY - UI(2), langW + UI(8), UI(18), 1)
-    end
-    gfx.set(0.5, 0.7, 1.0, (langHover and 1 or 0.7) * controlsOpacity)
-    gfx.x = langX
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Language tooltip
-    if langHover and controlsOpacity > 0.3 then
-        tooltipText = T("tooltip_change_language")
-        tooltipX, tooltipY = mx + UI(10), my + UI(15)
-    end
-
-    if langHover and mouseDown and not helpState.wasMouseDown and controlsOpacity > 0.3 then
-        local langs = {"en", "nl", "de"}
-        local currentIdx = 1
-        for i, l in ipairs(langs) do
-            if l == SETTINGS.language then currentIdx = i break end
-        end
-        local nextIdx = (currentIdx % #langs) + 1
-        setLanguage(langs[nextIdx])
-        saveSettings()
-    end
-
-    -- === FX TOGGLE (below theme icon) - uses UI(), does NOT zoom ===
-    local fxSize = UI(20)
-    local fxX = themeX + (themeSize - fxSize) / 2  -- Center under theme icon
-    local fxY = themeY + themeSize + UI(4)
-    local fxHover = mx >= fxX - UI(2) and mx <= fxX + fxSize + UI(2) and my >= fxY - UI(2) and my <= fxY + fxSize + UI(2)
-
-    -- Draw FX icon (stylized "FX" text or sparkle icon)
-    local fxAlpha = (fxHover and 1 or 0.7) * controlsOpacity
-    if SETTINGS.visualFX then
-        -- FX enabled: bright colored
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)  -- Green when on
-    else
-        -- FX disabled: dim/grey
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-
-    -- Draw "FX" text
-    gfx.setfont(1, "Arial", UI(11), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + UI(2)
-    gfx.drawstr(fxText)
-
-    -- Draw sparkle/star decorations when enabled
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)  -- Yellow sparkles
-        -- Small stars around FX
-        local starSize = UI(2)
-        gfx.circle(fxX - UI(2), fxY + UI(3), starSize, 1, 1)
-        gfx.circle(fxX + fxSize + UI(1), fxY + fxSize - UI(3), starSize, 1, 1)
-    else
-        -- Draw strikethrough when disabled
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - UI(2), fxY + fxSize / 2, fxX + fxSize + UI(2), fxY + fxSize / 2)
-    end
-
-    -- FX tooltip
-    if fxHover and controlsOpacity > 0.3 then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + UI(10), my + UI(15)
-    end
-
-    -- FX click handling
-    if fxHover and mouseDown and not helpState.wasMouseDown and controlsOpacity > 0.3 then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
+    -- === SETTINGS ICON (bottom-left) ===
+    drawSettingsIcon(UI, mx, my, mouseDown, helpState.wasMouseDown)
 
     -- Content area starts below tabs
     local contentY = tabY + tabH + UI(10)
@@ -6078,119 +6234,15 @@ local function drawMessageWindow()
     end
     gfx.rect(0, 0, w, h, 1)
 
-    -- Theme toggle button (sun/moon icon, top right)
-    local themeSize = PS(20)
-    local themeX = w - themeSize - PS(10)
-    local themeY = PS(8)
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    if SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, themeHover and 1 or 0.6)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1)  -- Pure black for moon overlay
-        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
-    else
-        gfx.set(0.9, 0.7, 0.2, themeHover and 1 or 0.8)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    if themeHover and mouseDown and not messageWindowState.wasMouseDown then
-        SETTINGS.darkMode = not SETTINGS.darkMode
-        updateTheme()
-        saveSettings()
-    end
-
-    -- Language toggle button (small text showing current language)
-    local langW = PS(22)
-    local langH = PS(14)
-    local langX = themeX - langW - PS(6)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-
-    -- Draw language indicator
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langTextW = gfx.measurestr(langCode)
-
-    if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1)
-    else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8)
-    end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Handle language toggle click
-    if langHover and mouseDown and not messageWindowState.wasMouseDown then
-        -- Cycle through languages: en -> nl -> de -> en
-        local langs = {"en", "nl", "de"}
-        local currentIdx = 1
-        for i, l in ipairs(langs) do
-            if l == SETTINGS.language then currentIdx = i break end
-        end
-        local nextIdx = (currentIdx % #langs) + 1
-        setLanguage(langs[nextIdx])
-        saveSettings()
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = PS(16)
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
-
-    local fxAlpha = fxHover and 1 or 0.7
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-
-    if fxHover and mouseDown and not messageWindowState.wasMouseDown then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
+    -- === SETTINGS ICON (bottom-left) ===
+    drawSettingsIcon(PS, mx, my, mouseDown, messageWindowState.wasMouseDown)
 
     -- Track tooltip
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
 
-    if themeHover then
-        tooltipText = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
-        tooltipX = mx + PS(10)
-        tooltipY = my + PS(15)
-    elseif langHover then
-        tooltipText = T("tooltip_change_language")
-        tooltipX = mx + PS(10)
-        tooltipY = my + PS(15)
-    elseif fxHover then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX = mx + PS(10)
-        tooltipY = my + PS(15)
+    if false then
+        -- Placeholder for future tooltips (removed theme/lang/fx hover checks)
     end
 
     local time = os.clock() - messageWindowState.startTime
@@ -7381,117 +7433,8 @@ local function dialogLoop()
     mainDialogArt.wasMouseDown = mouseDown
     mainDialogArt.wasRightMouseDown = rightMouseDown
 
-    -- Theme toggle button (sun/moon icon, aligned with column 4)
-    local themeSize = S(20)
-    local themeX = S(260) + S(70) - themeSize  -- col4X + outBoxW - themeSize (right-aligned)
-    local themeY = S(8)
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    -- Draw theme toggle (circle with rays for sun, crescent for moon)
-    if SETTINGS.darkMode then
-        -- Moon icon (crescent)
-        gfx.set(0.7, 0.7, 0.5, themeHover and 1 or 0.6)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1)  -- Pure black for moon overlay
-        gfx.circle(themeX + themeSize/2 + 4, themeY + themeSize/2 - 3, themeSize/2 - 3, 1, 1)
-    else
-        -- Sun icon
-        gfx.set(0.9, 0.7, 0.2, themeHover and 1 or 0.8)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        -- Rays
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 2)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 2)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    -- Handle theme toggle click and tooltip
-    if themeHover then
-        local themeTip = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
-        setTooltip(themeX, themeY, themeSize, themeSize, themeTip)
-        if mouseDown and not GUI.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()  -- Persist theme change
-        end
-    end
-
-    -- Language toggle button (small text showing current language)
-    local langW = S(22)
-    local langH = S(14)
-    local langX = themeX - langW - S(6)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-
-    -- Draw language indicator
-    gfx.setfont(1, "Arial", S(9), string.byte('b'))
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langTextW = gfx.measurestr(langCode)
-
-    if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1)
-    else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8)
-    end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Handle language toggle click
-    if langHover then
-        setTooltip(langX, langY, langW, langH, T("tooltip_change_language"))
-        if mouseDown and not GUI.wasMouseDown then
-            -- Cycle through languages: en -> nl -> de -> en
-            local langs = {"en", "nl", "de"}
-            local currentIdx = 1
-            for i, l in ipairs(langs) do
-                if l == SETTINGS.language then currentIdx = i break end
-            end
-            local nextIdx = (currentIdx % #langs) + 1
-            setLanguage(langs[nextIdx])
-            saveSettings()
-        end
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = S(16)
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + S(3)
-    local fxHover = mx >= fxX - S(2) and mx <= fxX + fxSize + S(2) and my >= fxY - S(2) and my <= fxY + fxSize + S(2)
-
-    local fxAlpha = fxHover and 1 or 0.7
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", S(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + S(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - S(1), fxY + S(2), S(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - S(2), S(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - S(1), fxY + fxSize / 2, fxX + fxSize + S(1), fxY + fxSize / 2)
-    end
-
-    if fxHover then
-        setTooltip(fxX - S(2), fxY - S(2), fxSize + S(4), fxSize + S(4), SETTINGS.visualFX and T("fx_disable") or T("fx_enable"))
-        if mouseDown and not GUI.wasMouseDown then
-            SETTINGS.visualFX = not SETTINGS.visualFX
-            saveSettings()
-        end
-    end
+    -- === SETTINGS ICON (bottom-left) ===
+    drawSettingsIcon(S, mx, my, mouseDown, GUI.wasMouseDown)
 
     -- === LOGO: Centered "STEMperator" at top ===
     gfx.setfont(1, "Arial", S(24), string.byte('b'))  -- Bold, large font
@@ -7694,20 +7637,26 @@ local function dialogLoop()
     local stemPlural = stemCount ~= 1
     local newTracksLabel = stemPlural and T("new_tracks") or T("new_track")
     local inPlaceLabel = T("in_place")
+    local blendedLabel = T("blended")
 
     local outY = contentTop + S(20)
-    if drawRadio(col4X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW) then
-        SETTINGS.createNewTracks = true
+    if drawRadio(col4X, outY, SETTINGS.outputMode == "new_tracks", newTracksLabel, nil, outBoxW) then
+        SETTINGS.outputMode = "new_tracks"
     end
     setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
     outY = outY + S(22)
-    if drawRadio(col4X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW) then
-        SETTINGS.createNewTracks = false
+    if drawRadio(col4X, outY, SETTINGS.outputMode == "in_place", inPlaceLabel, nil, outBoxW) then
+        SETTINGS.outputMode = "in_place"
     end
     setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_in_place"))
+    outY = outY + S(22)
+    if drawRadio(col4X, outY, SETTINGS.outputMode == "blended", blendedLabel, nil, outBoxW) then
+        SETTINGS.outputMode = "blended"
+    end
+    setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_blended"))
 
     -- Options (only when creating new tracks)
-    if SETTINGS.createNewTracks then
+    if SETTINGS.outputMode == "new_tracks" then
         outY = outY + S(28)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
         gfx.x = col4X
@@ -7776,6 +7725,38 @@ local function dialogLoop()
             end
             setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_delete_selection"))
         end
+    end
+
+    -- Options for in_place (Takes) mode
+    if SETTINGS.outputMode == "in_place" then
+        outY = outY + S(28)
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        gfx.x = col4X
+        gfx.y = outY
+        gfx.drawstr(T("after"))
+
+        outY = outY + S(20)
+        local accentR, accentG, accentB = THEME.accent[1] * 255, THEME.accent[2] * 255, THEME.accent[3] * 255
+        if drawCheckbox(col4X, outY, SETTINGS.autoExplode, T("auto_explode"), accentR, accentG, accentB, outBoxW) then
+            SETTINGS.autoExplode = not SETTINGS.autoExplode
+        end
+        setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_auto_explode"))
+    end
+
+    -- Options for blended mode (same as in_place - can explode to tracks)
+    if SETTINGS.outputMode == "blended" then
+        outY = outY + S(28)
+        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+        gfx.x = col4X
+        gfx.y = outY
+        gfx.drawstr(T("after"))
+
+        outY = outY + S(20)
+        local accentR, accentG, accentB = THEME.accent[1] * 255, THEME.accent[2] * 255, THEME.accent[3] * 255
+        if drawCheckbox(col4X, outY, SETTINGS.autoExplode, T("auto_explode"), accentR, accentG, accentB, outBoxW) then
+            SETTINGS.autoExplode = not SETTINGS.autoExplode
+        end
+        setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_auto_explode"))
     end
 
 
@@ -7862,7 +7843,7 @@ local function dialogLoop()
     end
 
     -- Calculate expected output
-    local outTrackCount = SETTINGS.createNewTracks and (selTrackCount * selectedStemCount) or 0
+    local outTrackCount = (SETTINGS.outputMode == "new_tracks") and (selTrackCount * selectedStemCount) or 0
     local outItemCount = selItemCount * selectedStemCount
     local outTrackLabel = outTrackCount == 1 and "track" or "tracks"
     local outItemLabel = outItemCount == 1 and "item" or "items"
@@ -7889,7 +7870,7 @@ local function dialogLoop()
     gfx.y = footerRow2Y
     gfx.drawstr("Output:")
     local outInfoText
-    if SETTINGS.createNewTracks then
+    if (SETTINGS.outputMode == "new_tracks") then
         outInfoText = string.format("%d %s, %d %s", outTrackCount, outTrackLabel, outItemCount, outItemLabel)
     else
         outInfoText = string.format("%d takes", outItemCount)
@@ -7905,15 +7886,24 @@ local function dialogLoop()
 
     -- Determine target description based on output mode
     local targetText
-    if SETTINGS.createNewTracks then
+    if SETTINGS.outputMode == "new_tracks" then
         if SETTINGS.createFolder then
             targetText = "New folder with stem tracks"
         else
             targetText = "New tracks below source"
         end
-    else
-        -- Show number of takes per source item
-        targetText = string.format("In-place (as %d takes on source tracks)", selectedStemCount)
+    elseif SETTINGS.outputMode == "in_place" then
+        if SETTINGS.autoExplode then
+            targetText = "Takes, then explode to tracks"
+        else
+            targetText = string.format("In-place (as %d takes)", selectedStemCount)
+        end
+    else  -- blended
+        if SETTINGS.autoExplode then
+            targetText = "Blended, then explode to tracks"
+        else
+            targetText = string.format("In-place (%d items stacked)", selectedStemCount)
+        end
     end
     gfx.x = col2X
     gfx.y = footerRow3Y
@@ -7939,7 +7929,7 @@ local function dialogLoop()
     end
 
     -- Draw "STEMperate" with colored STEM letters
-    gfx.setfont(1, "Arial", S(13), string.byte('b'))
+    gfx.setfont(1, "Arial", S(11), string.byte('b'))
     local textY = footerRow4Y + (btnH - gfx.texth) / 2
 
     -- Calculate total width to center
@@ -8016,8 +8006,8 @@ local function dialogLoop()
     end
 
     gfx.set(1, 1, 1, 1)
-    gfx.setfont(1, "Arial", S(13), string.byte('b'))
-    local closeText = "Close"
+    gfx.setfont(1, "Arial", S(11), string.byte('b'))
+    local closeText = T("close")
     local closeTextW = gfx.measurestr(closeText)
     gfx.x = closeBtnX + (closeBtnW - closeTextW) / 2
     gfx.y = footerRow4Y + (btnH - S(13)) / 2
@@ -8108,6 +8098,7 @@ local function dialogLoop()
 
     -- Draw tooltip on top of everything
     drawTooltip()
+    drawSettingsMenu()
 
     gfx.update()
 
@@ -8369,7 +8360,7 @@ local function renderTimeSelectionToWav(outputPath)
         local selItemCount = reaper.CountSelectedMediaItems(0)
 
         -- In-place mode with track selected: auto-find overlapping items on selected tracks
-        if selTrackCount > 0 and selItemCount == 0 and not SETTINGS.createNewTracks then
+        if selTrackCount > 0 and selItemCount == 0 and not (SETTINGS.outputMode == "new_tracks") then
             debugLog("In-place mode: finding items on selected tracks overlapping time selection")
             for t = 0, selTrackCount - 1 do
                 local track = reaper.GetSelectedTrack(0, t)
@@ -8416,7 +8407,7 @@ local function renderTimeSelectionToWav(outputPath)
                 return nil, "No items overlap the time selection"
             elseif selTrackCount == 0 then
                 return nil, "No tracks selected (select tracks with items)"
-            elseif selItemCount == 0 and not SETTINGS.createNewTracks then
+            elseif selItemCount == 0 and not (SETTINGS.outputMode == "new_tracks") then
                 return nil, "No items on selected tracks overlap time selection"
             elseif selItemCount == 0 then
                 return nil, "No items selected on tracks"
@@ -8819,105 +8810,8 @@ local function drawProgressWindow()
     local tooltipText = nil
     local tooltipX, tooltipY = 0, 0
 
-    -- === THEME TOGGLE (top right) ===
-    local themeSize = PS(18)
-    local themeX = w - themeSize - PS(8)
-    local themeY = PS(6)
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    if SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, themeHover and 1 or 0.5)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1)  -- Pure black for moon overlay
-        gfx.circle(themeX + themeSize/2 + 3, themeY + themeSize/2 - 2, themeSize/2 - 3, 1, 1)
-    else
-        gfx.set(0.9, 0.7, 0.2, themeHover and 1 or 0.7)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 1)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 1)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    -- Theme click and tooltip
-    if themeHover then
-        tooltipText = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if mouseDown and not progressState.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()
-        end
-    end
-
-    -- === LANGUAGE TOGGLE (next to theme) ===
-    local langCode = string.upper(SETTINGS.language or "EN")
-    gfx.setfont(1, "Arial", PS(8))
-    local langW = gfx.measurestr(langCode)
-    local langX = themeX - langW - PS(10)
-    local langY = themeY + PS(3)
-    local langHover = mx >= langX - PS(3) and mx <= langX + langW + PS(3) and my >= langY - PS(2) and my <= langY + PS(10)
-    gfx.set(0.5, 0.6, 0.8, langHover and 1 or 0.4)
-    gfx.x = langX
-    gfx.y = langY
-    gfx.drawstr(langCode)
-
-    -- Language tooltip and click
-    if langHover then
-        tooltipText = T("tooltip_change_language")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-    end
-    if langHover and mouseDown and not progressState.wasMouseDown then
-        local langs = {"en", "nl", "de"}
-        local currentIdx = 1
-        for i, l in ipairs(langs) do
-            if l == SETTINGS.language then currentIdx = i break end
-        end
-        local nextIdx = (currentIdx % #langs) + 1
-        setLanguage(langs[nextIdx])
-        saveSettings()
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = PS(16)
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
-
-    local fxAlpha = fxHover and 1 or 0.7
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-
-    if fxHover then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-    end
-    if fxHover and mouseDown and not progressState.wasMouseDown then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
+    -- === SETTINGS ICON (bottom-left) ===
+    drawSettingsIcon(PS, mx, my, mouseDown, progressState.wasMouseDown)
 
     -- NOTE: wasMouseDown is set at END of function to allow art click detection
 
@@ -9115,7 +9009,7 @@ local function drawProgressWindow()
     local nerdBtnW = PS(22)
     local nerdBtnH = PS(18)
     local nerdBtnX = PS(25)
-    local nerdBtnY = infoY
+    local nerdBtnY = infoY + infoH + PS(5)
     local nerdHover = mx >= nerdBtnX and mx <= nerdBtnX + nerdBtnW and my >= nerdBtnY and my <= nerdBtnY + nerdBtnH
 
     -- Draw nerd button (terminal icon: >_)
@@ -9145,7 +9039,7 @@ local function drawProgressWindow()
     end
 
     -- === DISPLAY AREA (ART or TERMINAL) ===
-    local displayY = PS(190)
+    local displayY = PS(210)
     local displayH = h - displayY - PS(55)
     local displayX = PS(15)
     local displayW = w - PS(30)
@@ -9353,13 +9247,6 @@ local function drawProgressWindow()
         gfx.x = tx + padding
         gfx.y = ty + padding + PS(2)
         gfx.drawstr(tooltipText)
-    end
-
-    -- === F1 KEY HANDLING ===
-    local char = gfx.getchar()
-    if char == 26161 then  -- F1 key code
-        -- Close progress window and show help
-        -- Note: Help will be shown after processing completes
     end
 
     gfx.update()
@@ -9639,6 +9526,13 @@ local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
     local track = reaper.GetMediaItem_Track(item)
     local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
     local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    -- Get original item and take volume before any operations
+    local origItemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+    local origTakeVol = 1.0
+    local origTake = reaper.GetActiveTake(item)
+    if origTake then
+        origTakeVol = reaper.GetMediaItemTakeInfo_Value(origTake, "D_VOL")
+    end
 
     reaper.Undo_BeginBlock()
 
@@ -9694,13 +9588,15 @@ local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
                 local newItem = reaper.AddMediaItemToTrack(track)
                 reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selStart)
                 reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
+                -- Preserve original item volume
+                reaper.SetMediaItemInfo_Value(newItem, "D_VOL", origItemVol)
 
                 local take = reaper.AddTakeToMediaItem(newItem)
                 local source = reaper.PCM_Source_CreateFromFile(stemPath)
                 reaper.SetMediaItemTake_Source(take, source)
                 reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
-                -- Ensure take volume is at unity (1.0 = 0dB)
-                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+                -- Preserve original take volume
+                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", origTakeVol)
 
                 local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
                 reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
@@ -9754,6 +9650,13 @@ end
 -- Replace item in-place with stems as takes
 local function replaceInPlace(item, stemPaths, itemPos, itemLen)
     local track = reaper.GetMediaItem_Track(item)
+    -- Get original item and take volume before deleting
+    local origItemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+    local origTakeVol = 1.0
+    local origTake = reaper.GetActiveTake(item)
+    if origTake then
+        origTakeVol = reaper.GetMediaItemTakeInfo_Value(origTake, "D_VOL")
+    end
     reaper.Undo_BeginBlock()
     reaper.DeleteTrackMediaItem(track, item)
 
@@ -9765,13 +9668,15 @@ local function replaceInPlace(item, stemPaths, itemPos, itemLen)
                 local newItem = reaper.AddMediaItemToTrack(track)
                 reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
                 reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+                -- Preserve original item volume
+                reaper.SetMediaItemInfo_Value(newItem, "D_VOL", origItemVol)
 
                 local take = reaper.AddTakeToMediaItem(newItem)
                 local source = reaper.PCM_Source_CreateFromFile(stemPath)
                 reaper.SetMediaItemTake_Source(take, source)
                 reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
-                -- Ensure take volume is at unity (1.0 = 0dB)
-                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", 1.0)
+                -- Preserve original take volume
+                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", origTakeVol)
 
                 local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
                 reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
@@ -9817,7 +9722,296 @@ local function replaceInPlace(item, stemPaths, itemPos, itemLen)
     end
 
     reaper.Undo_EndBlock("Stemperator: Replace in-place", -1)
-    return #items
+    return #items, items[1] and items[1].item or nil  -- Return count and main item
+end
+
+-- Explode takes from an item to separate tracks
+local function explodeTakesToTracks(item)
+    if not item then return 0 end
+
+    local numTakes = reaper.CountTakes(item)
+    if numTakes <= 1 then return 0 end
+
+    local track = reaper.GetMediaItem_Track(item)
+    local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+    local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+    if trackName == "" then trackName = "Track " .. trackIdx end
+
+    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    local itemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+    local itemFadeIn = reaper.GetMediaItemInfo_Value(item, "D_FADEINLEN")
+    local itemFadeOut = reaper.GetMediaItemInfo_Value(item, "D_FADEOUTLEN")
+
+    reaper.Undo_BeginBlock()
+
+    local totalCreated = 0
+
+    -- Create a track for each take
+    for takeIdx = 0, numTakes - 1 do
+        local take = reaper.GetTake(item, takeIdx)
+        if take then
+            local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+            local takeVol = reaper.GetMediaItemTakeInfo_Value(take, "D_VOL")
+            local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+            local takePlayrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+            local source = reaper.GetMediaItemTake_Source(take)
+
+            if source then
+                -- Find stem color
+                local stemColor = nil
+                for _, stem in ipairs(STEMS) do
+                    if stem.name == takeName then
+                        stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                        break
+                    end
+                end
+                if not stemColor then
+                    stemColor = rgbToReaperColor(180, 180, 180)
+                end
+
+                -- Insert new track
+                reaper.InsertTrackAtIndex(trackIdx + takeIdx, true)
+                local newTrack = reaper.GetTrack(0, trackIdx + takeIdx)
+
+                -- Set track name and color
+                local newTrackName = trackName .. " - " .. takeName
+                reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+                reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", stemColor)
+
+                -- Create new item on the new track
+                local newItem = reaper.AddMediaItemToTrack(newTrack)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+                reaper.SetMediaItemInfo_Value(newItem, "D_VOL", itemVol)
+                reaper.SetMediaItemInfo_Value(newItem, "D_FADEINLEN", itemFadeIn)
+                reaper.SetMediaItemInfo_Value(newItem, "D_FADEOUTLEN", itemFadeOut)
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+
+                -- Create take with same source
+                local newTake = reaper.AddTakeToMediaItem(newItem)
+                reaper.SetMediaItemTake_Source(newTake, source)
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
+                reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", takeVol)
+                reaper.SetMediaItemTakeInfo_Value(newTake, "D_STARTOFFS", takeOffset)
+                reaper.SetMediaItemTakeInfo_Value(newTake, "D_PLAYRATE", takePlayrate)
+
+                totalCreated = totalCreated + 1
+            end
+        end
+    end
+
+    -- Delete the original item
+    reaper.DeleteTrackMediaItem(track, item)
+
+    reaper.Undo_EndBlock("Stemperator: Explode to tracks", -1)
+    return totalCreated
+end
+
+-- Replace item in-place with stems as blended (separate items at same position)
+local function replaceBlended(item, stemPaths, itemPos, itemLen)
+    local track = reaper.GetMediaItem_Track(item)
+    -- Get original item and take volume before deleting
+    local origItemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+    local origTakeVol = 1.0
+    local origTake = reaper.GetActiveTake(item)
+    if origTake then
+        origTakeVol = reaper.GetMediaItemTakeInfo_Value(origTake, "D_VOL")
+    end
+    reaper.Undo_BeginBlock()
+
+    -- Enable Free Item Positioning on track so overlapping items are mixed (not crossfaded)
+    reaper.SetMediaTrackInfo_Value(track, "B_FREEMODE", 1)
+
+    reaper.DeleteTrackMediaItem(track, item)
+
+    local itemCount = 0
+    local createdItems = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                local newItem = reaper.AddMediaItemToTrack(track)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+                -- Preserve original item volume
+                reaper.SetMediaItemInfo_Value(newItem, "D_VOL", origItemVol)
+
+                local take = reaper.AddTakeToMediaItem(newItem)
+                local source = reaper.PCM_Source_CreateFromFile(stemPath)
+                reaper.SetMediaItemTake_Source(take, source)
+                reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
+                -- Preserve original take volume
+                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", origTakeVol)
+
+                local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+
+                createdItems[#createdItems + 1] = newItem
+                itemCount = itemCount + 1
+            end
+        end
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Replace blended", -1)
+    return itemCount, createdItems
+end
+
+-- Replace partial item (time selection) with stems as blended (separate stacked items)
+local function replaceBlendedPartial(item, stemPaths, selStart, selEnd)
+    local track = reaper.GetMediaItem_Track(item)
+    local origItemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local origItemEnd = origItemPos + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    -- Get original item and take volume before any operations
+    local origItemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+    local origTakeVol = 1.0
+    local origTake = reaper.GetActiveTake(item)
+    if origTake then
+        origTakeVol = reaper.GetMediaItemTakeInfo_Value(origTake, "D_VOL")
+    end
+
+    reaper.Undo_BeginBlock()
+
+    -- Enable Free Item Positioning on track so overlapping items are mixed (not crossfaded)
+    reaper.SetMediaTrackInfo_Value(track, "B_FREEMODE", 1)
+
+    -- Deselect all items and select only our target item
+    reaper.SelectAllMediaItems(0, false)
+    reaper.SetMediaItemSelected(item, true)
+
+    local leftItem = nil   -- Part before selection (if any)
+    local middleItem = item -- Part to replace
+    local rightItem = nil  -- Part after selection (if any)
+
+    -- Split at selection start if it's inside the item
+    if selStart > origItemPos and selStart < origItemEnd then
+        middleItem = reaper.SplitMediaItem(item, selStart)
+        leftItem = item
+        if middleItem then
+            reaper.SetMediaItemSelected(leftItem, false)
+            reaper.SetMediaItemSelected(middleItem, true)
+        else
+            middleItem = item
+            leftItem = nil
+        end
+    end
+
+    -- Split at selection end if it's inside what remains
+    if middleItem then
+        local midPos = reaper.GetMediaItemInfo_Value(middleItem, "D_POSITION")
+        local midEnd = midPos + reaper.GetMediaItemInfo_Value(middleItem, "D_LENGTH")
+
+        if selEnd > midPos and selEnd < midEnd then
+            rightItem = reaper.SplitMediaItem(middleItem, selEnd)
+            if rightItem then
+                reaper.SetMediaItemSelected(rightItem, false)
+            end
+        end
+    end
+
+    -- Now delete the middle item and insert blended stems in its place
+    local selLen = selEnd - selStart
+    if middleItem then
+        reaper.DeleteTrackMediaItem(track, middleItem)
+    end
+
+    -- Create separate stacked items for each stem (blended mode)
+    local itemCount = 0
+    local createdItems = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                local newItem = reaper.AddMediaItemToTrack(track)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", selStart)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", selLen)
+                -- Preserve original item volume
+                reaper.SetMediaItemInfo_Value(newItem, "D_VOL", origItemVol)
+
+                local take = reaper.AddTakeToMediaItem(newItem)
+                local source = reaper.PCM_Source_CreateFromFile(stemPath)
+                reaper.SetMediaItemTake_Source(take, source)
+                reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
+                -- Preserve original take volume
+                reaper.SetMediaItemTakeInfo_Value(take, "D_VOL", origTakeVol)
+
+                local stemColor = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", stemColor)
+
+                createdItems[#createdItems + 1] = newItem
+                itemCount = itemCount + 1
+            end
+        end
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Replace blended partial", -1)
+    return itemCount, createdItems
+end
+
+-- Explode blended items (stacked items) to separate tracks
+local function explodeBlendedToTracks(items)
+    if not items or #items <= 1 then return 0 end
+
+    local firstItem = items[1]
+    if not firstItem or not reaper.ValidatePtr(firstItem, "MediaItem*") then return 0 end
+
+    local track = reaper.GetMediaItem_Track(firstItem)
+    local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+    local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+    if trackName == "" then trackName = "Track " .. trackIdx end
+
+    reaper.Undo_BeginBlock()
+
+    local totalCreated = 0
+
+    -- Move each item to its own track
+    for i, item in ipairs(items) do
+        if item and reaper.ValidatePtr(item, "MediaItem*") then
+            local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+            local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+            local itemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+            local itemColor = reaper.GetMediaItemInfo_Value(item, "I_CUSTOMCOLOR")
+
+            local take = reaper.GetActiveTake(item)
+            if take then
+                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+                local takeVol = reaper.GetMediaItemTakeInfo_Value(take, "D_VOL")
+                local source = reaper.GetMediaItemTake_Source(take)
+
+                if source then
+                    -- Insert new track
+                    reaper.InsertTrackAtIndex(trackIdx + i - 1, true)
+                    local newTrack = reaper.GetTrack(0, trackIdx + i - 1)
+
+                    -- Set track name and color
+                    local newTrackName = trackName .. " - " .. takeName
+                    reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+                    reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", itemColor)
+
+                    -- Create new item on the new track
+                    local newItem = reaper.AddMediaItemToTrack(newTrack)
+                    reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+                    reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+                    reaper.SetMediaItemInfo_Value(newItem, "D_VOL", itemVol)
+                    reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", itemColor)
+
+                    -- Create take with same source
+                    local newTake = reaper.AddTakeToMediaItem(newItem)
+                    reaper.SetMediaItemTake_Source(newTake, source)
+                    reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
+                    reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", takeVol)
+
+                    totalCreated = totalCreated + 1
+                end
+            end
+
+            -- Delete the original item
+            reaper.DeleteTrackMediaItem(track, item)
+        end
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Explode blended to tracks", -1)
+    return totalCreated
 end
 
 -- Create new tracks for each selected stem
@@ -10143,7 +10337,7 @@ function processStemsResult(stems)
 
     if timeSelectionMode then
         -- Time selection mode: respect user's setting
-        if SETTINGS.createNewTracks then
+        if SETTINGS.outputMode == "new_tracks" then
             -- Handle mute/delete options BEFORE creating stems (so new stems aren't affected)
             local actionMsg = ""
             if SETTINGS.muteOriginal then
@@ -10185,8 +10379,29 @@ function processStemsResult(stems)
                 trackInfo = " [Track " .. multiTrackQueue.currentIndex .. "/" .. multiTrackQueue.totalTracks .. ": " .. (multiTrackQueue.currentTrackName or "?") .. "]"
             end
             resultMsg = count .. " stem " .. trackWord .. " created from time selection." .. actionMsg .. trackInfo
+        elseif SETTINGS.outputMode == "blended" then
+            -- Blended mode: replace source item with stems as separate stacked items
+            if timeSelectionSourceItem then
+                -- Use partial replacement - splits the item and replaces only the selected part
+                local createdItems
+                count, createdItems = replaceBlendedPartial(timeSelectionSourceItem, stems, timeSelectionStart, timeSelectionEnd)
+                -- Auto-explode if enabled
+                if SETTINGS.autoExplode and createdItems and #createdItems > 1 then
+                    local explodedCount = explodeBlendedToTracks(createdItems)
+                    resultMsg = explodedCount .. " stems exploded to separate tracks."
+                else
+                    local itemWord = count == 1 and "item" or "items"
+                    resultMsg = count .. " blended stem " .. itemWord .. " created (playing simultaneously)."
+                end
+            else
+                -- Fallback: create new tracks if no source item
+                local sourceTrack = multiTrackQueue.active and multiTrackQueue.currentSourceTrack or nil
+                count = createStemTracksForSelection(stems, itemPos, itemLen, sourceTrack)
+                local trackWord = count == 1 and "track" or "tracks"
+                resultMsg = count .. " stem " .. trackWord .. " created from time selection."
+            end
         else
-            -- In-place mode: replace only the selected portion of the item
+            -- In-place (takes) mode: replace only the selected portion of the item
             if timeSelectionSourceItem then
                 -- Use partial replacement - splits the item and replaces only the selected part
                 count = replaceInPlacePartial(timeSelectionSourceItem, stems, timeSelectionStart, timeSelectionEnd)
@@ -10199,7 +10414,7 @@ function processStemsResult(stems)
                 resultMsg = count .. " stem " .. trackWord .. " created from time selection."
             end
         end
-    elseif SETTINGS.createNewTracks then
+    elseif SETTINGS.outputMode == "new_tracks" then
         count = createStemTracks(selectedItem, stems, itemPos, itemLen)
         local action = SETTINGS.deleteOriginalTrack and "Track deleted." or
                        (SETTINGS.deleteOriginal and "Item deleted." or
@@ -10209,15 +10424,34 @@ function processStemsResult(stems)
         local trackWord = count == 1 and "track" or "tracks"
         resultMsg = count .. " stem " .. trackWord .. " created."
         if action ~= "" then resultMsg = resultMsg .. "\n" .. action end
+    elseif SETTINGS.outputMode == "blended" then
+        local createdItems
+        count, createdItems = replaceBlended(selectedItem, stems, itemPos, itemLen)
+        -- Auto-explode if enabled
+        if SETTINGS.autoExplode and createdItems and #createdItems > 1 then
+            local explodedCount = explodeBlendedToTracks(createdItems)
+            resultMsg = explodedCount .. " stems exploded to separate tracks."
+        else
+            local itemWord = count == 1 and "item" or "items"
+            resultMsg = count .. " blended stem " .. itemWord .. " created (playing simultaneously)."
+        end
     else
+        -- in_place mode
         -- Check if we processed a sub-selection of the item
         if itemSubSelection then
             -- Use partial replacement - splits the item and replaces only the selected part
             count = replaceInPlacePartial(selectedItem, stems, itemSubSelStart, itemSubSelEnd)
             resultMsg = count == 1 and "Selection replaced with stem." or "Selection replaced with stems as takes (press T to switch)."
         else
-            count = replaceInPlace(selectedItem, stems, itemPos, itemLen)
-            resultMsg = count == 1 and "Stem replaced." or "Stems added as takes (press T to switch)."
+            local mainItem
+            count, mainItem = replaceInPlace(selectedItem, stems, itemPos, itemLen)
+            -- Auto-explode if enabled
+            if SETTINGS.autoExplode and mainItem and count > 1 then
+                local explodedCount = explodeTakesToTracks(mainItem)
+                resultMsg = explodedCount .. " stems exploded to separate tracks."
+            else
+                resultMsg = count == 1 and "Stem replaced." or "Stems added as takes (press T to switch)."
+            end
         end
     end
 
@@ -10471,11 +10705,21 @@ local function drawResultWindow()
     gfx.setfont(1, "Arial", PS(10))
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     local targetText = "Target: "
-    if SETTINGS.createNewTracks then
+    if SETTINGS.outputMode == "new_tracks" then
         targetText = targetText .. "New tracks"
         if SETTINGS.createFolder then targetText = targetText .. " (folder)" end
-    else
-        targetText = targetText .. "In-place (as takes)"
+    elseif SETTINGS.outputMode == "in_place" then
+        if SETTINGS.autoExplode then
+            targetText = targetText .. "Takes -> Tracks"
+        else
+            targetText = targetText .. "In-place (as takes)"
+        end
+    else  -- blended
+        if SETTINGS.autoExplode then
+            targetText = targetText .. "Blended -> Tracks"
+        else
+            targetText = targetText .. "In-place (stacked)"
+        end
     end
     -- Add action info
     if SETTINGS.muteOriginal then
@@ -10692,7 +10936,7 @@ runSingleTrackSeparation = function(trackList)
 
     -- In-place mode with no time selection: process each item separately
     -- This ensures each item gets its own stems as takes
-    local inPlaceMultiItem = not SETTINGS.createNewTracks and not hasTimeSel
+    local inPlaceMultiItem = not (SETTINGS.outputMode == "new_tracks") and not hasTimeSel
 
     -- Prepare all tracks: extract audio
     local trackJobs = {}
@@ -11011,77 +11255,8 @@ local function drawMultiTrackProgressWindow()
     end
     gfx.rect(0, 0, w, h, 1)
 
-    -- === THEME TOGGLE (top right) ===
-    local themeSize = PS(18)
-    local themeX = w - themeSize - PS(8)
-    local themeY = PS(6)
-    local themeHover = mx >= themeX and mx <= themeX + themeSize and my >= themeY and my <= themeY + themeSize
-
-    if SETTINGS.darkMode then
-        gfx.set(0.7, 0.7, 0.5, themeHover and 1 or 0.5)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/2 - 2, 1, 1)
-        gfx.set(0, 0, 0, 1)  -- Pure black for moon overlay
-        gfx.circle(themeX + themeSize/2 + 3, themeY + themeSize/2 - 2, themeSize/2 - 3, 1, 1)
-    else
-        gfx.set(0.9, 0.7, 0.2, themeHover and 1 or 0.7)
-        gfx.circle(themeX + themeSize/2, themeY + themeSize/2, themeSize/3, 1, 1)
-        for i = 0, 7 do
-            local angle = i * math.pi / 4
-            local x1 = themeX + themeSize/2 + math.cos(angle) * (themeSize/3 + 1)
-            local y1 = themeY + themeSize/2 + math.sin(angle) * (themeSize/3 + 1)
-            local x2 = themeX + themeSize/2 + math.cos(angle) * (themeSize/2 - 1)
-            local y2 = themeY + themeSize/2 + math.sin(angle) * (themeSize/2 - 1)
-            gfx.line(x1, y1, x2, y2)
-        end
-    end
-
-    -- Theme click and tooltip
-    if themeHover then
-        tooltipText = SETTINGS.darkMode and T("switch_light") or T("switch_dark")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if mouseDown and not multiTrackQueue.wasMouseDown then
-            SETTINGS.darkMode = not SETTINGS.darkMode
-            updateTheme()
-            saveSettings()
-        end
-    end
-
-    -- === FX TOGGLE (below theme icon) ===
-    local fxSize = PS(16)
-    local fxX = themeX + (themeSize - fxSize) / 2
-    local fxY = themeY + themeSize + PS(3)
-    local fxHover = mx >= fxX - PS(2) and mx <= fxX + fxSize + PS(2) and my >= fxY - PS(2) and my <= fxY + fxSize + PS(2)
-
-    local fxAlpha = fxHover and 1 or 0.7
-    if SETTINGS.visualFX then
-        gfx.set(0.4, 0.9, 0.5, fxAlpha)
-    else
-        gfx.set(0.5, 0.5, 0.5, fxAlpha * 0.6)
-    end
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local fxText = "FX"
-    local fxTextW = gfx.measurestr(fxText)
-    gfx.x = fxX + (fxSize - fxTextW) / 2
-    gfx.y = fxY + PS(1)
-    gfx.drawstr(fxText)
-
-    if SETTINGS.visualFX then
-        gfx.set(1, 1, 0.5, fxAlpha * 0.8)
-        gfx.circle(fxX - PS(1), fxY + PS(2), PS(1.5), 1, 1)
-        gfx.circle(fxX + fxSize, fxY + fxSize - PS(2), PS(1.5), 1, 1)
-    else
-        gfx.set(0.8, 0.3, 0.3, fxAlpha)
-        gfx.line(fxX - PS(1), fxY + fxSize / 2, fxX + fxSize + PS(1), fxY + fxSize / 2)
-    end
-
-    if fxHover then
-        tooltipText = SETTINGS.visualFX and T("fx_disable") or T("fx_enable")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-    end
-    if fxHover and mouseDown and not multiTrackQueue.wasMouseDown then
-        SETTINGS.visualFX = not SETTINGS.visualFX
-        saveSettings()
-    end
+    -- === SETTINGS ICON (bottom-left) ===
+    drawSettingsIcon(PS, mx, my, mouseDown, multiTrackQueue.wasMouseDown)
 
     -- Title with colored STEM
     gfx.setfont(1, "Arial", PS(16), string.byte('b'))
@@ -11117,39 +11292,6 @@ local function drawMultiTrackProgressWindow()
     gfx.x = titleX
     gfx.y = titleY
     gfx.drawstr(string.format("Peration - %s (%d tracks)", modeStr, #multiTrackQueue.jobs))
-
-    -- Language toggle (left of theme toggle)
-    local langW = PS(20)
-    local langH = PS(14)
-    local langX = themeX - langW - PS(8)
-    local langY = themeY + (themeSize - langH) / 2
-    local langHover = mx >= langX and mx <= langX + langW and my >= langY and my <= langY + langH
-
-    gfx.setfont(1, "Arial", PS(9), string.byte('b'))
-    local langCode = string.upper(SETTINGS.language or "EN")
-    local langTextW = gfx.measurestr(langCode)
-
-    if langHover then
-        gfx.set(0.4, 0.6, 0.9, 1)
-        tooltipText = T("tooltip_change_language")
-        tooltipX, tooltipY = mx + PS(10), my + PS(15)
-        if mouseDown and not multiTrackQueue.wasMouseDown then
-            -- Cycle through languages
-            local langs = {"en", "nl", "de"}
-            local currentIdx = 1
-            for i, l in ipairs(langs) do
-                if l == SETTINGS.language then currentIdx = i; break end
-            end
-            local nextIdx = (currentIdx % #langs) + 1
-            setLanguage(langs[nextIdx])
-            saveSettings()
-        end
-    else
-        gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 0.8)
-    end
-    gfx.x = langX + (langW - langTextW) / 2
-    gfx.y = langY
-    gfx.drawstr(langCode)
 
     -- Overall progress bar
     local barX = PS(20)
@@ -11375,6 +11517,126 @@ local function drawMultiTrackProgressWindow()
         gfx.drawstr("Media: " .. itemInfo)
     end
 
+    -- === NERD TERMINAL TOGGLE BUTTON ===
+    local nerdBtnW = PS(22)
+    local nerdBtnH = PS(18)
+    local nerdBtnX = barX
+    local nerdBtnY = infoY + PS(82)
+    local nerdHover = mx >= nerdBtnX and mx <= nerdBtnX + nerdBtnW and my >= nerdBtnY and my <= nerdBtnY + nerdBtnH
+
+    -- Draw nerd button (terminal icon: >_)
+    if multiTrackQueue.showTerminal then
+        gfx.set(0.3, 0.8, 0.3, 1)  -- Green when active
+    else
+        gfx.set(0.4, 0.4, 0.4, nerdHover and 1 or 0.6)
+    end
+    gfx.rect(nerdBtnX, nerdBtnY, nerdBtnW, nerdBtnH, 1)
+    gfx.set(0, 0, 0, 1)
+    gfx.setfont(1, "Courier", PS(10), string.byte('b'))
+    gfx.x = nerdBtnX + PS(3)
+    gfx.y = nerdBtnY + PS(3)
+    gfx.drawstr(">_")
+
+    -- Handle nerd button click and tooltip
+    if nerdHover then
+        if multiTrackQueue.showTerminal then
+            tooltipText = "Switch to Art View"
+        else
+            tooltipText = "Nerd Mode: Show terminal output"
+        end
+        tooltipX, tooltipY = mx + PS(10), my + PS(15)
+        if mouseDown and not multiTrackQueue.wasMouseDown then
+            multiTrackQueue.showTerminal = not multiTrackQueue.showTerminal
+        end
+    end
+
+    -- === DISPLAY AREA (ART or TERMINAL) ===
+    local displayY = nerdBtnY + nerdBtnH + PS(5)
+    local displayH = h - displayY - PS(30)
+    local displayX = barX
+    local displayW = w - PS(40)
+
+    if displayH > PS(50) then
+        if multiTrackQueue.showTerminal then
+            -- === NERD TERMINAL VIEW ===
+            -- Dark terminal background
+            gfx.set(0.02, 0.02, 0.03, 0.98)
+            gfx.rect(displayX, displayY, displayW, displayH, 1)
+
+            -- Terminal border (green)
+            gfx.set(0.2, 0.8, 0.2, 0.5)
+            gfx.rect(displayX, displayY, displayW, displayH, 0)
+
+            -- Terminal header
+            gfx.set(0.2, 0.6, 0.2, 1)
+            gfx.rect(displayX, displayY, displayW, PS(18), 1)
+            gfx.set(0, 0, 0, 1)
+            gfx.setfont(1, "Courier", PS(10), string.byte('b'))
+            gfx.x = displayX + PS(5)
+            gfx.y = displayY + PS(3)
+            gfx.drawstr("DEMUCS OUTPUT")
+
+            -- Read latest terminal output from active job's stdout file
+            local now = os.clock()
+            if now - (multiTrackQueue.lastTerminalUpdate or 0) > 0.5 then
+                multiTrackQueue.lastTerminalUpdate = now
+                multiTrackQueue.terminalLines = {}
+                if activeJob and activeJob.stdoutFile then
+                    local f = io.open(activeJob.stdoutFile, "r")
+                    if f then
+                        for line in f:lines() do
+                            table.insert(multiTrackQueue.terminalLines, line)
+                        end
+                        f:close()
+                    end
+                end
+            end
+
+            -- Draw terminal lines (monospace, green on black)
+            local termContentY = displayY + PS(22)
+            local termContentH = displayH - PS(26)
+            local lineHeight = PS(12)
+            local maxLines = math.floor(termContentH / lineHeight)
+            local lines = multiTrackQueue.terminalLines or {}
+            local startLine = math.max(1, #lines - maxLines + 1)
+
+            gfx.setfont(1, "Courier", PS(9))
+            local lineY = termContentY
+            for i = startLine, #lines do
+                if lineY < displayY + displayH - PS(5) then
+                    local line = lines[i] or ""
+                    if #line > 80 then line = line:sub(1, 77) .. "..." end
+
+                    -- Color based on content
+                    if line:match("error") or line:match("Error") or line:match("ERROR") then
+                        gfx.set(1, 0.3, 0.3, 1)
+                    elseif line:match("warning") or line:match("Warning") then
+                        gfx.set(1, 0.8, 0.3, 1)
+                    elseif line:match("PROGRESS") then
+                        gfx.set(0.3, 0.8, 1, 1)
+                    elseif line:match("Separating") or line:match("100%%") then
+                        gfx.set(0.5, 1, 0.5, 1)
+                    else
+                        gfx.set(0.3, 0.9, 0.3, 0.9)
+                    end
+
+                    gfx.x = displayX + PS(5)
+                    gfx.y = lineY
+                    gfx.drawstr(line)
+                    lineY = lineY + lineHeight
+                end
+            end
+
+            -- Blinking cursor at bottom
+            if math.floor(now * 2) % 2 == 0 then
+                gfx.set(0.3, 1, 0.3, 1)
+                gfx.x = displayX + PS(5)
+                gfx.y = math.min(lineY, displayY + displayH - lineHeight - PS(5))
+                gfx.drawstr("_")
+            end
+        end
+    end
+
     -- Bottom line: Total elapsed, model, segment and cancel hint
     local totalMins = math.floor(globalElapsed / 60)
     local totalSecs = globalElapsed % 60
@@ -11533,7 +11795,7 @@ processAllStemsResult = function()
     -- Skip item-level processing if deleteOriginalTrack is set (tracks will be deleted after stems created)
     -- Also skip muteSelection/deleteSelection for in-place + time selection mode
     -- (the selection portion will be replaced by stems, splitting is done there)
-    local skipSelectionProcessing = timeSelectionMode and not SETTINGS.createNewTracks
+    local skipSelectionProcessing = timeSelectionMode and not (SETTINGS.outputMode == "new_tracks")
 
     if SETTINGS.deleteOriginalTrack then
         -- Do nothing here - track deletion happens after stems are created
@@ -11667,7 +11929,7 @@ processAllStemsResult = function()
     debugLog("=== processAllStemsResult: Creating stem tracks ===")
     debugLog("Number of jobs: " .. #multiTrackQueue.jobs)
     debugLog("itemPos: " .. tostring(itemPos) .. ", itemLen: " .. tostring(itemLen))
-    debugLog("createNewTracks: " .. tostring(SETTINGS.createNewTracks))
+    debugLog("createNewTracks: " .. tostring((SETTINGS.outputMode == "new_tracks")))
 
     local is6Stem = (SETTINGS.model == "htdemucs_6s")
 
@@ -11698,12 +11960,26 @@ processAllStemsResult = function()
 
         -- Create stems based on output mode
         if next(stems) then
-            if SETTINGS.createNewTracks then
+            if (SETTINGS.outputMode == "new_tracks") then
                 -- New tracks mode: create separate tracks for each stem
                 debugLog("  Calling createStemTracksForSelection...")
                 local count = createStemTracksForSelection(stems, itemPos, itemLen, job.track)
                 debugLog("  Created " .. count .. " stem tracks")
                 totalStemsCreated = totalStemsCreated + count
+            elseif SETTINGS.outputMode == "blended" then
+                -- Blended mode: replace source item with stems as separate items
+                debugLog("  Blended mode: processing source item...")
+                local sourceItem = job.sourceItem
+                if sourceItem and reaper.ValidatePtr(sourceItem, "MediaItem*") then
+                    local srcItemPos = reaper.GetMediaItemInfo_Value(sourceItem, "D_POSITION")
+                    local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
+                    debugLog("  Replacing item at pos=" .. srcItemPos .. ", len=" .. srcItemLen)
+                    local count = replaceBlended(sourceItem, stems, srcItemPos, srcItemLen)
+                    debugLog("  Replaced with " .. count .. " blended stems")
+                    totalStemsCreated = totalStemsCreated + count
+                else
+                    debugLog("  ERROR: No valid source item for blended replacement")
+                end
             else
                 -- In-place mode: replace source item with stems as takes
                 debugLog("  In-place mode: processing source item...")
@@ -11742,9 +12018,16 @@ processAllStemsResult = function()
                     local srcItemPos = reaper.GetMediaItemInfo_Value(sourceItem, "D_POSITION")
                     local srcItemLen = reaper.GetMediaItemInfo_Value(sourceItem, "D_LENGTH")
                     debugLog("  Replacing item at pos=" .. srcItemPos .. ", len=" .. srcItemLen)
-                    local count = replaceInPlace(sourceItem, stems, srcItemPos, srcItemLen)
+                    local count, mainItem = replaceInPlace(sourceItem, stems, srcItemPos, srcItemLen)
                     debugLog("  Replaced with " .. count .. " stems as takes")
-                    totalStemsCreated = totalStemsCreated + count
+                    -- Auto-explode if enabled
+                    if SETTINGS.autoExplode and mainItem and count > 1 then
+                        local explodedCount = explodeTakesToTracks(mainItem)
+                        debugLog("  Auto-exploded to " .. explodedCount .. " tracks")
+                        totalStemsCreated = totalStemsCreated + explodedCount
+                    else
+                        totalStemsCreated = totalStemsCreated + count
+                    end
                 else
                     debugLog("  ERROR: No valid source item for in-place replacement")
                 end
@@ -11834,7 +12117,7 @@ processAllStemsResult = function()
     local timeStr = string.format("%d:%02d", totalMins, totalSecs)
     local speedStr = string.format("%.2fx", realtimeFactor)
     local resultMsg
-    if SETTINGS.createNewTracks then
+    if (SETTINGS.outputMode == "new_tracks") then
         local trackWord = totalStemsCreated == 1 and "track" or "tracks"
         resultMsg = string.format("%d stem %s created from %d source tracks.\nTime: %s | Speed: %s realtime | Mode: %s%s",
             totalStemsCreated, trackWord, #multiTrackQueue.jobs, timeStr, speedStr, modeStr, actionMsg)
