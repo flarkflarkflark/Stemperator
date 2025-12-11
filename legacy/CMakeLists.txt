@@ -18,8 +18,9 @@ if(APPLE)
     message(STATUS "macOS deployment target: ${CMAKE_OSX_DEPLOYMENT_TARGET}")
 endif()
 
-# Add JUCE
-add_subdirectory(JUCE)
+# Add JUCE (from root directory)
+get_filename_component(ROOT_DIR "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
+add_subdirectory(${ROOT_DIR}/JUCE JUCE)
 
 # =============================================================================
 # GPU Acceleration Detection

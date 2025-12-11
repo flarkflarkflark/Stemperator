@@ -1,7 +1,12 @@
 -- @description STEMperator
 -- @author flarkAUDIO
--- @version 1.5.0
+-- @version 2.0.0
 -- @changelog
+--   v2.0.0: Fresh release - REAPER-only focus
+--   - Repo restructured: plugin/standalone moved to legacy/
+--   - Renamed to STEMperator (REAPER scripts focus)
+--   - All branding updated to STEMperator
+--   - Clean separation from STEMdropper project
 --   v1.5.0: Improved cross-platform support
 --   - Better Python detection (Homebrew, Windows venvs, user paths)
 --   - Added ~/.stemperator/.venv support for global installation
@@ -194,7 +199,7 @@ local STEMS = {
 }
 
 -- App version (single source of truth)
-local APP_VERSION = "1.5.0"
+local APP_VERSION = "2.0.0"
 
 -- Available models
 local MODELS = {

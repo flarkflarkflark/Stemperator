@@ -6,6 +6,16 @@ name: Build (Legacy - Plugin/Standalone)
 
 on:
   workflow_dispatch:  # Manual trigger only - disabled for automatic builds
+    inputs:
+      create_release:
+        description: 'Create a GitHub release (requires tag input)'
+        required: false
+        type: boolean
+        default: false
+      release_tag:
+        description: 'Tag name for release (e.g., v1.0.0)'
+        required: false
+        type: string
   # push:
   #   branches: [ main ]
   #   tags: [ 'v*' ]
@@ -123,10 +133,10 @@ jobs:
           Stemperator-VST3-*.tar.gz
           Stemperator-VST3-*.zip
 
-  # Create release when a tag is pushed
+  # Create release when manually triggered with release option
   release:
     needs: [build]
-    if: startsWith(github.ref, 'refs/tags/')
+    if: github.event.inputs.create_release == 'true' && github.event.inputs.release_tag != ''
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -143,6 +153,7 @@ jobs:
     - name: Create Release
       uses: softprops/action-gh-release@v1
       with:
+        tag_name: ${{ github.event.inputs.release_tag }}
         files: |
           artifacts/**/*.tar.gz
           artifacts/**/*.zip
