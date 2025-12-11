@@ -1,4 +1,4 @@
--- @description Stemperator - Quick Instrumental
+-- @description STEMperator - Quick Instrumental
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
@@ -8,7 +8,7 @@
 --   Quick action: Separates stems and creates instrumental version.
 --   Same as Karaoke - removes vocals, keeps everything else.
 
-local SCRIPT_NAME = "Stemperator: Quick Instrumental"
+local SCRIPT_NAME = "STEMperator: Quick Instrumental"
 
 -- Find the main script
 local function findMainScript()

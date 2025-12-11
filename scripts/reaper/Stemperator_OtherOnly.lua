@@ -1,4 +1,4 @@
--- @description Stemperator: Other Only (guitars/synths/keys)
+-- @description STEMperator: Other Only (guitars/synths/keys)
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @about Quick action to extract only the "Other" stem (guitars, synths, keys, etc.)

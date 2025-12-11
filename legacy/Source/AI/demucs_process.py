@@ -34,15 +34,15 @@ def check_dependencies():
         missing.append("demucs")
 
     try:
-        import torchaudio
+        import soundfile
     except ImportError:
-        missing.append("torchaudio")
+        missing.append("soundfile")
 
     if missing:
         print(f"ERROR: Missing dependencies: {', '.join(missing)}", file=sys.stderr)
         print("\nInstall with:", file=sys.stderr)
-        print("  Arch Linux: sudo pacman -S python-pytorch-opt-rocm python-torchaudio", file=sys.stderr)
-        print("  Then: pip install --user demucs", file=sys.stderr)
+        print("  Arch Linux: sudo pacman -S python-pytorch-opt-rocm", file=sys.stderr)
+        print("  Then: pip install demucs soundfile", file=sys.stderr)
         return False
     return True
 
@@ -62,7 +62,9 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
         dict: Paths to output stem files
     """
     import torch
-    import torchaudio
+    import soundfile as sf
+    import numpy as np
+    from scipy import signal
     from demucs.pretrained import get_model
     from demucs.apply import apply_model
 
@@ -78,21 +80,31 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
     print(f"Loading audio: {input_file}", file=sys.stderr)
 
-    # Load audio
-    waveform, sample_rate = torchaudio.load(input_file)
+    # Load audio using soundfile
+    audio_data, sample_rate = sf.read(input_file, dtype='float32')
+    
+    # Convert to torch tensor with shape [channels, samples]
+    if audio_data.ndim == 1:
+        # Mono - convert to stereo
+        waveform = torch.from_numpy(audio_data).unsqueeze(0).repeat(2, 1)
+    else:
+        # Transpose from [samples, channels] to [channels, samples]
+        waveform = torch.from_numpy(audio_data.T)
+        if waveform.shape[0] > 2:
+            waveform = waveform[:2]
+        elif waveform.shape[0] == 1:
+            waveform = waveform.repeat(2, 1)
 
     # Resample if needed (Demucs expects 44100 Hz)
     if sample_rate != model.samplerate:
         print(f"Resampling from {sample_rate} to {model.samplerate} Hz", file=sys.stderr)
-        resampler = torchaudio.transforms.Resample(sample_rate, model.samplerate)
-        waveform = resampler(waveform)
+        # Use scipy for resampling
+        num_samples = int(waveform.shape[1] * model.samplerate / sample_rate)
+        resampled = np.zeros((waveform.shape[0], num_samples), dtype=np.float32)
+        for ch in range(waveform.shape[0]):
+            resampled[ch] = signal.resample(waveform[ch].numpy(), num_samples)
+        waveform = torch.from_numpy(resampled)
         sample_rate = model.samplerate
-
-    # Ensure stereo
-    if waveform.shape[0] == 1:
-        waveform = waveform.repeat(2, 1)
-    elif waveform.shape[0] > 2:
-        waveform = waveform[:2]
 
     # Add batch dimension
     waveform = waveform.unsqueeze(0).to(device)
@@ -112,12 +124,14 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
     # Create output directory
     os.makedirs(output_dir, exist_ok=True)
 
-    # Save each stem
+    # Save each stem using soundfile
     output_files = {}
     for i, name in enumerate(source_names):
-        stem = sources[i].cpu()
+        stem = sources[i].cpu().numpy()
+        # Transpose from [channels, samples] to [samples, channels] for soundfile
+        stem = stem.T
         output_path = os.path.join(output_dir, f"{name}.wav")
-        torchaudio.save(output_path, stem, sample_rate)
+        sf.write(output_path, stem, sample_rate)
         output_files[name] = output_path
         print(f"Saved: {output_path}", file=sys.stderr)
 

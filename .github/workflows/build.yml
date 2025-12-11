@@ -1,11 +1,16 @@
-name: Build
+name: Build (Legacy - Plugin/Standalone)
+
+# NOTE: This workflow builds the legacy plugin/standalone.
+# The REAPER scripts (STEMperator) don't require building.
+# This workflow can be disabled or removed if not needed.
 
 on:
-  push:
-    branches: [ main ]
-    tags: [ 'v*' ]
-  pull_request:
-    branches: [ main ]
+  workflow_dispatch:  # Manual trigger only - disabled for automatic builds
+  # push:
+  #   branches: [ main ]
+  #   tags: [ 'v*' ]
+  # pull_request:
+  #   branches: [ main ]
 
 jobs:
   build:

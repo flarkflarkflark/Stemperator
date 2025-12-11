@@ -7,7 +7,7 @@
 --   - Added ~/.stemperator/.venv support for global installation
 --   - macOS: Added /opt/homebrew paths for Apple Silicon
 --   - Windows: Better AppData Python detection
---   - Run "Stemperator: Installation & Setup" to verify installation
+--   - Run "STEMperator: Installation & Setup" to verify installation
 --   v1.4.0: Time selection support
 --   - Can now separate time selections (not just media items)
 --   - If no item selected, uses time selection instead
@@ -27,7 +27,7 @@
 --   [nomain] audio_separator_process.py
 -- @link Repository https://github.com/flarkflarkflark/Stemperator
 -- @about
---   # Stemperator - AI Stem Separation
+--   # STEMperator - AI Stem Separation
 --
 --   High-quality AI-powered stem separation using Demucs/audio-separator.
 --   Separates the selected media item (or time selection) into stems:
@@ -58,8 +58,8 @@
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
-local SCRIPT_NAME = "Stemperator"
-local EXT_SECTION = "Stemperator"  -- For ExtState persistence
+local SCRIPT_NAME = "STEMperator"
+local EXT_SECTION = "Stemperator"  -- For ExtState persistence (keep old name for compatibility)
 
 -- Debug mode - set to true to enable debug logging
 local DEBUG_MODE = true
@@ -6635,7 +6635,7 @@ showMessage = function(title, message, icon, monitorSelection)
     loadSettings()
     updateTheme()
 
-    messageWindowState.title = title or "Stemperator"
+    messageWindowState.title = title or "STEMperator"
     messageWindowState.message = message or ""
     messageWindowState.icon = icon or "info"
     messageWindowState.wasMouseDown = false
@@ -6659,7 +6659,7 @@ showMessage = function(title, message, icon, monitorSelection)
         winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
     end
 
-    gfx.init("Stemperator", winW, winH, 0, winX, winY)
+    gfx.init("STEMperator", winW, winH, 0, winX, winY)
     reaper.defer(messageWindowLoop)
 end
 
@@ -9747,7 +9747,7 @@ local function replaceInPlacePartial(item, stemPaths, selStart, selEnd)
         end
     end
 
-    reaper.Undo_EndBlock("Stemperator: Replace selection in-place", -1)
+    reaper.Undo_EndBlock("STEMperator: Replace selection in-place", -1)
     return #items
 end
 
@@ -9816,7 +9816,7 @@ local function replaceInPlace(item, stemPaths, itemPos, itemLen)
         end
     end
 
-    reaper.Undo_EndBlock("Stemperator: Replace in-place", -1)
+    reaper.Undo_EndBlock("STEMperator: Replace in-place", -1)
     return #items
 end
 
@@ -9968,7 +9968,7 @@ local function createStemTracks(item, stemPaths, itemPos, itemLen)
     end
     -- If none of the above, leave item as-is
 
-    reaper.Undo_EndBlock("Stemperator: Create stem tracks", -1)
+    reaper.Undo_EndBlock("STEMperator: Create stem tracks", -1)
     return importedCount
 end
 
@@ -10128,7 +10128,7 @@ local function createStemTracksForSelection(stemPaths, selPos, selLen, sourceTra
         reaper.SetMediaTrackInfo_Value(reaper.GetTrack(0, trackIdx + importedCount - 1), "I_FOLDERDEPTH", -1)
     end
 
-    reaper.Undo_EndBlock("Stemperator: Create stem tracks from selection", -1)
+    reaper.Undo_EndBlock("STEMperator: Create stem tracks from selection", -1)
     return importedCount
 end
 
@@ -10603,7 +10603,7 @@ end
 local function resultWindowLoop()
     -- Save window position for next time
     if reaper.JS_Window_GetRect then
-        local hwnd = reaper.JS_Window_Find("Stemperator - Complete", true)
+        local hwnd = reaper.JS_Window_Find("STEMperator - Complete", true)
         if hwnd then
             local retval, left, top, right, bottom = reaper.JS_Window_GetRect(hwnd)
             if retval then
@@ -10678,7 +10678,7 @@ function showResultWindow(selectedStems, message)
         winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
     end
 
-    gfx.init("Stemperator - Complete", winW, winH, 0, winX, winY)
+    gfx.init("STEMperator - Complete", winW, winH, 0, winX, winY)
     reaper.defer(resultWindowLoop)
 end
 
@@ -11503,7 +11503,7 @@ showMultiTrackProgressWindow = function()
         winX, winY = clampToScreen(winX, winY, winW, winH, mouseX, mouseY)
     end
 
-    gfx.init("Stemperator - Multi-Track Progress", winW, winH, 0, winX, winY)
+    gfx.init("STEMperator - Multi-Track Progress", winW, winH, 0, winX, winY)
     reaper.defer(multiTrackProgressLoop)
 end
 
@@ -11784,7 +11784,7 @@ processAllStemsResult = function()
         actionMsg = "\n" .. actionCount .. " source " .. trackWord .. " deleted."
     end
 
-    reaper.Undo_EndBlock("Stemperator: Multi-track stem separation", -1)
+    reaper.Undo_EndBlock("STEMperator: Multi-track stem separation", -1)
     reaper.UpdateArrange()
 
     -- Calculate total processing time

@@ -1,4 +1,4 @@
--- @description Stemperator - Quick Vocals Only
+-- @description STEMperator - Quick Vocals Only
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
@@ -8,7 +8,7 @@
 --   Quick action: Extracts only the vocal stem.
 --   Perfect for vocal sampling or acapella creation.
 
-local SCRIPT_NAME = "Stemperator: Quick Vocals Only"
+local SCRIPT_NAME = "STEMperator: Quick Vocals Only"
 
 local function findMainScript()
     local scriptPath = debug.getinfo(1, "S").source:match("@(.+[/\\])")

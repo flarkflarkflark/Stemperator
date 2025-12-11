@@ -1,4 +1,4 @@
--- @description Stemperator: 6-Stem All (includes Guitar & Piano)
+-- @description STEMperator: 6-Stem All (includes Guitar & Piano)
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @about Quick action to extract all 6 stems including Guitar and Piano

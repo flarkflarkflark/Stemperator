@@ -1,5 +1,5 @@
--- Stemperator Toolbar Setup Script
--- Run this once to register all Stemperator scripts and create a dockable toolbar
+-- STEMperator Toolbar Setup Script
+-- Run this once to register all STEMperator scripts and create a dockable toolbar
 -- After running, the toolbar will appear. Drag it to dock next to main toolbar.
 
 local script_path = debug.getinfo(1, "S").source:match("@?(.*[\\/])")
@@ -10,20 +10,20 @@ local sep = package.config:sub(1,1)
 -- Organized: Main dialog first, then 4-stem presets, then 6-stem, then utilities
 local scripts = {
     -- Main dialog with all options
-    { file = "Stemperator_AI_Separate.lua", name = "Stemperator: AI Stem Separation", icon = "toolbar_settings.png" },
+    { file = "Stemperator_AI_Separate.lua", name = "STEMperator: AI Stem Separation", icon = "toolbar_settings.png" },
     -- 4-stem quick actions
-    { file = "Stemperator_Karaoke.lua", name = "Stemperator: Karaoke (No Vocals)", icon = "toolbar_karaoke.png" },
-    { file = "Stemperator_VocalsOnly.lua", name = "Stemperator: Vocals Only", icon = "toolbar_vocals.png" },
-    { file = "Stemperator_DrumsOnly.lua", name = "Stemperator: Drums Only", icon = "toolbar_drums.png" },
-    { file = "Stemperator_BassOnly.lua", name = "Stemperator: Bass Only", icon = "toolbar_bass.png" },
-    { file = "Stemperator_OtherOnly.lua", name = "Stemperator: Other Only", icon = "toolbar_other.png" },
-    { file = "Stemperator_AllStems.lua", name = "Stemperator: All 4 Stems", icon = "toolbar_allstems.png" },
+    { file = "Stemperator_Karaoke.lua", name = "STEMperator: Karaoke (No Vocals)", icon = "toolbar_karaoke.png" },
+    { file = "Stemperator_VocalsOnly.lua", name = "STEMperator: Vocals Only", icon = "toolbar_vocals.png" },
+    { file = "Stemperator_DrumsOnly.lua", name = "STEMperator: Drums Only", icon = "toolbar_drums.png" },
+    { file = "Stemperator_BassOnly.lua", name = "STEMperator: Bass Only", icon = "toolbar_bass.png" },
+    { file = "Stemperator_OtherOnly.lua", name = "STEMperator: Other Only", icon = "toolbar_other.png" },
+    { file = "Stemperator_AllStems.lua", name = "STEMperator: All 4 Stems", icon = "toolbar_allstems.png" },
     -- 6-stem actions (guitar/piano)
-    { file = "Stemperator_6Stem_AllStems.lua", name = "Stemperator: 6-Stem All", icon = "toolbar_6stem.png" },
-    { file = "Stemperator_GuitarOnly.lua", name = "Stemperator: Guitar Only (6-stem)", icon = "toolbar_guitar.png" },
-    { file = "Stemperator_PianoOnly.lua", name = "Stemperator: Piano Only (6-stem)", icon = "toolbar_piano.png" },
+    { file = "Stemperator_6Stem_AllStems.lua", name = "STEMperator: 6-Stem All", icon = "toolbar_6stem.png" },
+    { file = "Stemperator_GuitarOnly.lua", name = "STEMperator: Guitar Only (6-stem)", icon = "toolbar_guitar.png" },
+    { file = "Stemperator_PianoOnly.lua", name = "STEMperator: Piano Only (6-stem)", icon = "toolbar_piano.png" },
     -- Utilities
-    { file = "Stemperator_Explode_Stems.lua", name = "Stemperator: Explode to Tracks", icon = "toolbar_explode.png" },
+    { file = "Stemperator_Explode_Stems.lua", name = "STEMperator: Explode to Tracks", icon = "toolbar_explode.png" },
 }
 
 -- Copy icons to REAPER toolbar_icons folder
@@ -85,7 +85,7 @@ end
 do
     -- Create new toolbar section
     local toolbar_section = "[Floating toolbar 2]\n"
-    toolbar_section = toolbar_section .. "title=Stemperator\n"
+    toolbar_section = toolbar_section .. "title=STEMperator\n"
 
     for i, r in ipairs(registered) do
         local idx = i - 1
@@ -127,11 +127,11 @@ do
     end
 
     -- Show success message
-    local msg = "Stemperator Toolbar Setup Complete!\n\n"
+    local msg = "STEMperator Toolbar Setup Complete!\n\n"
     msg = msg .. "Registered " .. #registered .. " scripts with toolbar icons.\n\n"
     msg = msg .. "NEXT STEPS:\n"
     msg = msg .. "1. Restart REAPER (or Options > Reload reaper-menu.ini)\n"
-    msg = msg .. "2. Go to: View > Toolbars > Toolbar 2 (Stemperator)\n"
+    msg = msg .. "2. Go to: View > Toolbars > Toolbar 2 (STEMperator)\n"
     msg = msg .. "3. Drag the toolbar to dock it next to the main toolbar\n\n"
     msg = msg .. "Toolbar buttons:\n"
     msg = msg .. "• Settings - Main dialog with all options\n"
@@ -142,7 +142,7 @@ do
     msg = msg .. "• Guitar/Piano - 6-stem single instrument extraction\n"
     msg = msg .. "• Explode - Separate to individual tracks"
 
-    reaper.MB(msg, "Stemperator Setup", 0)
+    reaper.MB(msg, "STEMperator Setup", 0)
 end
 
 -- Try to show the toolbar immediately

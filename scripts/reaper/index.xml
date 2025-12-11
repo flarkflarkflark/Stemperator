@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
-<index version="1" name="Stemperator - AI Stem Separation">
+<index version="1" name="STEMperator - AI Stem Separation">
   <category name="AI/Stem Separation">
-    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation (Main Dialog)">
+    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="STEMperator - AI Stem Separation (Main Dialog)">
       <version name="1.5.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
         <changelog><![CDATA[v1.5.0: MilkDrop visuals + FX toggle
 - 100 MilkDrop-inspired patterns (1000 unique styles!)
@@ -35,7 +35,7 @@ v1.1.0: Major update
         <source file="lang/i18n.lua">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/lang/i18n.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_Installation.lua" type="script" desc="Stemperator - Installation &amp; Setup (Run First!)">
+    <reapack name="Stemperator_Installation.lua" type="script" desc="STEMperator - Installation &amp; Setup (Run First!)">
       <version name="1.0.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
         <changelog><![CDATA[v1.0.0: Initial release
 - Cross-platform Python/audio-separator installation
@@ -44,73 +44,73 @@ v1.1.0: Major update
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Installation.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_Setup_Toolbar.lua" type="script" desc="Stemperator - Setup Toolbar">
+    <reapack name="Stemperator_Setup_Toolbar.lua" type="script" desc="STEMperator - Setup Toolbar">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - Registers all scripts and creates Stemperator toolbar]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Setup_Toolbar.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_Karaoke.lua" type="script" desc="Stemperator - Quick Karaoke (Remove Vocals)">
+    <reapack name="Stemperator_Karaoke.lua" type="script" desc="STEMperator - Quick Karaoke (Remove Vocals)">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click karaoke mode]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Karaoke.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_VocalsOnly.lua" type="script" desc="Stemperator - Quick Vocals Only">
+    <reapack name="Stemperator_VocalsOnly.lua" type="script" desc="STEMperator - Quick Vocals Only">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click vocal isolation]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_VocalsOnly.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_DrumsOnly.lua" type="script" desc="Stemperator - Quick Drums Only">
+    <reapack name="Stemperator_DrumsOnly.lua" type="script" desc="STEMperator - Quick Drums Only">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click drum extraction]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_DrumsOnly.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_BassOnly.lua" type="script" desc="Stemperator - Quick Bass Only">
+    <reapack name="Stemperator_BassOnly.lua" type="script" desc="STEMperator - Quick Bass Only">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click bass extraction]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_BassOnly.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_OtherOnly.lua" type="script" desc="Stemperator - Quick Other Only (Guitars/Synths)">
+    <reapack name="Stemperator_OtherOnly.lua" type="script" desc="STEMperator - Quick Other Only (Guitars/Synths)">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click other instrument extraction]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_OtherOnly.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_AllStems.lua" type="script" desc="Stemperator - Quick All 4 Stems">
+    <reapack name="Stemperator_AllStems.lua" type="script" desc="STEMperator - Quick All 4 Stems">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click full 4-stem extraction]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_AllStems.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_6Stem_AllStems.lua" type="script" desc="Stemperator - Quick All 6 Stems (incl. Guitar/Piano)">
+    <reapack name="Stemperator_6Stem_AllStems.lua" type="script" desc="STEMperator - Quick All 6 Stems (incl. Guitar/Piano)">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click full 6-stem extraction including Guitar and Piano]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_6Stem_AllStems.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_GuitarOnly.lua" type="script" desc="Stemperator - Quick Guitar Only (6-stem model)">
+    <reapack name="Stemperator_GuitarOnly.lua" type="script" desc="STEMperator - Quick Guitar Only (6-stem model)">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click guitar extraction using 6-stem model]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_GuitarOnly.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_PianoOnly.lua" type="script" desc="Stemperator - Quick Piano Only (6-stem model)">
+    <reapack name="Stemperator_PianoOnly.lua" type="script" desc="STEMperator - Quick Piano Only (6-stem model)">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click piano extraction using 6-stem model]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_PianoOnly.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_Instrumental.lua" type="script" desc="Stemperator - Quick Instrumental">
+    <reapack name="Stemperator_Instrumental.lua" type="script" desc="STEMperator - Quick Instrumental">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - One-click instrumental extraction]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Instrumental.lua</source>
       </version>
     </reapack>
-    <reapack name="Stemperator_Explode_Stems.lua" type="script" desc="Stemperator - Explode Stems to Tracks">
+    <reapack name="Stemperator_Explode_Stems.lua" type="script" desc="STEMperator - Explode Stems to Tracks">
       <version name="1.0.0" author="flarkAUDIO">
         <changelog><![CDATA[Initial release - Separates stems to individual REAPER tracks]]></changelog>
         <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Explode_Stems.lua</source>

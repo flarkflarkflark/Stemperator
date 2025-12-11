@@ -1,6 +1,6 @@
 #!/bin/bash
 #
-# Stemperator - Cross-Platform Installation Script
+# STEMperator - Cross-Platform Installation Script
 # Installs Python environment and audio-separator for AI stem separation
 #
 # Usage: ./install.sh [--no-gpu]
@@ -24,7 +24,7 @@ NC='\033[0m' # No Color
 print_header() {
     echo ""
     echo -e "${BLUE}=============================================="
-    echo " Stemperator - AI Stem Separation Setup"
+    echo " STEMperator - AI Stem Separation Setup"
     echo "==============================================${NC}"
     echo ""
 }

@@ -1,4 +1,4 @@
--- @description Stemperator - Quick Karaoke (Remove Vocals)
+-- @description STEMperator - Quick Karaoke (Remove Vocals)
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
@@ -8,7 +8,7 @@
 --   Quick action: Separates stems and creates karaoke version (no vocals).
 --   Perfect for toolbar button - one click to remove vocals.
 
-local SCRIPT_NAME = "Stemperator: Quick Karaoke"
+local SCRIPT_NAME = "STEMperator: Quick Karaoke"
 
 -- Find the main script
 local function findMainScript()

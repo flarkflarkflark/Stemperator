@@ -1,6 +1,6 @@
 #!/usr/bin/env python3 -u
 """
-Audio Separator Script for Stemperator
+Audio Separator Script for STEMperator
 Uses audio-separator library for high-quality AI stem separation.
 
 NOTE: The -u flag enables unbuffered stdout for real-time progress output.
@@ -274,7 +274,7 @@ def check_installation():
         return False
 
 def main():
-    parser = argparse.ArgumentParser(description="Audio Separator for Stemperator")
+    parser = argparse.ArgumentParser(description="Audio Separator for STEMperator")
     parser.add_argument("input", nargs="?", help="Input audio file")
     parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
     parser.add_argument("--model", default="htdemucs",

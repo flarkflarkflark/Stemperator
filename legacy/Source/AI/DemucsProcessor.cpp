@@ -16,19 +16,43 @@ void DemucsProcessor::checkAvailability()
     gpuAvailable = false;
     statusMessage = "Checking Demucs availability...";
 
-    // Find Python
-    juce::StringArray pythonPaths = { "python3", "python", "/usr/bin/python3" };
+    // Find Python - prefer venv Python for proper dependencies
+    auto executableDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
+    auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
+    auto envRoot = juce::SystemStats::getEnvironmentVariable ("STEMPERATOR_ROOT", "");
+    
+    juce::StringArray pythonPaths;
+    
+    // Check for venv Python in STEMPERATOR_ROOT first
+    if (envRoot.isNotEmpty())
+    {
+        pythonPaths.add (juce::File (envRoot).getChildFile (".venv/bin/python").getFullPathName());
+        pythonPaths.add (juce::File (envRoot).getChildFile (".venv/Scripts/python.exe").getFullPathName());
+    }
+    
+    // Check for venv Python relative to executable
+    pythonPaths.add (projectRoot.getChildFile (".venv/bin/python").getFullPathName());
+    pythonPaths.add (executableDir.getChildFile (".venv/bin/python").getFullPathName());
+    
+    // Fall back to system Python
+    pythonPaths.add ("python3");
+    pythonPaths.add ("python");
+    pythonPaths.add ("/usr/bin/python3");
 
     for (const auto& path : pythonPaths)
     {
-        juce::ChildProcess checkProcess;
-        if (checkProcess.start (path + " --version"))
+        juce::File pythonFile (path);
+        if (pythonFile.existsAsFile() || ! path.contains ("/"))
         {
-            checkProcess.waitForProcessToFinish (5000);
-            if (checkProcess.getExitCode() == 0)
+            juce::ChildProcess checkProcess;
+            if (checkProcess.start (path + " --version"))
             {
-                pythonPath = path;
-                break;
+                checkProcess.waitForProcessToFinish (5000);
+                if (checkProcess.getExitCode() == 0)
+                {
+                    pythonPath = path;
+                    break;
+                }
             }
         }
     }
@@ -40,9 +64,6 @@ void DemucsProcessor::checkAvailability()
     }
 
     // Find our script (look in multiple locations)
-    auto executableDir = juce::File::getSpecialLocation (juce::File::currentExecutableFile).getParentDirectory();
-    auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
-    auto envRoot = juce::SystemStats::getEnvironmentVariable ("STEMPERATOR_ROOT", "");
 
     juce::StringArray scriptLocations = {
         executableDir.getChildFile ("demucs_process.py").getFullPathName(),

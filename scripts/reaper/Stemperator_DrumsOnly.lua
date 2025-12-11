@@ -1,4 +1,4 @@
--- @description Stemperator - Quick Drums Only
+-- @description STEMperator - Quick Drums Only
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
@@ -8,7 +8,7 @@
 --   Quick action: Extracts only the drum stem.
 --   Perfect for drum sampling or rhythm isolation.
 
-local SCRIPT_NAME = "Stemperator: Quick Drums Only"
+local SCRIPT_NAME = "STEMperator: Quick Drums Only"
 
 local function findMainScript()
     local scriptPath = debug.getinfo(1, "S").source:match("@(.+[/\\])")

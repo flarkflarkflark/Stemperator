@@ -1,18 +1,18 @@
--- @description Stemperator - Explode Stems to Tracks
+-- @description STEMperator - Explode Stems to Tracks
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
 --   Initial release
 -- @link Repository https://github.com/flarkflarkflark/Stemperator
 -- @about
---   # Stemperator - Explode Stems to Tracks
+--   # STEMperator - Explode Stems to Tracks
 --
 --   Creates 4 new tracks (Vocals, Drums, Bass, Other) and routes
---   Stemperator VST3 plugin's multi-outputs to them.
+--   STEMperator VST3 plugin's multi-outputs to them.
 --
 --   ## Usage
---   1. Select the track containing Stemperator VST3
---   2. Run this script (Actions > Stemperator: Explode Stems)
+--   1. Select the track containing STEMperator VST3
+--   2. Run this script (Actions > STEMperator: Explode Stems)
 --   3. 4 new tracks will be created with proper routing
 --
 --   Alternative: If no track is selected, you can import pre-exported
@@ -21,7 +21,7 @@
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
-local SCRIPT_NAME = "Stemperator: Explode Stems to Tracks"
+local SCRIPT_NAME = "STEMperator: Explode Stems to Tracks"
 
 -- Stem configuration: name, color (RGB), output channel pair (0-indexed)
 local STEMS = {
@@ -223,15 +223,15 @@ local function main()
     local trackIdx = reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
     local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
 
-    -- Check if Stemperator is on this track
+    -- Check if STEMperator is on this track
     local fxIdx = findStemperatorFX(track)
 
     if not fxIdx then
-        -- Stemperator not found - offer options
+        -- STEMperator not found - offer options
         local response = reaper.MB(
-            "Stemperator VST3 not found on selected track '" .. trackName .. "'.\n\n" ..
+            "STEMperator VST3 not found on selected track '" .. trackName .. "'.\n\n" ..
             "Options:\n" ..
-            "1. Add Stemperator to this track first, then run again\n" ..
+            "1. Add STEMperator to this track first, then run again\n" ..
             "2. Import stem files from a folder\n\n" ..
             "Would you like to import stem files instead?",
             SCRIPT_NAME, 4)
@@ -247,14 +247,14 @@ local function main()
         return
     end
 
-    -- Stemperator found - create stem tracks
+    -- STEMperator found - create stem tracks
     local created = createStemTracks(track, trackIdx)
 
     if created > 0 then
         reaper.MB(
-            "Created " .. created .. " stem tracks with routing from Stemperator.\n\n" ..
+            "Created " .. created .. " stem tracks with routing from STEMperator.\n\n" ..
             "The source track's master send has been disabled.\n" ..
-            "Each stem track receives one stereo output from Stemperator.",
+            "Each stem track receives one stereo output from STEMperator.",
             SCRIPT_NAME, 0)
     end
 

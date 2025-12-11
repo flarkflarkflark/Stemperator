@@ -1,4 +1,4 @@
--- @description Stemperator - Quick All Stems
+-- @description STEMperator - Quick All Stems
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
@@ -8,7 +8,7 @@
 --   Quick action: Extracts all 4 stems (Vocals, Drums, Bass, Other).
 --   Creates separate tracks for each stem.
 
-local SCRIPT_NAME = "Stemperator: Quick All Stems"
+local SCRIPT_NAME = "STEMperator: Quick All Stems"
 
 local function findMainScript()
     local scriptPath = debug.getinfo(1, "S").source:match("@(.+[/\\])")

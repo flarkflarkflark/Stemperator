@@ -1,6 +1,6 @@
-# Stemperator
+# STEMperator (REAPER scripts)
 
-**AI-powered stem separation for music production**
+**AI-powered stem separation for REAPER**
 
 ![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)
 ![ReaPack](https://img.shields.io/badge/ReaPack-compatible-green)
@@ -8,17 +8,17 @@
 
 ![Stemperator Hero](docs/images/stemperator-hero.png)
 
-Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. Available as REAPER scripts (via ReaPack) and as a VST3/Standalone plugin.
+STEMperator uses AI (Demucs/HTDemucs) to separate audio into individual stems. This repo focuses on REAPER scripts (via ReaPack). The former plugin/standalone is developed separately as STEMdropper; historical JUCE/VST files live in `legacy/`.
 
 ---
 
-## Why Stemperator?
+## Why STEMperator?
 
 **Stay in your DAW.** No more exporting, switching to external tools, and re-importing.
 
 ![Before and After](docs/images/stemperator-before-after.png)
 
-Stemperator integrates directly into REAPER, letting you:
+STEMperator integrates directly into REAPER, letting you:
 
 - **Process time selections** - Select a 4-bar section and extract just the drums from that part
 - **Edit in place** - Replace a media item with its separated stems instantly
@@ -28,7 +28,7 @@ Stemperator integrates directly into REAPER, letting you:
 
 ### Real-World Workflows
 
-| Scenario | Traditional Approach | With Stemperator |
+| Scenario | Traditional Approach | With STEMperator |
 |----------|---------------------|------------------|
 | Remove vocal from a loop | Export → External tool → Re-import → Align | Select item → Karaoke → Done |
 | Extract drums from reference track | Export → Separate → Import 4 files → Create tracks | Select → All Stems → Auto-routed tracks |
@@ -38,9 +38,7 @@ Stemperator integrates directly into REAPER, letting you:
 
 ---
 
-## Quick Start
-
-### REAPER Users (Recommended)
+## Quick Start (REAPER)
 
 1. **Install AI Backend** (one time, ~5 minutes):
 
@@ -59,14 +57,14 @@ Stemperator integrates directly into REAPER, letting you:
 2. **Install REAPER Scripts**:
    - Open REAPER → Extensions → ReaPack → Import repositories
    - Paste: `https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/index.xml`
-   - Extensions → ReaPack → Browse packages → Search "Stemperator" → Install
+   - Extensions → ReaPack → Browse packages → Search "STEMperator" → Install
 
 3. **Verify Setup**:
-   - Actions → Run: "Stemperator: Installation & Setup"
+   - Actions → Run: "STEMperator: Installation & Setup"
    - Should show all green checkmarks ✓
 
 4. **Use It**:
-   - Select audio item → Actions → "Stemperator: AI Stem Separation"
+   - Select audio item → Actions → "STEMperator: AI Stem Separation"
 
 ---
 
@@ -84,7 +82,7 @@ Stemperator integrates directly into REAPER, letting you:
 
 ### Flexible Input Selection
 
-Stemperator works with whatever you have selected:
+STEMperator works with whatever you have selected:
 
 ![Time Selection Feature](docs/images/stemperator-time-selection.png)
 
@@ -105,14 +103,14 @@ This means you can:
 
 | Script | Description |
 |--------|-------------|
-| **Stemperator: AI Stem Separation** | Main dialog - full control over model, stems, and options |
-| **Stemperator: Karaoke** | One-click vocal removal (keeps drums, bass, other) |
-| **Stemperator: Vocals Only** | Extract vocals to new track |
-| **Stemperator: Drums Only** | Extract drums to new track |
-| **Stemperator: Bass Only** | Extract bass to new track |
-| **Stemperator: All Stems** | Extract all stems to separate tracks |
-| **Stemperator: Explode Stems** | Route VST3 multi-outputs to tracks |
-| **Stemperator: Setup Toolbar** | Add quick-access toolbar buttons |
+| **STEMperator: AI Stem Separation** | Main dialog - full control over model, stems, and options |
+| **STEMperator: Karaoke** | One-click vocal removal (keeps drums, bass, other) |
+| **STEMperator: Vocals Only** | Extract vocals to new track |
+| **STEMperator: Drums Only** | Extract drums to new track |
+| **STEMperator: Bass Only** | Extract bass to new track |
+| **STEMperator: All Stems** | Extract all stems to separate tracks |
+| **STEMperator: Explode Stems** | Route stems to individual tracks |
+| **STEMperator: Setup Toolbar** | Add quick-access toolbar buttons |
 
 ![Toolbar Icons](docs/images/stemperator-toolbar.png)
 
@@ -182,35 +180,9 @@ sudo pacman -S ffmpeg
 
 ---
 
-## VST3 Plugin
+## Legacy plugin/standalone
 
-Stemperator is also available as a multi-output VST3 plugin.
-
-### Download Pre-built
-
-Check [Releases](https://github.com/flarkflarkflark/Stemperator/releases) for pre-built binaries.
-
-### Build from Source
-
-```bash
-git clone --recursive https://github.com/flarkflarkflark/Stemperator.git
-cd Stemperator
-
-# Install AI backend
-./scripts/install.sh
-
-# Build plugin
-mkdir build && cd build
-cmake ..
-cmake --build . --config Release -j8
-```
-
-### VST3 Features
-
-- Multi-output routing (4-6 stereo buses)
-- Real-time spectral preview
-- GPU-accelerated FFT processing
-- Premium scalable GUI
+The VST3/standalone implementation has moved to the **STEMdropper** project. Historical JUCE/VST code and resources remain in `legacy/` for reference.
 
 ---
 

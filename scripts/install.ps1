@@ -1,7 +1,7 @@
 #Requires -Version 5.1
 <#
 .SYNOPSIS
-    Stemperator - Windows Installation Script
+    STEMperator - Windows Installation Script
 .DESCRIPTION
     Installs Python environment and audio-separator for AI stem separation
 .PARAMETER NoGPU
@@ -26,7 +26,7 @@ $ProjectRoot = Split-Path -Parent $ScriptDir
 $VenvDir = Join-Path $ProjectRoot ".venv"
 
 # Colors
-function Write-Header { Write-Host "`n==============================================`n Stemperator - AI Stem Separation Setup`n==============================================`n" -ForegroundColor Cyan }
+function Write-Header { Write-Host "`n==============================================`n STEMperator - AI Stem Separation Setup`n==============================================`n" -ForegroundColor Cyan }
 function Write-Success { param($msg) Write-Host "[OK] $msg" -ForegroundColor Green }
 function Write-Warning { param($msg) Write-Host "[!] $msg" -ForegroundColor Yellow }
 function Write-Error { param($msg) Write-Host "[X] $msg" -ForegroundColor Red }

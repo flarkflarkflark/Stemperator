@@ -1,4 +1,4 @@
--- @description Stemperator: Guitar Only (6-stem model)
+-- @description STEMperator: Guitar Only (6-stem model)
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @about Quick action to extract only the Guitar stem using the 6-stem model

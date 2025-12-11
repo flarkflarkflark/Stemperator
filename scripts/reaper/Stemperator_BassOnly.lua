@@ -1,4 +1,4 @@
--- @description Stemperator - Quick Bass Only
+-- @description STEMperator - Quick Bass Only
 -- @author flarkAUDIO
 -- @version 1.0.0
 -- @changelog
@@ -8,7 +8,7 @@
 --   Quick action: Extracts only the bass stem.
 --   Perfect for bass sampling or low-end isolation.
 
-local SCRIPT_NAME = "Stemperator: Quick Bass Only"
+local SCRIPT_NAME = "STEMperator: Quick Bass Only"
 
 local function findMainScript()
     local scriptPath = debug.getinfo(1, "S").source:match("@(.+[/\\])")
