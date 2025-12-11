@@ -1,267 +1,158 @@
 -- @description Stemperator - Explode Stems to Tracks
 -- @author flarkAUDIO
--- @version 1.0.0
+-- @version 1.5.0
 -- @changelog
---   Initial release
+--   v1.5.0: Rewritten for takes explode functionality
+--   v1.0.0: Initial release
 -- @link Repository https://github.com/flarkflarkflark/Stemperator
 -- @about
 --   # Stemperator - Explode Stems to Tracks
 --
---   Creates 4 new tracks (Vocals, Drums, Bass, Other) and routes
---   Stemperator VST3 plugin's multi-outputs to them.
+--   Explodes STEMperator takes (from In-place mode) to separate tracks.
+--   Properly preserves volume, position, and all item properties.
 --
 --   ## Usage
---   1. Select the track containing Stemperator VST3
---   2. Run this script (Actions > Stemperator: Explode Stems)
---   3. 4 new tracks will be created with proper routing
---
---   Alternative: If no track is selected, you can import pre-exported
---   stem files (vocals.wav, drums.wav, bass.wav, other.wav) from a folder.
+--   1. Select item(s) containing STEMperator takes
+--   2. Run this script
+--   3. Each take becomes its own track
 --
 --   ## License
 --   MIT License - https://opensource.org/licenses/MIT
 
 local SCRIPT_NAME = "Stemperator: Explode Stems to Tracks"
 
--- Stem configuration: name, color (RGB), output channel pair (0-indexed)
-local STEMS = {
-    { name = "Vocals", color = {255, 100, 100}, outputChan = 0 },   -- Output 1-2
-    { name = "Drums",  color = {100, 200, 255}, outputChan = 2 },   -- Output 3-4
-    { name = "Bass",   color = {150, 100, 255}, outputChan = 4 },   -- Output 5-6
-    { name = "Other",  color = {100, 255, 150}, outputChan = 6 },   -- Output 7-8
+-- Stem colors (matching main script)
+local STEM_COLORS = {
+    Vocals = {255, 100, 100},
+    Drums  = {100, 200, 255},
+    Bass   = {150, 100, 255},
+    Other  = {100, 255, 150},
+    Guitar = {255, 180, 100},
+    Piano  = {255, 255, 100},
 }
 
--- Convert RGB to Reaper color format (native OS color)
+-- Convert RGB to Reaper color format
 local function rgbToReaperColor(r, g, b)
     return reaper.ColorToNative(r, g, b) | 0x1000000
 end
 
--- Find Stemperator plugin on a track
-local function findStemperatorFX(track)
-    local fxCount = reaper.TrackFX_GetCount(track)
-    for i = 0, fxCount - 1 do
-        local _, fxName = reaper.TrackFX_GetFXName(track, i, "")
-        if fxName:lower():find("stemperator") then
-            return i
-        end
+-- Get color for stem name
+local function getStemColor(name)
+    local colors = STEM_COLORS[name]
+    if colors then
+        return rgbToReaperColor(colors[1], colors[2], colors[3])
     end
-    return nil
-end
-
--- Check if track has multi-output plugin
-local function hasMultiOutput(track)
-    local fxIdx = findStemperatorFX(track)
-    if not fxIdx then return false end
-
-    -- Stemperator has 4 stereo outputs (8 channels total)
-    -- Check by looking at the plugin's output configuration
-    return true  -- Assume Stemperator always has multi-outputs
-end
-
--- Create stem tracks with routing from source track
-local function createStemTracks(sourceTrack, sourceTrackIdx)
-    local trackName = ({reaper.GetSetMediaTrackInfo_String(sourceTrack, "P_NAME", "", false)})[2]
-    if trackName == "" then
-        trackName = "Track " .. (sourceTrackIdx + 1)
-    end
-
-    reaper.Undo_BeginBlock()
-
-    -- Create a folder track for organization (optional)
-    local createFolder = reaper.MB(
-        "Create a folder track to organize stems?\n\n" ..
-        "Yes = Create folder with stem tracks inside\n" ..
-        "No = Create stem tracks at same level",
-        SCRIPT_NAME, 4)
-
-    local insertIdx = sourceTrackIdx + 1
-    local folderTrack = nil
-
-    if createFolder == 6 then  -- Yes
-        reaper.InsertTrackAtIndex(insertIdx, true)
-        folderTrack = reaper.GetTrack(0, insertIdx)
-        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", trackName .. " - Stems", true)
-        reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)  -- Start folder
-        reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERCOMPACT", 0)  -- Expanded
-        insertIdx = insertIdx + 1
-    end
-
-    -- Create stem tracks
-    local stemTracks = {}
-    for i, stem in ipairs(STEMS) do
-        reaper.InsertTrackAtIndex(insertIdx + i - 1, true)
-        local newTrack = reaper.GetTrack(0, insertIdx + i - 1)
-
-        -- Set track name
-        local stemTrackName = trackName .. " - " .. stem.name
-        reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", stemTrackName, true)
-
-        -- Set track color
-        local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
-        reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
-
-        -- Store for routing setup
-        stemTracks[i] = { track = newTrack, outputChan = stem.outputChan }
-    end
-
-    -- Close folder if created
-    if folderTrack then
-        local lastStemTrack = stemTracks[#stemTracks].track
-        reaper.SetMediaTrackInfo_Value(lastStemTrack, "I_FOLDERDEPTH", -1)  -- End folder
-    end
-
-    -- Setup routing: source track outputs -> stem track inputs
-    -- First, mute the source track's master send (we don't want double audio)
-    reaper.SetMediaTrackInfo_Value(sourceTrack, "B_MAINSEND", 0)
-
-    -- Create sends from source to each stem track
-    for i, stemInfo in ipairs(stemTracks) do
-        local sendIdx = reaper.CreateTrackSend(sourceTrack, stemInfo.track)
-
-        -- Configure send: source channel = Stemperator output pair
-        -- I_SRCCHAN: source channel (0=stereo pair 1-2, 2=pair 3-4, etc.)
-        -- I_DSTCHAN: destination channel (0=track input 1-2)
-        reaper.SetTrackSendInfo_Value(sourceTrack, 0, sendIdx, "I_SRCCHAN", stemInfo.outputChan)
-        reaper.SetTrackSendInfo_Value(sourceTrack, 0, sendIdx, "I_DSTCHAN", 0)
-
-        -- Set send to post-fader
-        reaper.SetTrackSendInfo_Value(sourceTrack, 0, sendIdx, "I_SENDMODE", 0)
-
-        -- Enable send
-        reaper.SetTrackSendInfo_Value(sourceTrack, 0, sendIdx, "B_MUTE", 0)
-    end
-
-    reaper.Undo_EndBlock(SCRIPT_NAME, -1)
-
-    return #stemTracks
-end
-
--- Alternative: Import stem files from folder
-local function importStemFiles()
-    local retval, folder = reaper.JS_Dialog_BrowseForFolder("Select Stemperator output folder", "")
-    if not retval or folder == "" then return 0 end
-
-    local stemFiles = {
-        { name = "Vocals", pattern = "vocals" },
-        { name = "Drums",  pattern = "drums" },
-        { name = "Bass",   pattern = "bass" },
-        { name = "Other",  pattern = "other" },
-    }
-
-    reaper.Undo_BeginBlock()
-
-    local cursorPos = reaper.GetCursorPosition()
-    local imported = 0
-
-    for i, stem in ipairs(stemFiles) do
-        -- Try to find stem file
-        local filePath = nil
-        for _, ext in ipairs({".wav", ".flac", ".mp3"}) do
-            local testPath = folder .. "/" .. stem.pattern .. ext
-            if reaper.file_exists(testPath) then
-                filePath = testPath
-                break
-            end
-            -- Also try with underscore prefix (e.g., songname_vocals.wav)
-            local files = io.popen('ls "' .. folder .. '"/*' .. stem.pattern .. '*' .. ext .. ' 2>/dev/null')
-            if files then
-                local found = files:read("*l")
-                files:close()
-                if found then
-                    filePath = found
-                    break
-                end
-            end
-        end
-
-        if filePath then
-            -- Insert new track
-            reaper.InsertTrackAtIndex(reaper.CountTracks(0), true)
-            local newTrack = reaper.GetTrack(0, reaper.CountTracks(0) - 1)
-
-            -- Set track name and color
-            reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", stem.name, true)
-            local color = rgbToReaperColor(STEMS[i].color[1], STEMS[i].color[2], STEMS[i].color[3])
-            reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
-
-            -- Insert media item
-            reaper.InsertMedia(filePath, 0)  -- Insert on selected track at cursor
-
-            imported = imported + 1
-        end
-    end
-
-    reaper.Undo_EndBlock("Stemperator: Import Stem Files", -1)
-
-    return imported
+    return rgbToReaperColor(180, 180, 180)  -- Default gray
 end
 
 -- Main function
 local function main()
-    -- Check if a track is selected
-    local track = reaper.GetSelectedTrack(0, 0)
+    local numSelectedItems = reaper.CountSelectedMediaItems(0)
 
-    if not track then
-        -- No track selected - offer to import stem files instead
-        local response = reaper.MB(
-            "No track selected.\n\n" ..
-            "Would you like to import stem files from a folder instead?\n\n" ..
-            "(Select a folder containing vocals.wav, drums.wav, bass.wav, other.wav)",
-            SCRIPT_NAME, 4)
-
-        if response == 6 then  -- Yes
-            local imported = importStemFiles()
-            if imported > 0 then
-                reaper.MB("Imported " .. imported .. " stem files.", SCRIPT_NAME, 0)
-            else
-                reaper.MB("No stem files found in the selected folder.", SCRIPT_NAME, 0)
-            end
-        end
+    if numSelectedItems == 0 then
+        reaper.MB("Please select one or more items with multiple takes to explode.", SCRIPT_NAME, 0)
         return
     end
 
-    local trackIdx = reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER") - 1
-    local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
-
-    -- Check if Stemperator is on this track
-    local fxIdx = findStemperatorFX(track)
-
-    if not fxIdx then
-        -- Stemperator not found - offer options
-        local response = reaper.MB(
-            "Stemperator VST3 not found on selected track '" .. trackName .. "'.\n\n" ..
-            "Options:\n" ..
-            "1. Add Stemperator to this track first, then run again\n" ..
-            "2. Import stem files from a folder\n\n" ..
-            "Would you like to import stem files instead?",
-            SCRIPT_NAME, 4)
-
-        if response == 6 then  -- Yes
-            local imported = importStemFiles()
-            if imported > 0 then
-                reaper.MB("Imported " .. imported .. " stem files.", SCRIPT_NAME, 0)
-            else
-                reaper.MB("No stem files found in the selected folder.", SCRIPT_NAME, 0)
-            end
+    -- Count total takes across all selected items
+    local totalTakes = 0
+    local itemsWithTakes = 0
+    for i = 0, numSelectedItems - 1 do
+        local item = reaper.GetSelectedMediaItem(0, i)
+        local numTakes = reaper.CountTakes(item)
+        if numTakes > 1 then
+            totalTakes = totalTakes + numTakes
+            itemsWithTakes = itemsWithTakes + 1
         end
+    end
+
+    if itemsWithTakes == 0 then
+        reaper.MB("Selected items don't have multiple takes to explode.\n\nThis script is for exploding STEMperator takes created with 'In-place (takes)' mode.", SCRIPT_NAME, 0)
         return
     end
 
-    -- Stemperator found - create stem tracks
-    local created = createStemTracks(track, trackIdx)
+    reaper.Undo_BeginBlock()
+    reaper.PreventUIRefresh(1)
 
-    if created > 0 then
-        reaper.MB(
-            "Created " .. created .. " stem tracks with routing from Stemperator.\n\n" ..
-            "The source track's master send has been disabled.\n" ..
-            "Each stem track receives one stereo output from Stemperator.",
-            SCRIPT_NAME, 0)
+    local totalCreated = 0
+
+    -- Process each selected item
+    for itemIdx = 0, numSelectedItems - 1 do
+        local item = reaper.GetSelectedMediaItem(0, itemIdx)
+        if not item then goto continue end
+
+        local numTakes = reaper.CountTakes(item)
+        if numTakes <= 1 then goto continue end
+
+        local track = reaper.GetMediaItem_Track(item)
+        local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+        local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+        if trackName == "" then trackName = "Track " .. trackIdx end
+
+        local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+        local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+        local itemVol = reaper.GetMediaItemInfo_Value(item, "D_VOL")
+        local itemFadeIn = reaper.GetMediaItemInfo_Value(item, "D_FADEINLEN")
+        local itemFadeOut = reaper.GetMediaItemInfo_Value(item, "D_FADEOUTLEN")
+
+        -- Create a track for each take
+        for takeIdx = 0, numTakes - 1 do
+            local take = reaper.GetTake(item, takeIdx)
+            if not take then goto nextTake end
+
+            local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+            local takeVol = reaper.GetMediaItemTakeInfo_Value(take, "D_VOL")
+            local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+            local takePlayrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+            local source = reaper.GetMediaItemTake_Source(take)
+
+            if not source then goto nextTake end
+
+            -- Insert new track
+            reaper.InsertTrackAtIndex(trackIdx + takeIdx, true)
+            local newTrack = reaper.GetTrack(0, trackIdx + takeIdx)
+
+            -- Set track name and color
+            local newTrackName = trackName .. " - " .. takeName
+            reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+            reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", getStemColor(takeName))
+
+            -- Create new item on the new track
+            local newItem = reaper.AddMediaItemToTrack(newTrack)
+            reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+            reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+            reaper.SetMediaItemInfo_Value(newItem, "D_VOL", itemVol)
+            reaper.SetMediaItemInfo_Value(newItem, "D_FADEINLEN", itemFadeIn)
+            reaper.SetMediaItemInfo_Value(newItem, "D_FADEOUTLEN", itemFadeOut)
+            reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", getStemColor(takeName))
+
+            -- Create take with same source
+            local newTake = reaper.AddTakeToMediaItem(newItem)
+            reaper.SetMediaItemTake_Source(newTake, source)
+            reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
+            reaper.SetMediaItemTakeInfo_Value(newTake, "D_VOL", takeVol)
+            reaper.SetMediaItemTakeInfo_Value(newTake, "D_STARTOFFS", takeOffset)
+            reaper.SetMediaItemTakeInfo_Value(newTake, "D_PLAYRATE", takePlayrate)
+
+            totalCreated = totalCreated + 1
+
+            ::nextTake::
+        end
+
+        -- Delete the original item
+        reaper.DeleteTrackMediaItem(track, item)
+
+        ::continue::
     end
 
-    -- Update arrange view
-    reaper.TrackList_AdjustWindows(false)
+    reaper.PreventUIRefresh(-1)
     reaper.UpdateArrange()
+    reaper.Undo_EndBlock(SCRIPT_NAME, -1)
+
+    if totalCreated > 0 then
+        local trackWord = totalCreated == 1 and "track" or "tracks"
+        reaper.MB("Exploded " .. totalCreated .. " takes to separate " .. trackWord .. ".", SCRIPT_NAME, 0)
+    end
 end
 
--- Run
 main()

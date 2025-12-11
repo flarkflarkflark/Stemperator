@@ -39,7 +39,7 @@ def emit_progress(percent: float, stage: str = ""):
     sys.stdout.write(f"PROGRESS:{int(percent)}:{stage}\n")
     sys.stdout.flush()
 
-def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs"):
+def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs", segment_size: int = None):
     """
     Separate audio into stems using audio-separator.
 
@@ -47,6 +47,7 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
         input_file: Path to input audio file
         output_dir: Directory to write output stems
         model_name: Model to use for separation (htdemucs, htdemucs_ft, htdemucs_6s)
+        segment_size: Segment size for processing (affects GPU memory usage)
 
     Returns:
         dict: Paths to output stem files
@@ -118,13 +119,18 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
     # Initialize separator
     # Note: Don't set output_bitrate - it causes ffmpeg errors with WAV format
+    # Build demucs_params with optional segment_size
+    demucs_params = {"device": device}
+    if segment_size is not None:
+        demucs_params["segment_size"] = segment_size
+
     separator = Separator(
         output_dir=output_dir,
         output_format="WAV",
         normalization_threshold=0.9,
         log_level=10,  # DEBUG
         mdx_params={"device": device},
-        demucs_params={"device": device}
+        demucs_params=demucs_params
     )
 
     emit_progress(3, "Loading AI model")
@@ -279,6 +285,8 @@ def main():
     parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
     parser.add_argument("--model", default="htdemucs",
                         help="Model to use (htdemucs, htdemucs_ft, UVR-MDX-NET-Voc_FT, etc.)")
+    parser.add_argument("--segment-size", type=int, default=None,
+                        help="Segment size for processing (affects GPU memory usage)")
     parser.add_argument("--check", action="store_true",
                         help="Only check installation, don't process")
     parser.add_argument("--list-models", action="store_true",
@@ -311,7 +319,7 @@ def main():
         sys.exit(1)
 
     try:
-        output_files = separate_stems(args.input, args.output_dir, args.model)
+        output_files = separate_stems(args.input, args.output_dir, args.model, args.segment_size)
 
         # Output JSON for C++ to parse
         print(json.dumps(output_files))

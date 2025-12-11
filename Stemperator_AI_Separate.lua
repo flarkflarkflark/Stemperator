@@ -196,6 +196,9 @@ local STEMS = {
 -- App version (single source of truth)
 local APP_VERSION = "1.5.0"
 
+-- Guard against multiple concurrent runs
+local isProcessingActive = false
+
 -- Available models
 local MODELS = {
     { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
@@ -8163,6 +8166,8 @@ showStemSelectionDialog = function()
     GUI.result = nil
     GUI.wasMouseDown = false
     GUI.hadSelectionOnOpen = true  -- Dialog was opened with valid selection, don't auto-close
+    isProcessingActive = false  -- Reset processing guard when dialog opens
+    GUI.hadSelectionOnOpen = true  -- Dialog was opened with valid selection, don't auto-close
 
     -- Use saved size if available, otherwise use default
     local dialogW = GUI.savedW or GUI.baseW
@@ -11768,9 +11773,6 @@ showMultiTrackProgressWindow = function()
     gfx.init("Stemperator - Multi-Track Progress", winW, winH, 0, winX, winY)
     reaper.defer(multiTrackProgressLoop)
 end
-
--- Guard against multiple concurrent runs
-local isProcessingActive = false
 
 -- Process all stems after parallel jobs complete
 processAllStemsResult = function()

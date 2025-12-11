@@ -1,7 +1,8 @@
 -- @description STEMperator - Installation & Setup
 -- @author flarkAUDIO
--- @version 1.0.0
+-- @version 1.5.0
 -- @changelog
+--   v1.5.0: Sync version with main app
 --   v1.0.0: Initial release
 --   - Cross-platform Python/audio-separator installation
 --   - GPU detection (NVIDIA CUDA, AMD ROCm, Apple MPS)
@@ -29,7 +30,7 @@
 --   - Apple Silicon: MPS (auto-detected)
 
 local SCRIPT_NAME = "STEMperator: Installation & Setup"
-local SCRIPT_VERSION = "1.0.0"
+local SCRIPT_VERSION = "1.5.0"
 
 -- Get script path
 local info = debug.getinfo(1, "S")
