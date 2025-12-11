@@ -1,0 +1,234 @@
+# AI Image Prompts voor Stemperator - Claude.ai
+
+**Website:** https://claude.ai
+
+## Kleurenpalet Stemperator
+
+| Stem   | Hex       | Beschrijving |
+|--------|-----------|--------------|
+| Vocals | #FF6464   | Koraalrood   |
+| Drums  | #64C8FF   | Hemelsblauw  |
+| Bass   | #9664FF   | Paars/violet |
+| Other  | #64FF96   | Mintgroen    |
+| Guitar | #FFB450   | Oranje       |
+| Piano  | #FF78C8   | Roze         |
+
+---
+
+## Prompt 1: REAPER Arrange View met Stems
+
+```
+Maak een realistische screenshot van REAPER DAW (digital audio workstation). Donkergrijs thema (#333333). Toon 5 horizontale audio tracks:
+
+1. "Song.mp3" - gemute, grijze waveform
+2. "Vocals" - koraalrode waveform (#FF6464)
+3. "Drums" - hemelblauwe waveform (#64C8FF)
+4. "Bass" - paarse waveform (#9664FF)
+5. "Other" - mintgroene waveform (#64FF96)
+
+Links: Track Control Panel met tracknamen en M/S/R knoppen
+Boven: Timeline ruler met maatnummers
+Stijl: Authentieke software screenshot, 16:9
+```
+
+---
+
+## Prompt 2: Stemperator Dialog
+
+```
+Maak een screenshot van de Stemperator dialog in REAPER. Donker thema.
+
+Dialog titel: "Stemperator - AI Stem Separation"
+
+Inhoud:
+- Dropdown: "Model: htdemucs"
+- Checkboxes met gekleurde vierkantjes:
+  ☑ 1 Vocals (rood #FF6464)
+  ☑ 2 Drums (blauw #64C8FF)
+  ☑ 3 Bass (paars #9664FF)
+  ☑ 4 Other (groen #64FF96)
+- Preset knoppen: [K] Karaoke  [I] Instrumental  [A] All
+- Onderaan: [Cancel] [Separate] knoppen
+
+Achtergrond: REAPER arrange view, licht vervaagd
+Stijl: Software UI screenshot
+```
+
+---
+
+## Prompt 3: Workflow GIF - 5 Frames
+
+```
+Maak een geanimeerde GIF die de Stemperator workflow toont in REAPER. 5 frames:
+
+Frame 1 (1s): SELECT
+- REAPER arrange view, donkergrijs thema
+- Eén audio track "mysong.mp3" met stereo waveform
+- Muiscursor selecteert een time range (4 maten gehighlight)
+
+Frame 2 (1s): MENU
+- Zelfde view
+- Rechtermuisklik context menu open
+- Menu toont: Stemperator > "AI Stem Separation..."
+
+Frame 3 (1s): DIALOG
+- Stemperator dialog geopend
+- Alle stem checkboxes aangevinkt
+- Muis hover over "Separate" knop
+
+Frame 4 (1.5s): PROCESSING
+- Dialog toont progress bar op 60%
+- Tekst: "Processing: Separating stems..."
+- Subtiele animatie op progress bar
+
+Frame 5 (1.5s): RESULT
+- 4 nieuwe tracks zichtbaar met gekleurde waveforms
+- Vocals (rood), Drums (blauw), Bass (paars), Other (groen)
+- Originele track gemute
+- Kleine "success" indicatie
+
+Loop: Ja, met 2s pauze voor herhaling
+Formaat: 800x450px, geoptimaliseerd voor web
+```
+
+---
+
+## Prompt 4: Before/After Vergelijking
+
+```
+Maak een horizontale before/after vergelijking voor Stemperator.
+
+LINKERHELFT - "BEFORE":
+- Label "BEFORE" bovenaan
+- REAPER track met enkele complexe stereo waveform
+- Grijze/witte waveform, typische mixed audio
+- Track naam: "Full Mix.wav"
+
+RECHTERHELFT - "AFTER":
+- Label "AFTER" bovenaan
+- Zelfde timeline positie
+- 4 gescheiden tracks met individuele waveforms:
+  - Vocals: koraalrood (#FF6464)
+  - Drums: hemelsblauw (#64C8FF)
+  - Bass: paars (#9664FF)
+  - Other: mintgroen (#64FF96)
+
+Stijl: Clean split-screen, REAPER donkergrijs thema
+Formaat: 16:9 (1280x720 of 1920x1080)
+```
+
+---
+
+## Prompt 5: Time Selection Feature
+
+```
+Maak een screenshot die de time selection feature van Stemperator demonstreert.
+
+REAPER arrange view met:
+- Volledige song waveform (~3 minuten)
+- Een time selection van 8 maten gehighlight (lichtere overlay)
+- Pijl of annotatie die wijst naar de selectie met tekst: "Process only this section"
+
+Onder de originele track:
+- 4 stem tracks, maar ALLEEN de geselecteerde sectie heeft waveforms
+- Rest van de tracks is leeg
+- Toont dat alleen de selectie is verwerkt
+
+Kleuren: Vocals rood, Drums blauw, Bass paars, Other groen
+Stijl: Instructieve screenshot met annotaties
+```
+
+---
+
+## Prompt 6: Toolbar Icons
+
+```
+Maak een close-up van de REAPER toolbar met Stemperator icons.
+
+Donkergrijze toolbar achtergrond. Rij van 10 knoppen (elk 30x30px):
+
+1. ⚙️ Settings - gear icon, neutraal
+2. 🎤 Vocals - microfoon, rode tint (#FF6464)
+3. 🥁 Drums - drum/sticks, blauwe tint (#64C8FF)
+4. 🎸 Bass - basgitaar, paarse tint (#9664FF)
+5. 🎸 Guitar - elektrische gitaar, oranje tint (#FFB450)
+6. 🎹 Piano - toetsen, roze tint (#FF78C8)
+7. 🎵 Other - noten/waveform, groene tint (#64FF96)
+8. [4] 4-Stem - nummer of grid icon
+9. [6] 6-Stem - nummer of grid icon
+10. 📊 Explode - layers/stack icon
+
+Stijl: Moderne flat design icons, REAPER toolbar stijl
+Subtiele hover state op één icon
+```
+
+---
+
+## Prompt 7: 6-Stem Model Showcase
+
+```
+Maak een screenshot die het 6-stem model toont.
+
+REAPER arrange view met 7 tracks:
+
+1. "Original Mix" - gemute, grijs
+2. "Vocals" - koraalrood (#FF6464)
+3. "Drums" - hemelsblauw (#64C8FF)
+4. "Bass" - paars (#9664FF)
+5. "Guitar" - oranje (#FFB450)
+6. "Piano" - roze (#FF78C8)
+7. "Other" - mintgroen (#64FF96)
+
+Elke track heeft een unieke waveform passend bij het instrument.
+Dialog of tooltip zichtbaar: "Model: htdemucs_6s (6-stem)"
+
+Stijl: REAPER screenshot, donkergrijs thema
+```
+
+---
+
+## Prompt 8: Hero Banner
+
+```
+Maak een professionele hero banner voor Stemperator.
+
+Concept:
+- Centrale visual: één waveform die uitsplitst in 4 gekleurde streams
+- Links: Mixed audio (wit/grijs)
+- Midden: "Stemperator" logo/tekst met subtiele AI/neural glow
+- Rechts: 4 gescheiden gekleurde waveforms (rood, blauw, paars, groen)
+
+Tekst:
+- Hoofdtitel: "STEMPERATOR"
+- Subtitel: "AI-Powered Stem Separation for REAPER"
+
+Stijl:
+- Donkere achtergrond (#1a1a1a)
+- Moderne, cleane aesthetic
+- Subtiele glow effecten op de waveforms
+- Professionele software marketing look
+
+Formaat: 1920x600 of 1280x400 (banner ratio)
+```
+
+---
+
+## Tips voor Claude
+
+1. **Wees specifiek** - Claude werkt goed met gedetailleerde beschrijvingen
+2. **Noem kleuren expliciet** - Gebruik hex codes voor consistentie
+3. **Beschrijf layout** - Links/rechts/boven/onder positionering
+4. **Geef context** - "REAPER DAW", "software screenshot", "donkergrijs thema"
+5. **Formaat vermelden** - Aspect ratio en gebruik (banner, inline, etc.)
+
+## Na generatie
+
+Upload de afbeeldingen naar `/home/flark/GIT/Stemperator/docs/images/` en voeg ze toe aan de README:
+
+```markdown
+![Stemperator Hero](docs/images/hero.png)
+
+![Stem Separation Result](docs/images/reaper-stems.png)
+
+![Workflow](docs/images/workflow.gif)
+```

@@ -1,0 +1,86 @@
+#include "Visualizer.h"
+
+Visualizer::Visualizer()
+{
+    startTimerHz (30);  // 30 FPS
+}
+
+void Visualizer::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+
+    // Background
+    g.setColour (juce::Colour (0xff0d0d1a));
+    g.fillRoundedRectangle (bounds, 8.0f);
+
+    // Grid lines
+    g.setColour (juce::Colours::grey.withAlpha (0.2f));
+    for (int i = 1; i < 4; ++i)
+    {
+        float y = bounds.getY() + bounds.getHeight() * i / 4.0f;
+        g.drawHorizontalLine ((int) y, bounds.getX() + 10, bounds.getRight() - 10);
+    }
+
+    // Stem bars
+    float barWidth = (bounds.getWidth() - 40) / 4.0f;
+    float maxHeight = bounds.getHeight() - 40;
+
+    for (int i = 0; i < 4; ++i)
+    {
+        float x = bounds.getX() + 20 + i * barWidth;
+        float barHeight = displayLevels[i] * maxHeight;
+
+        // Bar background
+        g.setColour (stemColours[i].withAlpha (0.2f));
+        g.fillRoundedRectangle (x + 5, bounds.getY() + 20, barWidth - 10, maxHeight, 4.0f);
+
+        // Bar fill
+        if (barHeight > 0)
+        {
+            g.setColour (stemColours[i]);
+            g.fillRoundedRectangle (x + 5, bounds.getY() + 20 + maxHeight - barHeight,
+                                    barWidth - 10, barHeight, 4.0f);
+        }
+
+        // Label
+        g.setColour (stemColours[i]);
+        g.setFont (12.0f);
+        g.drawText (stemNames[i], (int) x, (int) (bounds.getBottom() - 18),
+                    (int) barWidth, 16, juce::Justification::centred);
+    }
+
+    // Title
+    g.setColour (juce::Colours::white);
+    g.setFont (11.0f);
+    g.drawText ("STEM LEVELS", bounds.removeFromTop (18), juce::Justification::centred);
+}
+
+void Visualizer::resized()
+{
+}
+
+void Visualizer::timerCallback()
+{
+    // Smooth level display
+    for (int i = 0; i < 4; ++i)
+    {
+        float target = stemLevels[i];
+        displayLevels[i] = displayLevels[i] * 0.85f + target * 0.15f;
+    }
+    displayInputLevel = displayInputLevel * 0.85f + inputLevel * 0.15f;
+
+    repaint();
+}
+
+void Visualizer::setStemLevels (float vocals, float drums, float bass, float other)
+{
+    stemLevels[0] = vocals;
+    stemLevels[1] = drums;
+    stemLevels[2] = bass;
+    stemLevels[3] = other;
+}
+
+void Visualizer::setInputLevel (float level)
+{
+    inputLevel = level;
+}

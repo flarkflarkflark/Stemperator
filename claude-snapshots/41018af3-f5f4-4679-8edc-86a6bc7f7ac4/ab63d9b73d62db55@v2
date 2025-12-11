@@ -1,0 +1,164 @@
+#pragma once
+
+#include <JuceHeader.h>
+
+/**
+ * Filter Bank Processor
+ *
+ * Implements:
+ * - Rumble filter (high-pass, 20-120 Hz)
+ * - Hum filter (notch at 50/60 Hz)
+ * - 10-band graphic EQ (31 Hz to 16 kHz)
+ */
+class FilterBank
+{
+public:
+    FilterBank() = default;
+
+    //==============================================================================
+    void prepare (const juce::dsp::ProcessSpec& spec)
+    {
+        sampleRate = spec.sampleRate;
+
+        // Initialize rumble filter (4th order Butterworth high-pass)
+        rumbleFilter.prepare (spec);
+        rumbleFilter.reset();
+
+        // Initialize hum filter (notch filter)
+        humFilter.prepare (spec);
+        humFilter.reset();
+
+        // Initialize 10-band EQ
+        eqBands.clear();
+        for (int i = 0; i < 10; ++i)
+        {
+            auto band = std::make_unique<juce::dsp::IIR::Filter<float>>();
+            band->prepare (spec);
+            band->reset();
+            eqBands.push_back (std::move (band));
+        }
+
+        updateFilters();
+    }
+
+    void reset()
+    {
+        rumbleFilter.reset();
+        humFilter.reset();
+        for (auto& band : eqBands)
+            band->reset();
+    }
+
+    void process (juce::dsp::ProcessContextReplacing<float>& context)
+    {
+        // Process rumble filter
+        if (!rumbleBypass)
+            rumbleFilter.process (context);
+
+        // Process hum filter
+        if (!humBypass)
+            humFilter.process (context);
+
+        // Process EQ bands
+        for (size_t i = 0; i < eqBands.size(); ++i)
+        {
+            if (std::abs (eqGains[i]) > 0.01f) // Only process if gain is non-zero
+                eqBands[i]->process (context);
+        }
+    }
+
+    //==============================================================================
+    /** Set rumble filter cutoff frequency */
+    void setRumbleFilter (float cutoffHz, bool bypass)
+    {
+        rumbleBypass = bypass;
+        rumbleFreq = juce::jlimit (20.0f, 120.0f, cutoffHz);
+        updateRumbleFilter();
+    }
+
+    /** Set hum filter center frequency (50 or 60 Hz) */
+    void setHumFilter (float centerHz, bool bypass)
+    {
+        humBypass = bypass;
+        humFreq = centerHz;
+        updateHumFilter();
+    }
+
+    /** Set EQ band gain */
+    void setEQBand (int bandIndex, float gainDB)
+    {
+        if (bandIndex >= 0 && bandIndex < 10)
+        {
+            eqGains[bandIndex] = juce::jlimit (-12.0f, 12.0f, gainDB);
+            updateEQBand (bandIndex);
+        }
+    }
+
+private:
+    //==============================================================================
+    void updateFilters()
+    {
+        updateRumbleFilter();
+        updateHumFilter();
+        for (int i = 0; i < 10; ++i)
+            updateEQBand (i);
+    }
+
+    void updateRumbleFilter()
+    {
+        // 4th order Butterworth high-pass
+        auto coeffs = juce::dsp::IIR::Coefficients<float>::makeHighPass (
+            sampleRate, rumbleFreq, 0.707f);
+        *rumbleFilter.state = *coeffs;
+    }
+
+    void updateHumFilter()
+    {
+        // Notch filter with Q=30 for sharp rejection
+        auto coeffs = juce::dsp::IIR::Coefficients<float>::makeNotch (
+            sampleRate, humFreq, 30.0f);
+        *humFilter.state = *coeffs;
+    }
+
+    void updateEQBand (int bandIndex)
+    {
+        const std::array<float, 10> eqFreqs = {
+            31.0f, 62.0f, 125.0f, 250.0f, 500.0f,
+            1000.0f, 2000.0f, 4000.0f, 8000.0f, 16000.0f
+        };
+
+        if (bandIndex >= 0 && bandIndex < 10)
+        {
+            float freq = eqFreqs[bandIndex];
+            float gain = eqGains[bandIndex];
+            float Q = 1.0f; // Moderate Q for graphic EQ
+
+            // Peaking filter for each band
+            auto coeffs = juce::dsp::IIR::Coefficients<float>::makePeakFilter (
+                sampleRate, freq, Q, juce::Decibels::decibelsToGain (gain));
+            *eqBands[bandIndex]->state = *coeffs;
+        }
+    }
+
+    //==============================================================================
+    double sampleRate = 44100.0;
+
+    // Rumble filter
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+                                     juce::dsp::IIR::Coefficients<float>> rumbleFilter;
+    float rumbleFreq = 20.0f;
+    bool rumbleBypass = true;
+
+    // Hum filter
+    juce::dsp::ProcessorDuplicator<juce::dsp::IIR::Filter<float>,
+                                     juce::dsp::IIR::Coefficients<float>> humFilter;
+    float humFreq = 60.0f;
+    bool humBypass = true;
+
+    // Graphic EQ (10 bands)
+    std::vector<std::unique_ptr<juce::dsp::IIR::Filter<float>>> eqBands;
+    std::array<float, 10> eqGains = {0.0f, 0.0f, 0.0f, 0.0f, 0.0f,
+                                      0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (FilterBank)
+};

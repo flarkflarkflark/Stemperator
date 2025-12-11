@@ -1,0 +1,283 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "PremiumLookAndFeel.h"
+
+/**
+ * TransportBar - YouTube-style playback control bar
+ *
+ * Features:
+ * - Play/Pause/Stop buttons (icon-based)
+ * - Red progress bar with grey background
+ * - Time display (current / total)
+ * - Volume control
+ * - Click-to-seek on progress bar
+ */
+class TransportBar : public juce::Component,
+                     public juce::Timer
+{
+public:
+    TransportBar()
+    {
+        // Play/Pause button - transparent, we draw custom icons
+        playPauseButton.setButtonText ("");
+        playPauseButton.setTooltip ("Play/Pause (Space)");
+        playPauseButton.onClick = [this]() { if (onPlayPause) onPlayPause(); };
+        playPauseButton.setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+        playPauseButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible (playPauseButton);
+
+        // Stop button - transparent, we draw custom icons
+        stopButton.setButtonText ("");
+        stopButton.setTooltip ("Stop");
+        stopButton.onClick = [this]() { if (onStop) onStop(); };
+        stopButton.setColour (juce::TextButton::buttonColourId, juce::Colours::transparentBlack);
+        stopButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::transparentBlack);
+        addAndMakeVisible (stopButton);
+
+        // Time label
+        timeLabel.setText ("0:00 / 0:00", juce::dontSendNotification);
+        timeLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+        timeLabel.setJustificationType (juce::Justification::centred);
+        timeLabel.setFont (juce::FontOptions (14.0f));
+        addAndMakeVisible (timeLabel);
+
+        startTimerHz (30);  // 30 fps for smooth updates
+    }
+
+    ~TransportBar() override
+    {
+        stopTimer();
+    }
+
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Background
+        g.setColour (PremiumLookAndFeel::Colours::bgDark);
+        g.fillRoundedRectangle (bounds, 4.0f);
+
+        // Draw progress bar
+        auto progressBounds = getProgressBarBounds().toFloat();
+
+        // Grey background track
+        g.setColour (PremiumLookAndFeel::Colours::bgPanel);
+        g.fillRoundedRectangle (progressBounds, 4.0f);
+
+        // Red progress bar (played portion)
+        if (progress > 0.0f)
+        {
+            g.setColour (progressColour);
+            float progressWidth = progressBounds.getWidth() * progress;
+            g.fillRoundedRectangle (progressBounds.withWidth (progressWidth), 4.0f);
+
+            // Draw playhead dot
+            float dotX = progressBounds.getX() + progressWidth;
+            float dotY = progressBounds.getCentreY();
+            float dotRadius = isMouseOverProgressBar ? 8.0f : 6.0f;
+
+            g.setColour (progressColour);
+            g.fillEllipse (dotX - dotRadius, dotY - dotRadius, dotRadius * 2.0f, dotRadius * 2.0f);
+        }
+
+        // Draw play/pause icon with background circle
+        drawPlayPauseIcon (g, playPauseButton.getBounds().toFloat(), isPlaying);
+
+        // Draw stop icon with background circle
+        drawStopIcon (g, stopButton.getBounds().toFloat());
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds().reduced (4, 2);
+
+        int buttonSize = bounds.getHeight();
+        int buttonSpacing = 6;
+
+        // Play/Pause button - larger
+        playPauseButton.setBounds (bounds.removeFromLeft (buttonSize));
+        bounds.removeFromLeft (buttonSpacing);
+
+        // Stop button - larger
+        stopButton.setBounds (bounds.removeFromLeft (buttonSize));
+        bounds.removeFromLeft (buttonSpacing + 4);
+
+        // Time label from right
+        int timeWidth = 90;
+        timeLabel.setBounds (bounds.removeFromRight (timeWidth));
+        bounds.removeFromRight (8);
+
+        // Progress bar takes remaining center space - thicker bar
+        progressBarBounds = bounds.reduced (2, (bounds.getHeight() - 8) / 2);
+    }
+
+    void mouseDown (const juce::MouseEvent& event) override
+    {
+        if (getProgressBarBounds().contains (event.getPosition()))
+        {
+            isDraggingProgress = true;
+            seekToMousePosition (event.x);
+        }
+    }
+
+    void mouseDrag (const juce::MouseEvent& event) override
+    {
+        if (isDraggingProgress)
+        {
+            seekToMousePosition (event.x);
+        }
+    }
+
+    void mouseUp (const juce::MouseEvent& /*event*/) override
+    {
+        isDraggingProgress = false;
+    }
+
+    void mouseMove (const juce::MouseEvent& event) override
+    {
+        bool wasOver = isMouseOverProgressBar;
+        isMouseOverProgressBar = getProgressBarBounds().contains (event.getPosition());
+        if (wasOver != isMouseOverProgressBar)
+            repaint();
+    }
+
+    void mouseExit (const juce::MouseEvent& /*event*/) override
+    {
+        if (isMouseOverProgressBar)
+        {
+            isMouseOverProgressBar = false;
+            repaint();
+        }
+    }
+
+    void mouseWheelMove (const juce::MouseEvent& /*event*/, const juce::MouseWheelDetails& wheel) override
+    {
+        // Scroll wheel seeks forward/backward (5% per scroll notch)
+        float seekAmount = wheel.deltaY * 0.05f;
+        float newProgress = juce::jlimit (0.0f, 1.0f, progress + seekAmount);
+
+        if (newProgress != progress)
+        {
+            progress = newProgress;
+            if (onSeek)
+                onSeek (progress);
+            repaint();
+        }
+    }
+
+    void timerCallback() override
+    {
+        repaint();  // Smooth animation updates
+    }
+
+    // Public setters for state
+    void setProgress (float newProgress)
+    {
+        progress = juce::jlimit (0.0f, 1.0f, newProgress);
+    }
+
+    void setPlaying (bool playing)
+    {
+        isPlaying = playing;
+        repaint();
+    }
+
+    void setTimeText (const juce::String& text)
+    {
+        timeLabel.setText (text, juce::dontSendNotification);
+    }
+
+    void setProgressColour (juce::Colour colour)
+    {
+        progressColour = colour;
+    }
+
+    // Callbacks
+    std::function<void()> onPlayPause;
+    std::function<void()> onStop;
+    std::function<void (float)> onSeek;  // Called with normalized position 0.0-1.0
+
+private:
+    juce::Rectangle<int> getProgressBarBounds() const
+    {
+        return progressBarBounds;
+    }
+
+    void seekToMousePosition (int mouseX)
+    {
+        auto progressBounds = getProgressBarBounds();
+        float normalizedPos = (float) (mouseX - progressBounds.getX()) / (float) progressBounds.getWidth();
+        normalizedPos = juce::jlimit (0.0f, 1.0f, normalizedPos);
+        progress = normalizedPos;
+
+        if (onSeek)
+            onSeek (normalizedPos);
+
+        repaint();
+    }
+
+    void drawPlayPauseIcon (juce::Graphics& g, juce::Rectangle<float> bounds, bool playing)
+    {
+        // Background circle
+        g.setColour (PremiumLookAndFeel::Colours::bgPanel);
+        g.fillEllipse (bounds.reduced (2.0f));
+
+        // Border
+        g.setColour (PremiumLookAndFeel::Colours::textMid);
+        g.drawEllipse (bounds.reduced (2.0f), 1.5f);
+
+        bounds = bounds.reduced (bounds.getWidth() * 0.3f);
+        g.setColour (PremiumLookAndFeel::Colours::textBright);
+
+        if (playing)
+        {
+            // Pause icon (two vertical bars)
+            float barWidth = bounds.getWidth() * 0.28f;
+            float gap = bounds.getWidth() * 0.22f;
+            float startX = bounds.getCentreX() - barWidth - gap / 2.0f;
+
+            g.fillRoundedRectangle (startX, bounds.getY(), barWidth, bounds.getHeight(), 2.0f);
+            g.fillRoundedRectangle (startX + barWidth + gap, bounds.getY(), barWidth, bounds.getHeight(), 2.0f);
+        }
+        else
+        {
+            // Play icon (triangle pointing right) - offset slightly right for visual balance
+            juce::Path triangle;
+            float offset = bounds.getWidth() * 0.1f;
+            triangle.addTriangle (bounds.getX() + offset, bounds.getY(),
+                                  bounds.getX() + offset, bounds.getBottom(),
+                                  bounds.getRight() + offset, bounds.getCentreY());
+            g.fillPath (triangle);
+        }
+    }
+
+    void drawStopIcon (juce::Graphics& g, juce::Rectangle<float> bounds)
+    {
+        // Background circle
+        g.setColour (PremiumLookAndFeel::Colours::bgPanel);
+        g.fillEllipse (bounds.reduced (2.0f));
+
+        // Border
+        g.setColour (PremiumLookAndFeel::Colours::textMid);
+        g.drawEllipse (bounds.reduced (2.0f), 1.5f);
+
+        bounds = bounds.reduced (bounds.getWidth() * 0.35f);
+        g.setColour (PremiumLookAndFeel::Colours::textBright);
+        g.fillRoundedRectangle (bounds, 2.0f);
+    }
+
+    juce::TextButton playPauseButton;
+    juce::TextButton stopButton;
+    juce::Label timeLabel;
+    juce::Rectangle<int> progressBarBounds;
+
+    float progress = 0.0f;
+    float bufferProgress = 0.0f;  // For future buffering indicator
+    bool isPlaying = false;
+    bool isDraggingProgress = false;
+    bool isMouseOverProgressBar = false;
+    juce::Colour progressColour { 0xFFE53935 };  // YouTube red
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (TransportBar)
+};

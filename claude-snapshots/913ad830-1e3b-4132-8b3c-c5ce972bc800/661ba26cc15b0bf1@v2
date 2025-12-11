@@ -1,0 +1,192 @@
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_dsp/juce_dsp.h>
+#include <array>
+
+/**
+ * Real-time Spectrum Analyzer Component
+ *
+ * Displays frequency spectrum with vertical bars behind EQ sliders.
+ * Color gradient: Blue (low) -> Green (mid) -> Red (high)
+ */
+class SpectrumAnalyzer : public juce::Component
+{
+public:
+    SpectrumAnalyzer()
+    {
+        // Initialize FFT for spectrum analysis
+        fft = std::make_unique<juce::dsp::FFT>(fftOrder);
+
+        // Clear spectrum data
+        for (auto& level : spectrumLevels)
+            level = 0.0f;
+
+        setOpaque (false); // Transparent background
+    }
+
+    ~SpectrumAnalyzer() override = default;
+
+    //==============================================================================
+    void paint (juce::Graphics& g) override
+    {
+        auto bounds = getLocalBounds().toFloat();
+
+        // Draw spectrum bars
+        const int numBars = 10; // Match EQ bands
+        const float barWidth = bounds.getWidth() / static_cast<float> (numBars);
+        const float barSpacing = 4.0f;
+
+        for (int i = 0; i < numBars; ++i)
+        {
+            float barX = i * barWidth;
+            float barHeight = bounds.getHeight() * spectrumLevels[i];
+
+            // Color gradient: Blue (low freq) -> Green (mid) -> Red (high freq)
+            juce::Colour barColour;
+            float normalizedPos = static_cast<float> (i) / (numBars - 1);
+
+            if (normalizedPos < 0.5f)
+            {
+                // Blue to Green (low to mid frequencies)
+                float t = normalizedPos * 2.0f;
+                barColour = juce::Colour::fromRGB (
+                    static_cast<juce::uint8> (0 * (1.0f - t) + 0 * t),    // R: 0 -> 0
+                    static_cast<juce::uint8> (100 * (1.0f - t) + 255 * t), // G: 100 -> 255
+                    static_cast<juce::uint8> (255 * (1.0f - t) + 0 * t)    // B: 255 -> 0
+                );
+            }
+            else
+            {
+                // Green to Red (mid to high frequencies)
+                float t = (normalizedPos - 0.5f) * 2.0f;
+                barColour = juce::Colour::fromRGB (
+                    static_cast<juce::uint8> (0 * (1.0f - t) + 255 * t),   // R: 0 -> 255
+                    static_cast<juce::uint8> (255 * (1.0f - t) + 50 * t),  // G: 255 -> 50
+                    static_cast<juce::uint8> (0 * (1.0f - t) + 0 * t)      // B: 0 -> 0
+                );
+            }
+
+            // Draw bar with gradient from bottom (brighter) to top (darker)
+            juce::ColourGradient gradient (
+                barColour.withAlpha (0.7f),
+                barX + barWidth / 2.0f, bounds.getBottom(),
+                barColour.withAlpha (0.3f),
+                barX + barWidth / 2.0f, bounds.getBottom() - barHeight,
+                false
+            );
+
+            g.setGradientFill (gradient);
+            g.fillRoundedRectangle (
+                barX + barSpacing / 2.0f,
+                bounds.getBottom() - barHeight,
+                barWidth - barSpacing,
+                barHeight,
+                2.0f
+            );
+
+            // Subtle outline
+            g.setColour (barColour.withAlpha (0.5f));
+            g.drawRoundedRectangle (
+                barX + barSpacing / 2.0f,
+                bounds.getBottom() - barHeight,
+                barWidth - barSpacing,
+                barHeight,
+                2.0f,
+                1.0f
+            );
+        }
+    }
+
+    //==============================================================================
+    /** Push audio samples for spectrum analysis */
+    void pushAudioSamples (const juce::AudioBuffer<float>& buffer, int numSamples)
+    {
+        if (numSamples == 0)
+            return;
+
+        // Mix to mono and push to FIFO
+        for (int i = 0; i < numSamples; ++i)
+        {
+            float monoSample = 0.0f;
+            for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            {
+                if (i < buffer.getNumSamples())
+                    monoSample += buffer.getSample (ch, i);
+            }
+            monoSample /= static_cast<float> (juce::jmax (1, buffer.getNumChannels()));
+
+            audioFifo[fifoIndex++] = monoSample;
+
+            if (fifoIndex >= fftSize)
+            {
+                // Perform FFT analysis
+                performFFT();
+                fifoIndex = 0;
+            }
+        }
+    }
+
+    /** Update spectrum display (call from timer) */
+    void updateSpectrum()
+    {
+        // Smooth decay for spectrum levels
+        for (auto& level : spectrumLevels)
+        {
+            level *= 0.85f; // Decay factor
+        }
+
+        repaint();
+    }
+
+private:
+    void performFFT()
+    {
+        // Apply window
+        juce::dsp::WindowingFunction<float> window (fftSize, juce::dsp::WindowingFunction<float>::hann);
+        window.multiplyWithWindowingTable (audioFifo.data(), fftSize);
+
+        // Perform FFT
+        fft->performFrequencyOnlyForwardTransform (audioFifo.data());
+
+        // Map FFT bins to 10 frequency bands (matching EQ)
+        const std::array<int, 10> bandRanges = {
+            2, 4, 8, 16, 32, 64, 128, 256, 512, 1024 // Bin ranges for each band
+        };
+
+        int prevBin = 1;
+        for (int band = 0; band < 10; ++band)
+        {
+            int nextBin = bandRanges[band];
+            float bandLevel = 0.0f;
+
+            // Average magnitude in band
+            for (int bin = prevBin; bin < nextBin && bin < fftSize / 2; ++bin)
+            {
+                bandLevel += audioFifo[bin];
+            }
+            bandLevel /= static_cast<float> (nextBin - prevBin);
+
+            // Normalize and scale
+            float normalizedLevel = juce::jlimit (0.0f, 1.0f, bandLevel * 8.0f);
+
+            // Peak hold - take maximum
+            if (normalizedLevel > spectrumLevels[band])
+                spectrumLevels[band] = normalizedLevel;
+
+            prevBin = nextBin;
+        }
+    }
+
+    //==============================================================================
+    static constexpr int fftOrder = 11; // 2048 point FFT
+    static constexpr int fftSize = 1 << fftOrder;
+
+    std::unique_ptr<juce::dsp::FFT> fft;
+    std::array<float, fftSize * 2> audioFifo = {};
+    int fifoIndex = 0;
+
+    std::array<float, 10> spectrumLevels = {}; // 10 bands matching EQ
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SpectrumAnalyzer)
+};

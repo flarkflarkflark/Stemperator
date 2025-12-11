@@ -1,0 +1,360 @@
+#pragma once
+
+#include <JuceHeader.h>
+
+/**
+ * PremiumLookAndFeel - FabFilter-inspired modern design
+ *
+ * Design principles:
+ * - Clean, minimal, no skeuomorphic elements
+ * - Vibrant stem colors with subtle gradients
+ * - Smooth animations and visual feedback
+ * - High-contrast text for readability
+ * - Resizable with vector graphics
+ */
+class PremiumLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    // Color scheme - vibrant but professional
+    struct Colours
+    {
+        // Background gradients
+        static inline const juce::Colour bgDark     = juce::Colour (0xff0a0a0f);
+        static inline const juce::Colour bgMid      = juce::Colour (0xff151520);
+        static inline const juce::Colour bgLight    = juce::Colour (0xff1e1e2a);
+        static inline const juce::Colour bgPanel    = juce::Colour (0xff252535);
+
+        // Stem colours (vibrant)
+        static inline const juce::Colour vocals     = juce::Colour (0xffff5555);  // Vibrant red
+        static inline const juce::Colour drums      = juce::Colour (0xff5599ff);  // Electric blue
+        static inline const juce::Colour bass       = juce::Colour (0xff55ff99);  // Neon green
+        static inline const juce::Colour other      = juce::Colour (0xffffaa33);  // Warm orange
+
+        // UI accents
+        static inline const juce::Colour accent     = juce::Colour (0xff7b68ee);  // Medium slate blue
+        static inline const juce::Colour highlight  = juce::Colour (0xff00d4ff);  // Cyan highlight
+        static inline const juce::Colour textBright = juce::Colour (0xffffffff);
+        static inline const juce::Colour textMid    = juce::Colour (0xffaaaacc);
+        static inline const juce::Colour textDim    = juce::Colour (0xff666688);
+
+        // State colors
+        static inline const juce::Colour mute       = juce::Colour (0xffff4444);  // Mute red
+        static inline const juce::Colour solo       = juce::Colour (0xffffcc00);  // Solo yellow
+        static inline const juce::Colour active     = juce::Colour (0xff44ff88);  // Active green
+    };
+
+    PremiumLookAndFeel()
+    {
+        // Set default colors
+        setColour (juce::Slider::thumbColourId, Colours::accent);
+        setColour (juce::Slider::trackColourId, Colours::bgPanel);
+        setColour (juce::Slider::backgroundColourId, Colours::bgDark);
+
+        setColour (juce::TextButton::buttonColourId, Colours::bgPanel);
+        setColour (juce::TextButton::textColourOnId, Colours::textBright);
+        setColour (juce::TextButton::textColourOffId, Colours::textMid);
+
+        setColour (juce::ComboBox::backgroundColourId, Colours::bgPanel);
+        setColour (juce::ComboBox::textColourId, Colours::textBright);
+        setColour (juce::ComboBox::outlineColourId, Colours::accent.withAlpha (0.5f));
+
+        setColour (juce::Label::textColourId, Colours::textBright);
+
+        setColour (juce::PopupMenu::backgroundColourId, Colours::bgPanel);
+        setColour (juce::PopupMenu::textColourId, Colours::textBright);
+        setColour (juce::PopupMenu::highlightedBackgroundColourId, Colours::accent);
+    }
+
+    //==============================================================================
+    // SLIDERS - Modern rotary knobs with glow
+    //==============================================================================
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                           float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
+                           juce::Slider& slider) override
+    {
+        auto bounds = juce::Rectangle<float> (x, y, width, height).reduced (4.0f);
+        auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) / 2.0f;
+        auto centreX = bounds.getCentreX();
+        auto centreY = bounds.getCentreY();
+        auto rx = centreX - radius;
+        auto ry = centreY - radius;
+        auto rw = radius * 2.0f;
+        auto angle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+
+        // Get thumb color (stem color if set)
+        auto thumbColour = slider.findColour (juce::Slider::thumbColourId);
+
+        // Background ring
+        g.setColour (Colours::bgDark);
+        g.fillEllipse (rx, ry, rw, rw);
+
+        // Track arc (background)
+        juce::Path backgroundArc;
+        backgroundArc.addCentredArc (centreX, centreY, radius * 0.85f, radius * 0.85f,
+                                     0.0f, rotaryStartAngle, rotaryEndAngle, true);
+        g.setColour (Colours::bgPanel);
+        g.strokePath (backgroundArc, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved,
+                                                           juce::PathStrokeType::rounded));
+
+        // Value arc (filled portion with glow)
+        juce::Path valueArc;
+        valueArc.addCentredArc (centreX, centreY, radius * 0.85f, radius * 0.85f,
+                                0.0f, rotaryStartAngle, angle, true);
+
+        // Glow effect
+        g.setColour (thumbColour.withAlpha (0.3f));
+        g.strokePath (valueArc, juce::PathStrokeType (8.0f, juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+
+        // Main value arc
+        g.setColour (thumbColour);
+        g.strokePath (valueArc, juce::PathStrokeType (4.0f, juce::PathStrokeType::curved,
+                                                       juce::PathStrokeType::rounded));
+
+        // Knob center
+        auto knobRadius = radius * 0.6f;
+        juce::ColourGradient knobGradient (Colours::bgLight, centreX, centreY - knobRadius * 0.5f,
+                                           Colours::bgDark, centreX, centreY + knobRadius, false);
+        g.setGradientFill (knobGradient);
+        g.fillEllipse (centreX - knobRadius, centreY - knobRadius, knobRadius * 2.0f, knobRadius * 2.0f);
+
+        // Pointer line
+        juce::Path pointer;
+        auto pointerLength = radius * 0.5f;
+        auto pointerThickness = 3.0f;
+        pointer.addRoundedRectangle (-pointerThickness * 0.5f, -radius * 0.75f,
+                                     pointerThickness, pointerLength, 1.5f);
+        g.setColour (thumbColour);
+        g.fillPath (pointer, juce::AffineTransform::rotation (angle).translated (centreX, centreY));
+    }
+
+    //==============================================================================
+    // LINEAR SLIDERS - Fader style with gradient fill
+    //==============================================================================
+    void drawLinearSlider (juce::Graphics& g, int x, int y, int width, int height,
+                           float sliderPos, float minSliderPos, float maxSliderPos,
+                           juce::Slider::SliderStyle style, juce::Slider& slider) override
+    {
+        auto thumbColour = slider.findColour (juce::Slider::thumbColourId);
+        auto isVertical = style == juce::Slider::LinearVertical || style == juce::Slider::LinearBarVertical;
+
+        auto bounds = juce::Rectangle<float> (x, y, width, height);
+
+        if (isVertical)
+        {
+            // Vertical fader
+            auto trackWidth = 8.0f;
+            auto trackBounds = bounds.withSizeKeepingCentre (trackWidth, bounds.getHeight() - 20);
+
+            // Track background
+            g.setColour (Colours::bgDark);
+            g.fillRoundedRectangle (trackBounds, 4.0f);
+
+            // Track fill with gradient
+            auto fillHeight = trackBounds.getBottom() - sliderPos;
+            auto fillBounds = trackBounds.withTop (sliderPos);
+
+            if (fillBounds.getHeight() > 0)
+            {
+                juce::ColourGradient gradient (thumbColour.withAlpha (0.8f), 0, fillBounds.getY(),
+                                               thumbColour.darker (0.3f), 0, fillBounds.getBottom(), false);
+                g.setGradientFill (gradient);
+                g.fillRoundedRectangle (fillBounds, 4.0f);
+
+                // Glow
+                g.setColour (thumbColour.withAlpha (0.2f));
+                g.fillRoundedRectangle (fillBounds.expanded (3.0f, 0), 6.0f);
+            }
+
+            // Thumb
+            auto thumbSize = 24.0f;
+            auto thumbY = sliderPos - thumbSize / 2.0f;
+            auto thumbBounds = juce::Rectangle<float> (bounds.getCentreX() - thumbSize / 2, thumbY,
+                                                       thumbSize, thumbSize);
+
+            // Thumb shadow
+            g.setColour (juce::Colours::black.withAlpha (0.4f));
+            g.fillRoundedRectangle (thumbBounds.translated (0, 2), 4.0f);
+
+            // Thumb body
+            juce::ColourGradient thumbGradient (Colours::bgLight, thumbBounds.getX(), thumbBounds.getY(),
+                                                Colours::bgPanel, thumbBounds.getX(), thumbBounds.getBottom(), false);
+            g.setGradientFill (thumbGradient);
+            g.fillRoundedRectangle (thumbBounds, 4.0f);
+
+            // Thumb highlight line
+            g.setColour (thumbColour);
+            g.fillRoundedRectangle (thumbBounds.getCentreX() - 8, thumbBounds.getCentreY() - 1.5f, 16.0f, 3.0f, 1.5f);
+        }
+        else
+        {
+            // Horizontal slider
+            auto trackHeight = 6.0f;
+            auto trackBounds = bounds.withSizeKeepingCentre (bounds.getWidth() - 20, trackHeight);
+
+            g.setColour (Colours::bgDark);
+            g.fillRoundedRectangle (trackBounds, 3.0f);
+
+            auto fillWidth = sliderPos - trackBounds.getX();
+            auto fillBounds = trackBounds.withWidth (fillWidth);
+
+            if (fillBounds.getWidth() > 0)
+            {
+                juce::ColourGradient gradient (thumbColour, fillBounds.getX(), 0,
+                                               thumbColour.darker (0.3f), fillBounds.getRight(), 0, false);
+                g.setGradientFill (gradient);
+                g.fillRoundedRectangle (fillBounds, 3.0f);
+            }
+
+            // Thumb
+            auto thumbSize = 18.0f;
+            g.setColour (thumbColour);
+            g.fillEllipse (sliderPos - thumbSize / 2, bounds.getCentreY() - thumbSize / 2, thumbSize, thumbSize);
+        }
+    }
+
+    //==============================================================================
+    // BUTTONS - Modern with glow on hover/toggle
+    //==============================================================================
+    void drawButtonBackground (juce::Graphics& g, juce::Button& button,
+                               const juce::Colour& backgroundColour,
+                               bool shouldDrawButtonAsHighlighted,
+                               bool shouldDrawButtonAsDown) override
+    {
+        auto bounds = button.getLocalBounds().toFloat().reduced (1.0f);
+        auto baseColour = backgroundColour;
+
+        if (shouldDrawButtonAsDown)
+            baseColour = baseColour.brighter (0.2f);
+        else if (shouldDrawButtonAsHighlighted)
+            baseColour = baseColour.brighter (0.1f);
+
+        // Check if toggled
+        if (auto* toggle = dynamic_cast<juce::ToggleButton*> (&button))
+        {
+            if (toggle->getToggleState())
+            {
+                auto onColour = button.findColour (juce::TextButton::buttonOnColourId);
+                baseColour = onColour;
+
+                // Glow effect for active state
+                g.setColour (onColour.withAlpha (0.3f));
+                g.fillRoundedRectangle (bounds.expanded (2.0f), 6.0f);
+            }
+        }
+        else if (auto* textBtn = dynamic_cast<juce::TextButton*> (&button))
+        {
+            if (textBtn->getToggleState())
+            {
+                auto onColour = button.findColour (juce::TextButton::buttonOnColourId);
+                baseColour = onColour;
+
+                g.setColour (onColour.withAlpha (0.3f));
+                g.fillRoundedRectangle (bounds.expanded (2.0f), 6.0f);
+            }
+        }
+
+        // Button body
+        g.setColour (baseColour);
+        g.fillRoundedRectangle (bounds, 4.0f);
+
+        // Subtle border
+        g.setColour (Colours::accent.withAlpha (0.3f));
+        g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
+    }
+
+    void drawButtonText (juce::Graphics& g, juce::TextButton& button,
+                         bool shouldDrawButtonAsHighlighted, bool shouldDrawButtonAsDown) override
+    {
+        auto font = juce::FontOptions (14.0f);
+        g.setFont (font);
+
+        auto textColour = button.getToggleState()
+                              ? button.findColour (juce::TextButton::textColourOnId)
+                              : button.findColour (juce::TextButton::textColourOffId);
+
+        if (shouldDrawButtonAsHighlighted)
+            textColour = textColour.brighter (0.2f);
+
+        g.setColour (textColour);
+        g.drawText (button.getButtonText(), button.getLocalBounds(),
+                    juce::Justification::centred, false);
+    }
+
+    //==============================================================================
+    // COMBOBOX - Modern dropdown style
+    //==============================================================================
+    void drawComboBox (juce::Graphics& g, int width, int height, bool isButtonDown,
+                       int buttonX, int buttonY, int buttonW, int buttonH,
+                       juce::ComboBox& box) override
+    {
+        auto bounds = juce::Rectangle<float> (0, 0, width, height).reduced (1.0f);
+
+        g.setColour (Colours::bgPanel);
+        g.fillRoundedRectangle (bounds, 4.0f);
+
+        g.setColour (Colours::accent.withAlpha (0.4f));
+        g.drawRoundedRectangle (bounds, 4.0f, 1.0f);
+
+        // Arrow
+        auto arrowZone = juce::Rectangle<float> (width - 20.0f, 0, 20.0f, height);
+        juce::Path arrow;
+        arrow.addTriangle (arrowZone.getCentreX() - 4, arrowZone.getCentreY() - 2,
+                           arrowZone.getCentreX() + 4, arrowZone.getCentreY() - 2,
+                           arrowZone.getCentreX(), arrowZone.getCentreY() + 4);
+
+        g.setColour (Colours::textMid);
+        g.fillPath (arrow);
+    }
+
+    //==============================================================================
+    // LABELS - Clean with proper colors
+    //==============================================================================
+    void drawLabel (juce::Graphics& g, juce::Label& label) override
+    {
+        g.fillAll (label.findColour (juce::Label::backgroundColourId));
+
+        auto text = label.getText();
+        auto font = label.getFont();
+        auto textArea = label.getBorderSize().subtractedFrom (label.getLocalBounds());
+
+        g.setColour (label.findColour (juce::Label::textColourId));
+        g.setFont (font);
+        g.drawText (text, textArea, label.getJustificationType(), false);
+    }
+
+    //==============================================================================
+    // TOOLTIP - Modern floating style
+    //==============================================================================
+    void drawTooltip (juce::Graphics& g, const juce::String& text, int width, int height) override
+    {
+        auto bounds = juce::Rectangle<float> (0, 0, width, height);
+
+        g.setColour (Colours::bgPanel.withAlpha (0.95f));
+        g.fillRoundedRectangle (bounds, 4.0f);
+
+        g.setColour (Colours::accent.withAlpha (0.5f));
+        g.drawRoundedRectangle (bounds.reduced (0.5f), 4.0f, 1.0f);
+
+        g.setColour (Colours::textBright);
+        g.setFont (juce::FontOptions (13.0f));
+        g.drawText (text, bounds.reduced (6.0f, 4.0f), juce::Justification::centred, true);
+    }
+
+    //==============================================================================
+    // Helper: Get stem color by index
+    //==============================================================================
+    static juce::Colour getStemColour (int stemIndex)
+    {
+        switch (stemIndex)
+        {
+            case 0: return Colours::vocals;
+            case 1: return Colours::drums;
+            case 2: return Colours::bass;
+            case 3: return Colours::other;
+            default: return Colours::accent;
+        }
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (PremiumLookAndFeel)
+};

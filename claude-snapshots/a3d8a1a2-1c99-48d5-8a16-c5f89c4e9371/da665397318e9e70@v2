@@ -1,0 +1,423 @@
+--[[
+  Stemperator - AI Stem Separation for Reaper
+
+  High-quality AI-powered stem separation using Demucs/audio-separator.
+  Separates the selected track/item into 4 stems: Vocals, Drums, Bass, Other.
+
+  Requirements:
+  - Python 3 with audio-separator installed: pip install audio-separator[gpu]
+  - Stemperator's audio_separator_process.py script
+
+  Usage:
+  1. Select a track or media item
+  2. Run this script
+  3. Wait for AI processing (shows progress)
+  4. 4 new tracks appear with high-quality separated stems
+
+  Author: flarkAUDIO
+  License: MIT
+--]]
+
+local SCRIPT_NAME = "Stemperator: AI Stem Separation"
+
+-- Configuration
+local PYTHON_PATH = nil  -- Auto-detect, or set manually: "/usr/bin/python3"
+local SEPARATOR_SCRIPT = nil  -- Auto-detect from Stemperator install
+
+-- Stem configuration
+local STEMS = {
+    { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav" },
+    { name = "Drums",  color = {100, 200, 255}, file = "drums.wav" },
+    { name = "Bass",   color = {150, 100, 255}, file = "bass.wav" },
+    { name = "Other",  color = {100, 255, 150}, file = "other.wav" },
+}
+
+-- Model options
+local MODELS = {
+    { name = "htdemucs", desc = "Hybrid Transformer Demucs (default, fast)" },
+    { name = "htdemucs_ft", desc = "Fine-tuned Demucs (better quality, slower)" },
+    { name = "htdemucs_6s", desc = "6-stem model (includes guitar, piano)" },
+}
+
+local function rgbToReaperColor(r, g, b)
+    return reaper.ColorToNative(r, g, b) | 0x1000000
+end
+
+-- Find Python interpreter
+local function findPython()
+    if PYTHON_PATH then return PYTHON_PATH end
+
+    -- Try common locations
+    local paths = {
+        "/home/flark/GIT/Stemperator/.venv/bin/python",  -- Stemperator venv
+        "/usr/bin/python3",
+        "/usr/local/bin/python3",
+        "python3",
+        "python",
+    }
+
+    for _, path in ipairs(paths) do
+        local handle = io.popen(path .. " --version 2>&1")
+        if handle then
+            local result = handle:read("*a")
+            handle:close()
+            if result and result:find("Python 3") then
+                return path
+            end
+        end
+    end
+
+    return nil
+end
+
+-- Find the audio_separator_process.py script
+local function findSeparatorScript()
+    if SEPARATOR_SCRIPT then return SEPARATOR_SCRIPT end
+
+    local paths = {
+        "/home/flark/GIT/Stemperator/Source/AI/audio_separator_process.py",
+        "/home/flark/GIT/Stemperator/build/Stemperator_artefacts/Standalone/audio_separator_process.py",
+        reaper.GetResourcePath() .. "/Scripts/Stemperator/audio_separator_process.py",
+    }
+
+    for _, path in ipairs(paths) do
+        local f = io.open(path, "r")
+        if f then
+            f:close()
+            return path
+        end
+    end
+
+    return nil
+end
+
+-- Export selected item/track to WAV file
+local function exportToWav(outputPath)
+    local item = reaper.GetSelectedMediaItem(0, 0)
+    local track = reaper.GetSelectedTrack(0, 0)
+
+    if not item and not track then
+        return nil, "No item or track selected"
+    end
+
+    -- Get time range
+    local startTime, endTime
+
+    if item then
+        startTime = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+        endTime = startTime + reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    else
+        -- Use track's items time range
+        local itemCount = reaper.CountTrackMediaItems(track)
+        if itemCount == 0 then
+            return nil, "Selected track has no items"
+        end
+
+        startTime = math.huge
+        endTime = 0
+        for i = 0, itemCount - 1 do
+            local trackItem = reaper.GetTrackMediaItem(track, i)
+            local pos = reaper.GetMediaItemInfo_Value(trackItem, "D_POSITION")
+            local len = reaper.GetMediaItemInfo_Value(trackItem, "D_LENGTH")
+            startTime = math.min(startTime, pos)
+            endTime = math.max(endTime, pos + len)
+        end
+    end
+
+    -- Set time selection for render
+    reaper.GetSet_LoopTimeRange(true, false, startTime, endTime, false)
+
+    -- Configure render settings
+    local projectPath = reaper.GetProjectPath("")
+
+    -- Use render to file
+    -- Render selected track(s) to WAV
+    local renderCfg = {
+        Source = 1,  -- Selected tracks
+        Bounds = 2,  -- Time selection
+        Directory = outputPath:match("(.*/)")  or "/tmp",
+        File = outputPath:match("([^/]+)$") or "render.wav",
+        SampleRate = 44100,
+        Channels = 2,
+        Format = "WAV",
+    }
+
+    -- Simpler approach: use SWS to render
+    -- Or just copy the source file if it's a single item
+    if item then
+        local take = reaper.GetActiveTake(item)
+        if take then
+            local source = reaper.GetMediaItemTake_Source(take)
+            if source then
+                local sourcePath = reaper.GetMediaSourceFileName(source, "")
+                if sourcePath and sourcePath ~= "" then
+                    -- Copy source file to output
+                    local cmd = string.format('cp "%s" "%s"', sourcePath, outputPath)
+                    os.execute(cmd)
+                    return outputPath, startTime
+                end
+            end
+        end
+    end
+
+    -- Fallback: use reaper's render action with specific settings
+    -- This is more complex, so let's use a simpler approach
+
+    return nil, "Could not export audio. Please render the track to a WAV file first."
+end
+
+-- Run AI separation
+local function runSeparation(inputFile, outputDir, model, progressCallback)
+    local python = findPython()
+    if not python then
+        return nil, "Python 3 not found. Install Python and audio-separator."
+    end
+
+    local script = findSeparatorScript()
+    if not script then
+        return nil, "audio_separator_process.py not found."
+    end
+
+    -- Build command
+    local cmd = string.format(
+        '"%s" "%s" "%s" "%s" --model %s 2>&1',
+        python, script, inputFile, outputDir, model
+    )
+
+    reaper.ShowConsoleMsg("Running: " .. cmd .. "\n")
+
+    -- Run with progress monitoring
+    local handle = io.popen(cmd)
+    if not handle then
+        return nil, "Failed to start separation process"
+    end
+
+    local output = ""
+    local lastProgress = 0
+
+    -- Read output line by line
+    for line in handle:lines() do
+        output = output .. line .. "\n"
+        reaper.ShowConsoleMsg(line .. "\n")
+
+        -- Parse progress: PROGRESS:45:Processing chunk 3/8
+        local percent, stage = line:match("PROGRESS:(%d+):(.+)")
+        if percent then
+            lastProgress = tonumber(percent)
+            if progressCallback then
+                progressCallback(lastProgress, stage)
+            end
+        end
+    end
+
+    handle:close()
+
+    -- Check if stems were created
+    local stems = {}
+    for _, stem in ipairs(STEMS) do
+        local stemPath = outputDir .. "/" .. stem.file
+        local f = io.open(stemPath, "r")
+        if f then
+            f:close()
+            stems[stem.name:lower()] = stemPath
+        end
+    end
+
+    if next(stems) == nil then
+        return nil, "Separation failed. Check console for errors.\n" .. output
+    end
+
+    return stems
+end
+
+-- Import stems as new tracks
+local function importStems(stemPaths, startTime, sourceTrackName)
+    reaper.Undo_BeginBlock()
+
+    local sourceTrack = reaper.GetSelectedTrack(0, 0)
+    local insertIdx = 0
+    if sourceTrack then
+        insertIdx = reaper.GetMediaTrackInfo_Value(sourceTrack, "IP_TRACKNUMBER")
+    end
+
+    -- Create folder track
+    reaper.InsertTrackAtIndex(insertIdx, true)
+    local folderTrack = reaper.GetTrack(0, insertIdx)
+    reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceTrackName .. " - AI Stems", true)
+    reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+    insertIdx = insertIdx + 1
+
+    -- Import each stem
+    local importedCount = 0
+    for i, stem in ipairs(STEMS) do
+        local stemPath = stemPaths[stem.name:lower()]
+        if stemPath then
+            -- Create track
+            reaper.InsertTrackAtIndex(insertIdx + i - 1, true)
+            local newTrack = reaper.GetTrack(0, insertIdx + i - 1)
+
+            -- Set track properties
+            reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", sourceTrackName .. " - " .. stem.name, true)
+            local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+            reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+
+            -- Insert media item
+            reaper.SetOnlyTrackSelected(newTrack)
+            reaper.InsertMedia(stemPath, 0)  -- Insert at edit cursor
+
+            -- Move item to correct position
+            local item = reaper.GetTrackMediaItem(newTrack, 0)
+            if item then
+                reaper.SetMediaItemInfo_Value(item, "D_POSITION", startTime)
+            end
+
+            importedCount = importedCount + 1
+        end
+    end
+
+    -- Close folder
+    if importedCount > 0 then
+        local lastTrack = reaper.GetTrack(0, insertIdx + importedCount - 1)
+        reaper.SetMediaTrackInfo_Value(lastTrack, "I_FOLDERDEPTH", -1)
+    end
+
+    -- Mute original track
+    if sourceTrack then
+        reaper.SetMediaTrackInfo_Value(sourceTrack, "B_MUTE", 1)
+    end
+
+    reaper.Undo_EndBlock(SCRIPT_NAME, -1)
+
+    return importedCount
+end
+
+-- Main function
+local function main()
+    -- Check prerequisites
+    local python = findPython()
+    if not python then
+        reaper.MB(
+            "Python 3 not found!\n\n" ..
+            "Please install Python 3 and audio-separator:\n" ..
+            "  pip install audio-separator[gpu]\n\n" ..
+            "Then set PYTHON_PATH at the top of this script if needed.",
+            SCRIPT_NAME, 0)
+        return
+    end
+
+    local script = findSeparatorScript()
+    if not script then
+        reaper.MB(
+            "audio_separator_process.py not found!\n\n" ..
+            "Make sure Stemperator is installed at:\n" ..
+            "  /home/flark/GIT/Stemperator/\n\n" ..
+            "Or set SEPARATOR_SCRIPT at the top of this script.",
+            SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Check selection
+    local item = reaper.GetSelectedMediaItem(0, 0)
+    local track = reaper.GetSelectedTrack(0, 0)
+
+    if not item and not track then
+        reaper.MB(
+            "Please select a media item or track to separate.",
+            SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Get source info
+    local sourceName = "Track"
+    local sourceFile = nil
+    local startTime = 0
+
+    if item then
+        local take = reaper.GetActiveTake(item)
+        if take then
+            local source = reaper.GetMediaItemTake_Source(take)
+            if source then
+                sourceFile = reaper.GetMediaSourceFileName(source, "")
+                sourceName = sourceFile:match("([^/\\]+)%.[^.]+$") or "Item"
+                startTime = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+            end
+        end
+    else
+        local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+        sourceName = trackName ~= "" and trackName or "Track"
+
+        -- Get first item's source
+        local firstItem = reaper.GetTrackMediaItem(track, 0)
+        if firstItem then
+            local take = reaper.GetActiveTake(firstItem)
+            if take then
+                local source = reaper.GetMediaItemTake_Source(take)
+                if source then
+                    sourceFile = reaper.GetMediaSourceFileName(source, "")
+                    startTime = reaper.GetMediaItemInfo_Value(firstItem, "D_POSITION")
+                end
+            end
+        end
+    end
+
+    if not sourceFile or sourceFile == "" then
+        reaper.MB(
+            "Could not find source audio file.\n\n" ..
+            "Make sure the item has a valid audio source.",
+            SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Select model
+    local modelChoice = reaper.MB(
+        "Select AI model:\n\n" ..
+        "YES = htdemucs (fast, good quality)\n" ..
+        "NO = htdemucs_ft (slower, best quality)",
+        SCRIPT_NAME, 3)
+
+    local model = "htdemucs"
+    if modelChoice == 7 then  -- No
+        model = "htdemucs_ft"
+    elseif modelChoice == 2 then  -- Cancel
+        return
+    end
+
+    -- Create output directory
+    local outputDir = "/tmp/stemperator_" .. os.time()
+    os.execute('mkdir -p "' .. outputDir .. '"')
+
+    -- Show progress window
+    reaper.ShowConsoleMsg("\n========================================\n")
+    reaper.ShowConsoleMsg("Stemperator AI Separation\n")
+    reaper.ShowConsoleMsg("========================================\n")
+    reaper.ShowConsoleMsg("Source: " .. sourceFile .. "\n")
+    reaper.ShowConsoleMsg("Model: " .. model .. "\n")
+    reaper.ShowConsoleMsg("Output: " .. outputDir .. "\n")
+    reaper.ShowConsoleMsg("========================================\n\n")
+
+    -- Run separation
+    local stems, err = runSeparation(sourceFile, outputDir, model, function(percent, stage)
+        -- Progress callback (could update a progress bar if we had one)
+        reaper.ShowConsoleMsg(string.format("[%3d%%] %s\n", percent, stage))
+    end)
+
+    if not stems then
+        reaper.MB("Separation failed:\n\n" .. (err or "Unknown error"), SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Import stems
+    local imported = importStems(stems, startTime, sourceName)
+
+    -- Done
+    reaper.MB(
+        string.format("Successfully imported %d stems!\n\n", imported) ..
+        "Stems have been added as new tracks.\n" ..
+        "The original track has been muted.",
+        SCRIPT_NAME, 0)
+
+    reaper.UpdateArrange()
+end
+
+-- Run
+main()

@@ -1,0 +1,38 @@
+#pragma once
+
+#include <JuceHeader.h>
+
+/**
+ * Visualizer - Spectrum display showing stem separation
+ */
+class Visualizer : public juce::Component,
+                   public juce::Timer
+{
+public:
+    Visualizer();
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void timerCallback() override;
+
+    // Set stem levels for display
+    void setStemLevels (float vocals, float drums, float bass, float other);
+    void setInputLevel (float level);
+
+private:
+    std::array<float, 4> stemLevels = { 0, 0, 0, 0 };
+    std::array<float, 4> displayLevels = { 0, 0, 0, 0 };
+    float inputLevel = 0.0f;
+    float displayInputLevel = 0.0f;
+
+    const std::array<juce::Colour, 4> stemColours = {
+        juce::Colour (0xffe74c3c),  // Vocals - Red
+        juce::Colour (0xff3498db),  // Drums - Blue
+        juce::Colour (0xff2ecc71),  // Bass - Green
+        juce::Colour (0xfff39c12)   // Other - Orange
+    };
+
+    const std::array<juce::String, 4> stemNames = { "VOX", "DRM", "BAS", "OTH" };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (Visualizer)
+};

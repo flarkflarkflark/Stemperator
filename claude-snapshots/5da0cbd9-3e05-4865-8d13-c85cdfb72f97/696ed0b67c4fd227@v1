@@ -1,0 +1,390 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "PremiumLookAndFeel.h"
+
+/**
+ * StyledDialogWindow - Custom styled dialog in huisstijl
+ *
+ * A DocumentWindow-based dialog that matches the Stemperator visual style
+ * with dark background, accent colors, and proper fonts.
+ */
+class StyledDialogWindow : public juce::DocumentWindow
+{
+public:
+    enum class IconType
+    {
+        Info,
+        Warning,
+        Error,
+        Success
+    };
+
+    StyledDialogWindow (const juce::String& title,
+                        const juce::String& message,
+                        IconType iconType = IconType::Info,
+                        const juce::String& buttonText = "OK",
+                        std::function<void()> onClose = nullptr)
+        : juce::DocumentWindow (title,
+                                PremiumLookAndFeel::Colours::bgDark,
+                                juce::DocumentWindow::closeButton),
+          closeCallback (onClose)
+    {
+        setUsingNativeTitleBar (false);
+        setTitleBarHeight (40);
+        setResizable (false, false);
+
+        // Create content component
+        content = std::make_unique<ContentComponent> (message, iconType, buttonText, [this]()
+        {
+            closeButtonPressed();
+        });
+
+        setContentOwned (content.get(), true);
+        centreWithSize (content->getWidth(), content->getHeight() + getTitleBarHeight());
+        setVisible (true);
+        toFront (true);
+    }
+
+    ~StyledDialogWindow() override = default;
+
+    void closeButtonPressed() override
+    {
+        if (closeCallback)
+            closeCallback();
+        setVisible (false);
+    }
+
+    // Static helper for showing a message box
+    static void showMessageBox (const juce::String& title,
+                                const juce::String& message,
+                                IconType iconType = IconType::Info,
+                                juce::Component* /*parent*/ = nullptr)
+    {
+        auto* dialog = new StyledDialogWindow (title, message, iconType, "OK", nullptr);
+        // Dialog self-destructs when closed via closeButtonPressed
+        juce::ignoreUnused (dialog);
+    }
+
+    // Compatibility helper - maps JUCE MessageBoxIconType to our IconType
+    static void showMessageBoxAsync (juce::MessageBoxIconType juceIcon,
+                                     const juce::String& title,
+                                     const juce::String& message)
+    {
+        IconType icon = IconType::Info;
+        switch (juceIcon)
+        {
+            case juce::MessageBoxIconType::WarningIcon: icon = IconType::Warning; break;
+            case juce::MessageBoxIconType::InfoIcon:    icon = IconType::Info; break;
+            case juce::MessageBoxIconType::QuestionIcon: icon = IconType::Info; break;
+            case juce::MessageBoxIconType::NoIcon:      icon = IconType::Info; break;
+        }
+        showMessageBox (title, message, icon);
+    }
+
+private:
+    class ContentComponent : public juce::Component
+    {
+    public:
+        ContentComponent (const juce::String& message,
+                          IconType iconType,
+                          const juce::String& buttonText,
+                          std::function<void()> onButtonClick)
+            : messageText (message), icon (iconType), buttonCallback (onButtonClick)
+        {
+            // Message label
+            messageLabel.setText (message, juce::dontSendNotification);
+            messageLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+            messageLabel.setFont (juce::FontOptions (15.0f));
+            messageLabel.setJustificationType (juce::Justification::centredLeft);
+            addAndMakeVisible (messageLabel);
+
+            // OK button
+            okButton.setButtonText (buttonText);
+            okButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent.darker (0.2f));
+            okButton.setColour (juce::TextButton::textColourOnId, PremiumLookAndFeel::Colours::textBright);
+            okButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textBright);
+            okButton.onClick = buttonCallback;
+            addAndMakeVisible (okButton);
+
+            // Calculate size based on message
+            int width = juce::jmax (350, (int) messageLabel.getFont().getStringWidthFloat (message) + 100);
+            width = juce::jmin (width, 500);
+
+            // Count lines for height
+            int numLines = 1;
+            for (int i = 0; i < message.length(); ++i)
+                if (message[i] == '\n')
+                    numLines++;
+
+            int height = juce::jmax (150, 80 + numLines * 22 + 60);
+            setSize (width, height);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            // Background
+            g.fillAll (PremiumLookAndFeel::Colours::bgMid);
+
+            // Icon area
+            auto iconBounds = juce::Rectangle<float> (20.0f, 20.0f, 40.0f, 40.0f);
+
+            juce::Colour iconColour;
+            juce::String iconText;
+
+            switch (icon)
+            {
+                case IconType::Success:
+                    iconColour = PremiumLookAndFeel::Colours::active;
+                    iconText = "OK"; // Checkmark symbol would be better
+                    break;
+                case IconType::Warning:
+                    iconColour = PremiumLookAndFeel::Colours::solo;
+                    iconText = "!";
+                    break;
+                case IconType::Error:
+                    iconColour = PremiumLookAndFeel::Colours::mute;
+                    iconText = "X";
+                    break;
+                case IconType::Info:
+                default:
+                    iconColour = PremiumLookAndFeel::Colours::accent;
+                    iconText = "i";
+                    break;
+            }
+
+            // Icon circle with glow
+            g.setColour (iconColour.withAlpha (0.2f));
+            g.fillEllipse (iconBounds.expanded (4.0f));
+
+            g.setColour (iconColour);
+            g.fillEllipse (iconBounds);
+
+            // Icon symbol
+            g.setColour (PremiumLookAndFeel::Colours::textBright);
+            g.setFont (juce::FontOptions (20.0f).withStyle ("Bold"));
+            g.drawText (iconText, iconBounds.toNearestInt(), juce::Justification::centred);
+        }
+
+        void resized() override
+        {
+            auto bounds = getLocalBounds().reduced (20);
+
+            // Icon takes left side
+            bounds.removeFromLeft (60);
+
+            // Button at bottom
+            auto buttonArea = bounds.removeFromBottom (40);
+            okButton.setBounds (buttonArea.withSizeKeepingCentre (100, 34));
+
+            bounds.removeFromBottom (10);
+
+            // Message takes the rest
+            messageLabel.setBounds (bounds);
+        }
+
+    private:
+        juce::String messageText;
+        IconType icon;
+        std::function<void()> buttonCallback;
+
+        juce::Label messageLabel;
+        juce::TextButton okButton;
+    };
+
+    std::unique_ptr<ContentComponent> content;
+    std::function<void()> closeCallback;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StyledDialogWindow)
+};
+
+/**
+ * BatchCompleteDialog - Specialized dialog for batch processing completion
+ */
+class BatchCompleteDialog : public juce::DocumentWindow
+{
+public:
+    BatchCompleteDialog (int successCount, int totalFiles, int failedCount,
+                         const juce::String& outputPath, double totalTimeSeconds,
+                         std::function<void()> onOpenFolder = nullptr)
+        : juce::DocumentWindow ("Batch Processing Complete",
+                                PremiumLookAndFeel::Colours::bgDark,
+                                juce::DocumentWindow::closeButton),
+          openFolderCallback (onOpenFolder)
+    {
+        setUsingNativeTitleBar (false);
+        setTitleBarHeight (40);
+        setResizable (false, false);
+
+        content = std::make_unique<ContentComponent> (
+            successCount, totalFiles, failedCount, outputPath, totalTimeSeconds,
+            [this]() { closeButtonPressed(); },
+            [this]()
+            {
+                if (openFolderCallback)
+                    openFolderCallback();
+                closeButtonPressed();
+            });
+
+        setContentOwned (content.get(), true);
+        centreWithSize (content->getWidth(), content->getHeight() + getTitleBarHeight());
+        setVisible (true);
+        toFront (true);
+    }
+
+    void closeButtonPressed() override
+    {
+        setVisible (false);
+        // Self-destruct
+        juce::MessageManager::callAsync ([this]() { delete this; });
+    }
+
+private:
+    class ContentComponent : public juce::Component
+    {
+    public:
+        ContentComponent (int successCount, int totalFiles, int failedCount,
+                          const juce::String& outputPath, double totalTimeSeconds,
+                          std::function<void()> onClose,
+                          std::function<void()> onOpenFolder)
+            : closeCallback (onClose), openCallback (onOpenFolder)
+        {
+            // Status icon (success or partial)
+            bool allSuccess = (successCount == totalFiles && failedCount == 0);
+            statusColour = allSuccess ? PremiumLookAndFeel::Colours::active
+                                       : PremiumLookAndFeel::Colours::solo;
+
+            // Summary text
+            int mins = (int) totalTimeSeconds / 60;
+            int secs = (int) totalTimeSeconds % 60;
+
+            summaryLabel.setText (juce::String (successCount) + " of " + juce::String (totalFiles) + " files processed",
+                                  juce::dontSendNotification);
+            summaryLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+            summaryLabel.setFont (juce::FontOptions (18.0f).withStyle ("Bold"));
+            summaryLabel.setJustificationType (juce::Justification::centred);
+            addAndMakeVisible (summaryLabel);
+
+            // Time label
+            timeLabel.setText ("Time: " + juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2),
+                               juce::dontSendNotification);
+            timeLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+            timeLabel.setFont (juce::FontOptions (13.0f));
+            timeLabel.setJustificationType (juce::Justification::centred);
+            addAndMakeVisible (timeLabel);
+
+            // Failed files label (if any)
+            if (failedCount > 0)
+            {
+                failedLabel.setText (juce::String (failedCount) + " file(s) failed",
+                                     juce::dontSendNotification);
+                failedLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::mute);
+                failedLabel.setFont (juce::FontOptions (13.0f));
+                failedLabel.setJustificationType (juce::Justification::centred);
+                addAndMakeVisible (failedLabel);
+            }
+
+            // Output path label
+            pathTitleLabel.setText ("Output folder:", juce::dontSendNotification);
+            pathTitleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+            pathTitleLabel.setFont (juce::FontOptions (12.0f));
+            addAndMakeVisible (pathTitleLabel);
+
+            pathLabel.setText (outputPath, juce::dontSendNotification);
+            pathLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+            pathLabel.setColour (juce::Label::backgroundColourId, PremiumLookAndFeel::Colours::bgDark);
+            pathLabel.setFont (juce::FontOptions (11.0f));
+            pathLabel.setJustificationType (juce::Justification::centredLeft);
+            addAndMakeVisible (pathLabel);
+
+            // Buttons
+            openFolderButton.setButtonText ("Open Folder");
+            openFolderButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent.darker (0.2f));
+            openFolderButton.onClick = openCallback;
+            addAndMakeVisible (openFolderButton);
+
+            closeButton.setButtonText ("Close");
+            closeButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+            closeButton.onClick = closeCallback;
+            addAndMakeVisible (closeButton);
+
+            setSize (420, failedCount > 0 ? 240 : 220);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (PremiumLookAndFeel::Colours::bgMid);
+
+            // Success/warning icon at top
+            auto iconBounds = juce::Rectangle<float> (getWidth() / 2.0f - 25.0f, 15.0f, 50.0f, 50.0f);
+
+            // Glow
+            g.setColour (statusColour.withAlpha (0.2f));
+            g.fillEllipse (iconBounds.expanded (6.0f));
+
+            // Circle
+            g.setColour (statusColour);
+            g.fillEllipse (iconBounds);
+
+            // Checkmark or warning symbol
+            g.setColour (PremiumLookAndFeel::Colours::bgDark);
+            g.setFont (juce::FontOptions (28.0f).withStyle ("Bold"));
+            g.drawText ("OK", iconBounds.toNearestInt(), juce::Justification::centred);
+        }
+
+        void resized() override
+        {
+            auto bounds = getLocalBounds();
+
+            // Icon space at top
+            bounds.removeFromTop (70);
+
+            // Summary
+            summaryLabel.setBounds (bounds.removeFromTop (26));
+
+            // Time
+            timeLabel.setBounds (bounds.removeFromTop (20));
+
+            // Failed (if visible)
+            if (failedLabel.isVisible())
+                failedLabel.setBounds (bounds.removeFromTop (20));
+
+            bounds.removeFromTop (10);
+
+            // Path section
+            auto pathSection = bounds.removeFromTop (45).reduced (20, 0);
+            pathTitleLabel.setBounds (pathSection.removeFromTop (16));
+            pathLabel.setBounds (pathSection);
+
+            bounds.removeFromTop (10);
+
+            // Buttons at bottom
+            auto buttonArea = bounds.removeFromTop (40).reduced (20, 0);
+            int buttonWidth = 100;
+            int spacing = 10;
+            int totalButtonWidth = buttonWidth * 2 + spacing;
+            int startX = (buttonArea.getWidth() - totalButtonWidth) / 2;
+
+            openFolderButton.setBounds (buttonArea.getX() + startX, buttonArea.getY(), buttonWidth, 34);
+            closeButton.setBounds (buttonArea.getX() + startX + buttonWidth + spacing, buttonArea.getY(), buttonWidth, 34);
+        }
+
+    private:
+        std::function<void()> closeCallback;
+        std::function<void()> openCallback;
+        juce::Colour statusColour;
+
+        juce::Label summaryLabel;
+        juce::Label timeLabel;
+        juce::Label failedLabel;
+        juce::Label pathTitleLabel;
+        juce::Label pathLabel;
+        juce::TextButton openFolderButton;
+        juce::TextButton closeButton;
+    };
+
+    std::unique_ptr<ContentComponent> content;
+    std::function<void()> openFolderCallback;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BatchCompleteDialog)
+};

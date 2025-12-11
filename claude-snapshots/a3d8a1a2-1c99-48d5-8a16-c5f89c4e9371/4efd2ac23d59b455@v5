@@ -1,0 +1,363 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+StemperatorProcessor::StemperatorProcessor()
+#if JucePlugin_Build_Standalone
+    // Standalone mode: no live input needed, just file processing
+    : AudioProcessor (BusesProperties()
+                      .withOutput ("Output", juce::AudioChannelSet::stereo(), true)),
+#else
+    // Plugin mode: multi-output for DAW stem routing
+    : AudioProcessor (BusesProperties()
+                      .withInput  ("Input",  juce::AudioChannelSet::stereo(), true)
+                      .withOutput ("Vocals", juce::AudioChannelSet::stereo(), true)
+                      .withOutput ("Drums",  juce::AudioChannelSet::stereo(), true)
+                      .withOutput ("Bass",   juce::AudioChannelSet::stereo(), true)
+                      .withOutput ("Other",  juce::AudioChannelSet::stereo(), true)),
+#endif
+      parameters (*this, nullptr, "Stemperator", createParameterLayout())
+{
+    // Initialize atomic levels
+    for (auto& level : stemLevels)
+        level.store (0.0f);
+
+    // Register parameter listeners
+    parameters.addParameterListener ("vocalsGain", this);
+    parameters.addParameterListener ("drumsGain", this);
+    parameters.addParameterListener ("bassGain", this);
+    parameters.addParameterListener ("otherGain", this);
+    parameters.addParameterListener ("masterGain", this);
+}
+
+StemperatorProcessor::~StemperatorProcessor()
+{
+    parameters.removeParameterListener ("vocalsGain", this);
+    parameters.removeParameterListener ("drumsGain", this);
+    parameters.removeParameterListener ("bassGain", this);
+    parameters.removeParameterListener ("otherGain", this);
+    parameters.removeParameterListener ("masterGain", this);
+}
+
+juce::AudioProcessorValueTreeState::ParameterLayout StemperatorProcessor::createParameterLayout()
+{
+    std::vector<std::unique_ptr<juce::RangedAudioParameter>> params;
+
+    // Stem gain controls (dB)
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "vocalsGain", "Vocals", juce::NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (v, 1) + " dB"; }));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "drumsGain", "Drums", juce::NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (v, 1) + " dB"; }));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bassGain", "Bass", juce::NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (v, 1) + " dB"; }));
+
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "otherGain", "Other", juce::NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (v, 1) + " dB"; }));
+
+    // Mute/Solo
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("vocalsMute", "Vocals Mute", false));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("drumsMute", "Drums Mute", false));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("bassMute", "Bass Mute", false));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("otherMute", "Other Mute", false));
+
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("vocalsSolo", "Vocals Solo", false));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("drumsSolo", "Drums Solo", false));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("bassSolo", "Bass Solo", false));
+    params.push_back (std::make_unique<juce::AudioParameterBool> ("otherSolo", "Other Solo", false));
+
+    // Master gain
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "masterGain", "Master", juce::NormalisableRange<float> (-60.0f, 12.0f, 0.1f), 0.0f,
+        juce::String(), juce::AudioProcessorParameter::genericParameter,
+        [] (float v, int) { return juce::String (v, 1) + " dB"; }));
+
+    // Separation quality
+    params.push_back (std::make_unique<juce::AudioParameterChoice> (
+        "quality", "Quality", juce::StringArray { "Fast", "Balanced", "Best" }, 1));
+
+    // Focus controls for fine-tuning separation
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "vocalsFocus", "Vocals Focus", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "bassCutoff", "Bass Cutoff", juce::NormalisableRange<float> (60.0f, 300.0f, 1.0f), 150.0f));
+    params.push_back (std::make_unique<juce::AudioParameterFloat> (
+        "drumSensitivity", "Drum Sensitivity", juce::NormalisableRange<float> (0.0f, 100.0f, 1.0f), 50.0f));
+
+    return { params.begin(), params.end() };
+}
+
+void StemperatorProcessor::prepareToPlay (double sampleRate, int samplesPerBlock)
+{
+    currentSampleRate = sampleRate;
+    currentBlockSize = samplesPerBlock;
+
+    separator.prepare (sampleRate, samplesPerBlock);
+
+    // Initialize smoothed values
+    for (int i = 0; i < NumStems; ++i)
+    {
+        stemGains[i].reset (sampleRate, 0.02);  // 20ms smoothing
+        stemGains[i].setCurrentAndTargetValue (1.0f);
+    }
+    masterGain.reset (sampleRate, 0.02);
+    masterGain.setCurrentAndTargetValue (1.0f);
+}
+
+void StemperatorProcessor::releaseResources()
+{
+    separator.reset();
+}
+
+bool StemperatorProcessor::isBusesLayoutSupported (const BusesLayout& layouts) const
+{
+    // Input must be stereo
+    if (layouts.getMainInputChannelSet() != juce::AudioChannelSet::stereo())
+        return false;
+
+    // All outputs must be stereo
+    for (int i = 0; i < NumStems; ++i)
+    {
+        if (layouts.getChannelSet (false, i) != juce::AudioChannelSet::stereo())
+            return false;
+    }
+
+    return true;
+}
+
+void StemperatorProcessor::processBlock (juce::AudioBuffer<float>& buffer, juce::MidiBuffer&)
+{
+    juce::ScopedNoDenormals noDenormals;
+
+#if JucePlugin_Build_Standalone
+    // In standalone mode, get audio from playback source and apply spectral separation preview
+    if (playbackSource != nullptr)
+    {
+        // Get audio from the playback source
+        juce::AudioSourceChannelInfo info (&buffer, 0, buffer.getNumSamples());
+        playbackSource->getNextAudioBlock (info);
+
+        // Get level for metering
+        float inLevel = 0.0f;
+        for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+            inLevel = std::max (inLevel, buffer.getMagnitude (ch, 0, buffer.getNumSamples()));
+        inputLevel.store (inLevel);
+
+        // Get parameters for spectral separation
+        float bassCutoff = parameters.getRawParameterValue ("bassCutoff")->load();
+        float vocalsFocus = parameters.getRawParameterValue ("vocalsFocus")->load();
+        float drumSens = parameters.getRawParameterValue ("drumSensitivity")->load();
+
+        // Update separator parameters
+        separator.setBassCutoff (bassCutoff);
+        separator.setVocalsFocus (vocalsFocus / 100.0f);
+        separator.setDrumSensitivity (drumSens / 100.0f);
+
+        // Process spectral separation
+        separator.process (buffer);
+        auto& stems = separator.getStems();
+
+        // Get mute/solo states
+        bool mutes[NumStems] = {
+            parameters.getRawParameterValue ("vocalsMute")->load() > 0.5f,
+            parameters.getRawParameterValue ("drumsMute")->load() > 0.5f,
+            parameters.getRawParameterValue ("bassMute")->load() > 0.5f,
+            parameters.getRawParameterValue ("otherMute")->load() > 0.5f
+        };
+
+        bool solos[NumStems] = {
+            parameters.getRawParameterValue ("vocalsSolo")->load() > 0.5f,
+            parameters.getRawParameterValue ("drumsSolo")->load() > 0.5f,
+            parameters.getRawParameterValue ("bassSolo")->load() > 0.5f,
+            parameters.getRawParameterValue ("otherSolo")->load() > 0.5f
+        };
+
+        bool anySolo = solos[0] || solos[1] || solos[2] || solos[3];
+
+        // Get gain values (convert from dB)
+        float gains[NumStems] = {
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("vocalsGain")->load()),
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("drumsGain")->load()),
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("bassGain")->load()),
+            juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("otherGain")->load())
+        };
+
+        float master = juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("masterGain")->load());
+
+        // Mix stems to output based on mute/solo/gain
+        buffer.clear();
+        const int numSamples = buffer.getNumSamples();
+        const int numChannels = std::min (buffer.getNumChannels(), 2);
+
+        for (int stem = 0; stem < NumStems; ++stem)
+        {
+            bool shouldPlay = anySolo ? solos[stem] : !mutes[stem];
+            float gain = shouldPlay ? gains[stem] * master : 0.0f;
+
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                if (stems[stem].getNumChannels() > ch)
+                {
+                    buffer.addFrom (ch, 0, stems[stem], ch, 0, numSamples, gain);
+                }
+            }
+
+            // Update level meter
+            float level = 0.0f;
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                if (stems[stem].getNumChannels() > ch)
+                    level = std::max (level, stems[stem].getMagnitude (ch, 0, numSamples));
+            }
+            stemLevels[stem].store (level * gain);
+        }
+
+        return;
+    }
+    else
+    {
+        // No playback source, output silence
+        buffer.clear();
+        inputLevel.store (0.0f);
+        for (int i = 0; i < NumStems; ++i)
+            stemLevels[i].store (0.0f);
+        return;
+    }
+#endif
+
+    // Plugin mode: Real-time separation processing
+    // Get input level for metering
+    float inLevel = 0.0f;
+    for (int ch = 0; ch < buffer.getNumChannels(); ++ch)
+        inLevel = std::max (inLevel, buffer.getMagnitude (ch, 0, buffer.getNumSamples()));
+    inputLevel.store (inLevel);
+
+    // Get parameters
+    float bassCutoff = parameters.getRawParameterValue ("bassCutoff")->load();
+    float vocalsFocus = parameters.getRawParameterValue ("vocalsFocus")->load();
+    float drumSens = parameters.getRawParameterValue ("drumSensitivity")->load();
+
+    // Update separator parameters
+    separator.setBassCutoff (bassCutoff);
+    separator.setVocalsFocus (vocalsFocus / 100.0f);
+    separator.setDrumSensitivity (drumSens / 100.0f);
+
+    // Process separation
+    separator.process (buffer);
+
+    // Get separated stems
+    auto& stems = separator.getStems();
+
+    // Get mute/solo states
+    bool mutes[NumStems] = {
+        parameters.getRawParameterValue ("vocalsMute")->load() > 0.5f,
+        parameters.getRawParameterValue ("drumsMute")->load() > 0.5f,
+        parameters.getRawParameterValue ("bassMute")->load() > 0.5f,
+        parameters.getRawParameterValue ("otherMute")->load() > 0.5f
+    };
+
+    bool solos[NumStems] = {
+        parameters.getRawParameterValue ("vocalsSolo")->load() > 0.5f,
+        parameters.getRawParameterValue ("drumsSolo")->load() > 0.5f,
+        parameters.getRawParameterValue ("bassSolo")->load() > 0.5f,
+        parameters.getRawParameterValue ("otherSolo")->load() > 0.5f
+    };
+
+    bool anySolo = solos[0] || solos[1] || solos[2] || solos[3];
+
+    // Get gain values (convert from dB)
+    float gains[NumStems] = {
+        juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("vocalsGain")->load()),
+        juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("drumsGain")->load()),
+        juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("bassGain")->load()),
+        juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("otherGain")->load())
+    };
+
+    float master = juce::Decibels::decibelsToGain (parameters.getRawParameterValue ("masterGain")->load());
+
+    // Route stems to outputs
+    const int numSamples = buffer.getNumSamples();
+
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        // Determine if this stem should be audible
+        bool shouldPlay = anySolo ? solos[stem] : !mutes[stem];
+        float gain = shouldPlay ? gains[stem] * master : 0.0f;
+
+        // Get output bus for this stem
+        auto* outputBus = getBus (false, stem);
+        if (outputBus == nullptr || !outputBus->isEnabled())
+            continue;
+
+        int outputStartChannel = getChannelIndexInProcessBlockBuffer (false, stem, 0);
+
+        // Copy stem to output with gain
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            int outCh = outputStartChannel + ch;
+            if (outCh < buffer.getNumChannels() && stems[stem].getNumChannels() > ch)
+            {
+                buffer.copyFrom (outCh, 0, stems[stem], ch, 0, numSamples);
+                buffer.applyGain (outCh, 0, numSamples, gain);
+            }
+        }
+
+        // Update level meter
+        float level = 0.0f;
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            int outCh = outputStartChannel + ch;
+            if (outCh < buffer.getNumChannels())
+                level = std::max (level, buffer.getMagnitude (outCh, 0, numSamples));
+        }
+        stemLevels[stem].store (level * gain);
+    }
+}
+
+juce::AudioProcessorEditor* StemperatorProcessor::createEditor()
+{
+    return new StemperatorEditor (*this);
+}
+
+void StemperatorProcessor::getStateInformation (juce::MemoryBlock& destData)
+{
+    auto state = parameters.copyState();
+    std::unique_ptr<juce::XmlElement> xml (state.createXml());
+    copyXmlToBinary (*xml, destData);
+}
+
+void StemperatorProcessor::setStateInformation (const void* data, int sizeInBytes)
+{
+    std::unique_ptr<juce::XmlElement> xml (getXmlFromBinary (data, sizeInBytes));
+    if (xml && xml->hasTagName (parameters.state.getType()))
+        parameters.replaceState (juce::ValueTree::fromXml (*xml));
+}
+
+void StemperatorProcessor::parameterChanged (const juce::String& parameterID, float newValue)
+{
+    // Handle parameter changes if needed
+    juce::ignoreUnused (parameterID, newValue);
+}
+
+void StemperatorProcessor::setPlaybackSource (juce::AudioSource* source)
+{
+    playbackSource = source;
+    if (source != nullptr)
+    {
+        source->prepareToPlay ((int) currentBlockSize, currentSampleRate);
+        playbackBuffer.setSize (2, currentBlockSize);
+    }
+}
+
+juce::AudioProcessor* JUCE_CALLTYPE createPluginFilter()
+{
+    return new StemperatorProcessor();
+}

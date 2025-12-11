@@ -1,0 +1,122 @@
+#include "Source/GPU/GPUBackend.h"
+#include "Source/GPU/GPUNoiseReduction.h"
+#include <iostream>
+
+int main()
+{
+    std::cout << "=== GPU Backend Test ===" << std::endl;
+
+    // Test 1: Initialize GPU Backend
+    std::cout << "\n1. Testing GPU Backend Initialization..." << std::endl;
+    if (GPUBackend::initialize())
+    {
+        std::cout << "   ✓ GPU Backend initialized successfully" << std::endl;
+
+        auto deviceInfo = GPUBackend::getDeviceInfo();
+        std::cout << "   Backend: " << deviceInfo.backendName << std::endl;
+        std::cout << "   Device: " << deviceInfo.name << std::endl;
+        std::cout << "   Vendor: " << deviceInfo.vendor << std::endl;
+        std::cout << "   Memory: " << (deviceInfo.totalMemory / (1024*1024)) << " MB" << std::endl;
+        std::cout << "   Compute Units: " << deviceInfo.computeUnits << std::endl;
+    }
+    else
+    {
+        std::cout << "   ✗ GPU Backend initialization failed" << std::endl;
+        std::cout << "   Error: " << GPUBackend::getLastError() << std::endl;
+        return 1;
+    }
+
+    // Test 2: GPU Buffer Allocation
+    std::cout << "\n2. Testing GPU Buffer Allocation..." << std::endl;
+    GPUBackend::GPUBuffer testBuffer;
+    size_t bufferSize = 1024 * 1024; // 1MB
+    if (testBuffer.allocate(bufferSize))
+    {
+        std::cout << "   ✓ GPU Buffer allocated: " << bufferSize << " bytes" << std::endl;
+
+        // Test upload/download
+        std::vector<float> testData(bufferSize / sizeof(float), 1.0f);
+        if (testBuffer.upload(testData.data(), bufferSize))
+        {
+            std::cout << "   ✓ Data uploaded to GPU" << std::endl;
+
+            std::vector<float> readbackData(bufferSize / sizeof(float), 0.0f);
+            if (testBuffer.download(readbackData.data(), bufferSize))
+            {
+                std::cout << "   ✓ Data downloaded from GPU" << std::endl;
+
+                // Verify data
+                bool dataCorrect = true;
+                for (size_t i = 0; i < 10; ++i)
+                {
+                    if (readbackData[i] != 1.0f)
+                    {
+                        dataCorrect = false;
+                        break;
+                    }
+                }
+
+                if (dataCorrect)
+                    std::cout << "   ✓ Data verification passed" << std::endl;
+                else
+                    std::cout << "   ✗ Data verification failed" << std::endl;
+            }
+            else
+            {
+                std::cout << "   ✗ Data download failed" << std::endl;
+            }
+        }
+        else
+        {
+            std::cout << "   ✗ Data upload failed" << std::endl;
+        }
+    }
+    else
+    {
+        std::cout << "   ✗ GPU Buffer allocation failed" << std::endl;
+    }
+
+    // Test 3: GPU FFT
+    std::cout << "\n3. Testing GPU FFT..." << std::endl;
+    GPUBackend::GPUFFT fft;
+    int fftSize = 2048;
+    if (fft.createPlan(fftSize, 1))
+    {
+        std::cout << "   ✓ FFT plan created (size: " << fftSize << ")" << std::endl;
+    }
+    else
+    {
+        std::cout << "   ✗ FFT plan creation failed" << std::endl;
+    }
+
+    // Test 4: GPU Noise Reduction
+    std::cout << "\n4. Testing GPU Noise Reduction..." << std::endl;
+    GPUNoiseReduction noiseReduction;
+
+    juce::dsp::ProcessSpec spec;
+    spec.sampleRate = 48000.0;
+    spec.numChannels = 2;
+    spec.maximumBlockSize = 512;
+
+    noiseReduction.prepare(spec);
+
+    if (noiseReduction.isUsingGPU())
+    {
+        std::cout << "   ✓ GPU Noise Reduction initialized" << std::endl;
+        std::cout << "   GPU Info: " << noiseReduction.getGPUInfo() << std::endl;
+    }
+    else
+    {
+        std::cout << "   ⚠ GPU Noise Reduction using CPU fallback" << std::endl;
+    }
+
+    // Cleanup
+    std::cout << "\n5. Cleaning up..." << std::endl;
+    testBuffer.release();
+    fft.release();
+    GPUBackend::shutdown();
+    std::cout << "   ✓ GPU resources released" << std::endl;
+
+    std::cout << "\n=== All Tests Complete ===" << std::endl;
+    return 0;
+}

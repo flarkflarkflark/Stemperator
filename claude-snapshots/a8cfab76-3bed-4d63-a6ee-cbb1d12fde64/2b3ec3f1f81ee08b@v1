@@ -1,0 +1,365 @@
+#include "StemSeparator.h"
+#include <cmath>
+
+StemSeparator::StemSeparator()
+{
+    // Initialize buffers
+    fftBuffer.resize (fftSize * 2, 0.0f);
+    spectrumL.resize (numBins);
+    spectrumR.resize (numBins);
+    spectrumMid.resize (numBins);
+    spectrumSide.resize (numBins);
+    prevMagnitude.resize (numBins, 0.0f);
+
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        stemSpectraL[stem].resize (numBins);
+        stemSpectraR[stem].resize (numBins);
+    }
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        inputBuffer[ch].resize (fftSize, 0.0f);
+        for (int stem = 0; stem < NumStems; ++stem)
+            outputBuffers[stem][ch].resize (fftSize, 0.0f);
+    }
+}
+
+StemSeparator::~StemSeparator() = default;
+
+void StemSeparator::prepare (double sr, int blockSz)
+{
+    sampleRate = sr;
+    blockSize = blockSz;
+
+    // Resize output stems
+    for (auto& stem : stems)
+        stem.setSize (2, blockSz);
+
+    reset();
+}
+
+void StemSeparator::reset()
+{
+    inputWritePos = 0;
+    outputReadPos = 0;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        std::fill (inputBuffer[ch].begin(), inputBuffer[ch].end(), 0.0f);
+        for (int stem = 0; stem < NumStems; ++stem)
+            std::fill (outputBuffers[stem][ch].begin(), outputBuffers[stem][ch].end(), 0.0f);
+    }
+
+    std::fill (prevMagnitude.begin(), prevMagnitude.end(), 0.0f);
+
+    for (auto& stem : stems)
+        stem.clear();
+}
+
+void StemSeparator::process (juce::AudioBuffer<float>& buffer)
+{
+    const int numSamples = buffer.getNumSamples();
+    const int numChannels = std::min (buffer.getNumChannels(), 2);
+
+    // Ensure stems are sized correctly
+    for (auto& stem : stems)
+    {
+        if (stem.getNumSamples() != numSamples)
+            stem.setSize (2, numSamples, false, false, true);
+        stem.clear();
+    }
+
+    // Process sample by sample with overlap-add
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Push input samples to circular buffer
+        for (int ch = 0; ch < numChannels; ++ch)
+            inputBuffer[ch][inputWritePos] = buffer.getSample (ch, i);
+
+        // Pop output samples from circular buffer
+        for (int stem = 0; stem < NumStems; ++stem)
+        {
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                stems[stem].setSample (ch, i, outputBuffers[stem][ch][outputReadPos]);
+                outputBuffers[stem][ch][outputReadPos] = 0.0f;  // Clear after reading
+            }
+        }
+
+        inputWritePos = (inputWritePos + 1) % fftSize;
+        outputReadPos = (outputReadPos + 1) % fftSize;
+
+        // Process FFT frame every hopSize samples
+        if (inputWritePos % hopSize == 0)
+        {
+            // Process each channel
+            for (int ch = 0; ch < numChannels; ++ch)
+                processFFTFrame (ch);
+
+            // Perform stem separation in frequency domain
+            separateStems();
+
+            // Reconstruct each stem
+            for (int ch = 0; ch < numChannels; ++ch)
+                reconstructStems (ch);
+        }
+    }
+}
+
+void StemSeparator::processFFTFrame (int channel)
+{
+    // Copy input to FFT buffer (from circular buffer)
+    int readPos = (inputWritePos - fftSize + fftSize) % fftSize;
+    for (int i = 0; i < fftSize; ++i)
+    {
+        fftBuffer[i] = inputBuffer[channel][(readPos + i) % fftSize];
+        fftBuffer[fftSize + i] = 0.0f;  // Clear imaginary part
+    }
+
+    // Apply window
+    window.multiplyWithWindowingTable (fftBuffer.data(), fftSize);
+
+    // Forward FFT
+    fft.performRealOnlyForwardTransform (fftBuffer.data());
+
+    // Extract spectrum
+    auto& spectrum = (channel == 0) ? spectrumL : spectrumR;
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        float real = fftBuffer[bin * 2];
+        float imag = fftBuffer[bin * 2 + 1];
+        spectrum[bin] = std::complex<float> (real, imag);
+    }
+}
+
+void StemSeparator::separateStems()
+{
+    // Calculate Mid/Side
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        spectrumMid[bin] = (spectrumL[bin] + spectrumR[bin]) * 0.5f;
+        spectrumSide[bin] = (spectrumL[bin] - spectrumR[bin]) * 0.5f;
+    }
+
+    // Frequency boundaries
+    int bassBin = freqToBin (bassCutoffHz);
+    int vocalLowBin = freqToBin (200.0f);
+    int vocalHighBin = freqToBin (4000.0f);
+
+    // Separation masks
+    std::vector<float> bassMask (numBins, 0.0f);
+    std::vector<float> vocalsMask (numBins, 0.0f);
+    std::vector<float> drumsMask (numBins, 0.0f);
+
+    // ============================================================================
+    // IMPROVED HARMONIC/PERCUSSIVE SEPARATION (HPSS) FOR DRUMS
+    // ============================================================================
+    // HPSS works by detecting:
+    // - Percussive content: vertical lines in spectrogram (broadband transients)
+    // - Harmonic content: horizontal lines (sustained tones)
+    //
+    // For real-time, we use temporal flux and spectral flatness as proxies.
+    // ============================================================================
+
+    // Calculate spectral features for drum detection
+    float totalEnergy = 0.0f;
+    float spectralFlux = 0.0f;
+    float spectralFlatness = 0.0f;
+    float geometricMean = 0.0f;
+    float arithmeticMean = 0.0f;
+
+    // First pass: calculate spectral statistics
+    for (int bin = 1; bin < numBins; ++bin)  // Skip DC
+    {
+        float currentMag = std::abs (spectrumL[bin]) + std::abs (spectrumR[bin]);
+        float prevMag = prevMagnitude[bin];
+
+        totalEnergy += currentMag;
+
+        // Spectral flux: how much did the spectrum change? (onset/transient indicator)
+        float diff = currentMag - prevMag;
+        if (diff > 0)  // Half-wave rectified flux
+            spectralFlux += diff * diff;
+
+        // For spectral flatness (geometric/arithmetic mean ratio)
+        float logMag = std::log (currentMag + 1e-10f);
+        geometricMean += logMag;
+        arithmeticMean += currentMag;
+    }
+
+    // Normalize spectral statistics
+    geometricMean = std::exp (geometricMean / (numBins - 1));
+    arithmeticMean /= (numBins - 1);
+    spectralFlatness = geometricMean / (arithmeticMean + 1e-10f);  // 0 = tonal, 1 = noise-like
+    spectralFlux = std::sqrt (spectralFlux / (numBins - 1));
+
+    // Normalize flux relative to energy (makes it invariant to overall level)
+    float normalizedFlux = spectralFlux / (totalEnergy / (numBins - 1) + 1e-10f);
+
+    // Drum detection threshold based on sensitivity
+    // Higher sensitivity = lower threshold = more content detected as drums
+    float drumThreshold = 0.3f - drumSensitivity * 0.25f;
+
+    // Global percussive indicator (high flux + high flatness = likely percussion)
+    float percussiveScore = normalizedFlux * 0.7f + spectralFlatness * 0.3f;
+    bool isPercussiveFrame = percussiveScore > drumThreshold;
+
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        float freq = binToFreq (bin);
+        float midMag = std::abs (spectrumMid[bin]);
+        float sideMag = std::abs (spectrumSide[bin]);
+        float totalMag = midMag + sideMag + 1e-10f;
+        float currentMag = std::abs (spectrumL[bin]) + std::abs (spectrumR[bin]);
+        float prevMag = prevMagnitude[bin];
+
+        // Bass mask: low-pass with smooth rolloff
+        if (bin <= bassBin)
+        {
+            float rolloff = 1.0f - (float) bin / (float) bassBin * 0.3f;
+            bassMask[bin] = rolloff;
+        }
+        else if (bin < bassBin * 1.5f)
+        {
+            float t = (float) (bin - bassBin) / (float) (bassBin * 0.5f);
+            bassMask[bin] = 1.0f - t;
+        }
+
+        // Vocals mask: center-panned content in vocal frequency range
+        float centerWeight = midMag / totalMag;
+        if (bin >= vocalLowBin && bin <= vocalHighBin)
+        {
+            float vocalWeight = centerWeight * vocalsFocus + (1.0f - vocalsFocus) * 0.5f;
+            vocalsMask[bin] = vocalWeight;
+        }
+
+        // ====================================================================
+        // IMPROVED DRUM DETECTION
+        // ====================================================================
+        // Combine multiple indicators:
+        // 1. Per-bin spectral flux (onset detection)
+        // 2. Global percussive frame indicator
+        // 3. Frequency-based weighting (drums are typically 50-8000 Hz)
+        // ====================================================================
+
+        // Per-bin onset detection (spectral flux)
+        float binFlux = std::max (0.0f, currentMag - prevMag);
+        float binOnset = binFlux / (currentMag + 1e-10f);
+
+        // Frequency weighting for drums
+        float drumFreqWeight = 0.0f;
+        if (freq >= 50.0f && freq <= 200.0f)
+        {
+            // Kick drum region - strongest weighting
+            drumFreqWeight = 1.0f;
+        }
+        else if (freq >= 200.0f && freq <= 1000.0f)
+        {
+            // Snare body region
+            drumFreqWeight = 0.9f;
+        }
+        else if (freq >= 1000.0f && freq <= 5000.0f)
+        {
+            // Snare crack / hi-hat region
+            drumFreqWeight = 0.7f;
+        }
+        else if (freq >= 5000.0f && freq <= 12000.0f)
+        {
+            // Cymbal region
+            drumFreqWeight = 0.5f;
+        }
+
+        // Combine indicators
+        float perBinScore = binOnset * 0.6f + (isPercussiveFrame ? 0.4f : 0.0f);
+
+        // Apply frequency weighting and sensitivity
+        float drumWeight = perBinScore * drumFreqWeight * drumSensitivity * 1.5f;
+
+        // Boost during detected percussive frames
+        if (isPercussiveFrame)
+            drumWeight *= 1.5f;
+
+        // Clamp to reasonable range
+        drumsMask[bin] = std::min (1.0f, drumWeight);
+
+        // Update previous magnitude with slower smoothing for better onset detection
+        prevMagnitude[bin] = currentMag * 0.7f + prevMag * 0.3f;
+    }
+
+    // Apply masks and create stem spectra
+    // IMPORTANT: Use soft masks that sum to 1.0 to preserve original level
+    // When stems are summed, they should reconstruct the original signal
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        // Calculate raw mask values
+        float rawBass = bassMask[bin];
+        float rawVocals = vocalsMask[bin];
+        float rawDrums = drumsMask[bin];
+
+        // Normalize masks to sum to 1.0
+        float totalMask = rawBass + rawVocals + rawDrums;
+        float normFactor = (totalMask > 0.01f) ? (1.0f / totalMask) : 1.0f;
+
+        // If total < 1, the remainder goes to "other"
+        float bassGain = rawBass * std::min(normFactor, 1.0f);
+        float vocalsGain = rawVocals * std::min(normFactor, 1.0f);
+        float drumsGain = rawDrums * std::min(normFactor, 1.0f);
+
+        // Clamp total to 1.0
+        float usedGain = bassGain + vocalsGain + drumsGain;
+        if (usedGain > 1.0f)
+        {
+            float scale = 1.0f / usedGain;
+            bassGain *= scale;
+            vocalsGain *= scale;
+            drumsGain *= scale;
+            usedGain = 1.0f;
+        }
+        float otherGain = 1.0f - usedGain;
+
+        // Apply masks directly to L/R channels (not mid/side)
+        // This preserves the original stereo image and energy
+        stemSpectraL[Bass][bin] = spectrumL[bin] * bassGain;
+        stemSpectraR[Bass][bin] = spectrumR[bin] * bassGain;
+
+        stemSpectraL[Vocals][bin] = spectrumL[bin] * vocalsGain;
+        stemSpectraR[Vocals][bin] = spectrumR[bin] * vocalsGain;
+
+        stemSpectraL[Drums][bin] = spectrumL[bin] * drumsGain;
+        stemSpectraR[Drums][bin] = spectrumR[bin] * drumsGain;
+
+        stemSpectraL[Other][bin] = spectrumL[bin] * otherGain;
+        stemSpectraR[Other][bin] = spectrumR[bin] * otherGain;
+    }
+}
+
+void StemSeparator::reconstructStems (int channel)
+{
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        auto& spectrum = (channel == 0) ? stemSpectraL[stem] : stemSpectraR[stem];
+
+        // Pack spectrum into FFT buffer
+        for (int bin = 0; bin < numBins; ++bin)
+        {
+            fftBuffer[bin * 2] = spectrum[bin].real();
+            fftBuffer[bin * 2 + 1] = spectrum[bin].imag();
+        }
+
+        // Inverse FFT
+        fft.performRealOnlyInverseTransform (fftBuffer.data());
+
+        // Apply window and add to output buffer (overlap-add)
+        window.multiplyWithWindowingTable (fftBuffer.data(), fftSize);
+
+        int writePos = (outputReadPos) % fftSize;
+        float normalization = 1.0f / (float) (fftSize / hopSize) * 0.5f;  // Overlap-add normalization
+
+        for (int i = 0; i < fftSize; ++i)
+        {
+            int pos = (writePos + i) % fftSize;
+            outputBuffers[stem][channel][pos] += fftBuffer[i] * normalization;
+        }
+    }
+}

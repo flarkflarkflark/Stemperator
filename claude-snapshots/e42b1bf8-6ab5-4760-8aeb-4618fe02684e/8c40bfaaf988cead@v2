@@ -1,0 +1,165 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+**Flarksiesis** is a reverse-engineered and optimized audio plugin (originally "Charsiesis" by Jakob Katz, 2006), rebuilt from scratch using JUCE 7.x framework. It's a modulated delay/flanger effect with filters and envelope following.
+
+## Build Commands
+
+### Quick Build (Arch Linux - Automated)
+```bash
+./build_arch.sh
+```
+The script handles dependencies, JUCE cloning, building, and optionally installing to `~/.vst3/`.
+
+### Manual Build
+```bash
+# Ensure JUCE is cloned in project root
+git clone --depth 1 --branch 7.0.9 https://github.com/juce-framework/JUCE.git
+
+# Configure and build
+mkdir -p build && cd build
+cmake .. -DCMAKE_BUILD_TYPE=Release
+make -j$(nproc)
+
+# Install VST3
+cp -r Flarksiesis_artefacts/Release/VST3/Flarksiesis.vst3 ~/.vst3/
+```
+
+### Platform-Specific Builds
+```bash
+# Linux
+cmake .. -G "Unix Makefiles" -DCMAKE_BUILD_TYPE=Release
+
+# Windows (Visual Studio)
+cmake .. -G "Visual Studio 17 2022"
+
+# macOS
+cmake .. -G Xcode
+```
+
+### Build Variants
+```bash
+# Debug build
+cmake .. -DCMAKE_BUILD_TYPE=Debug
+
+# Clean rebuild
+cd build && make clean && make -j$(nproc)
+```
+
+## Architecture
+
+### DSP Signal Chain
+```
+Input → Delay Line ← Feedback Path
+         ↓             ↑
+    LFO Modulation    Filters (HP + LP)
+         ↓             ↑
+    Env Follower      |
+         ↓             |
+    Output ← Mix ← Filtered Signal
+```
+
+### Code Organization
+
+**Source/PluginProcessor.h/cpp** - Audio processing logic
+- `FlarksiesisAudioProcessor`: Main processor class
+- `DelayLine`: Ring buffer with linear interpolation for smooth modulation
+- `BiquadFilter`: Direct Form I IIR filter (lowpass, highpass, bandpass, notch, allpass)
+- `LFO`: Phase accumulator oscillator (sine, triangle, square, saw, random)
+- `EnvelopeFollower`: Amplitude tracker with attack/release coefficients
+- `ChannelState`: Per-channel DSP state container
+
+**Source/PluginEditor.h/cpp** - UI implementation
+- `FlarksiesisAudioProcessorEditor`: Resizable UI (600x400 to 1800x1200)
+- Custom orange-on-black theme (#FF8800, #CC6600, #884400 on #000000)
+- `LFODisplay`: Visual LFO waveform display (inherits from `juce::Component` and `juce::Timer`)
+- Parameter controls with constraint-based responsive layout
+
+### Key DSP Implementation Details
+
+**Delay Modulation**:
+- Min delay + LFO × depth + envelope × envDepth
+- Linear interpolation for artifact-free pitch shifting
+
+**Filter Processing**:
+- Highpass (20-2000Hz) → Lowpass (200Hz-20kHz) serial chain
+- Coefficients pre-computed per block, not per sample
+
+**Performance Optimizations**:
+- Ring buffer O(1) read/write operations
+- Phase accumulator LFO (no expensive trigonometry per sample)
+- Denormal prevention in filters
+- SIMD-friendly data layout
+
+### Parameters (11 total)
+- Min Delay (0.1-50ms)
+- LFO Depth
+- LFO Rate (0.01-20 Hz)
+- Feedback (0-99%)
+- Mix (dry/wet)
+- Lowpass Filter (frequency + resonance)
+- Highpass Filter (frequency + resonance)
+- Envelope Follower (decay modes: fast/normal/slow)
+- Envelope Depth
+
+## Known Issues & Fixes
+
+### Timer Inheritance Error
+If you encounter `cannot call member function 'void juce::Timer::startTimerHz(int)' without object`:
+- **Cause**: `LFODisplay` component must inherit from both `juce::Component` and `juce::Timer`
+- **Fix**: See `TIMER_FIX.md` or use the fixed header in `PluginEditor_FIXED.h`
+
+### Missing JUCE
+CMake will fail with clear error message if JUCE subdirectory doesn't exist. Clone JUCE 7.0.9 to project root.
+
+### Logo Resource
+Plugin builds with or without logo. If `Resources/flark_logo.png` exists, it will be embedded via `juce_add_binary_data()`. Otherwise, logo section is omitted (controlled by `FLARKSIESIS_HAS_LOGO` define).
+
+## Plugin Formats
+
+- **VST3**: Primary format, cross-platform
+- **Standalone**: Standalone application (for testing)
+- **LV2**: Optional (edit CMakeLists.txt `FORMATS` line and install `lv2` package)
+- **AU**: macOS only (add to `FORMATS` for Audio Units)
+
+## Development Notes
+
+### When Modifying DSP Code
+- All DSP state is per-channel (see `ChannelState` struct)
+- Filters use Direct Form I (numerically stable, prevents denormals)
+- LFO is shared across channels for correlated stereo modulation
+- Always test with various sample rates (44.1k, 48k, 96k)
+
+### When Modifying UI Code
+- UI uses constraint-based resizing with min/max bounds
+- All coordinates are proportional to window size
+- Colors are defined in `PluginEditor.cpp` constructor
+- `LFODisplay` must inherit from `juce::Timer` for animation (30Hz refresh)
+- Logo rendering is conditional on `FLARKSIESIS_HAS_LOGO`
+
+### Parameter Management
+- All parameters stored in `apvts` (AudioProcessorValueTreeState)
+- Parameter layout defined in `createParameterLayout()`
+- Use logarithmic scaling for frequency parameters
+- Automation is handled automatically by JUCE framework
+
+## Testing
+
+Build standalone application for quick DSP testing:
+```bash
+./build/Flarksiesis_artefacts/Release/Standalone/Flarksiesis
+```
+
+Install VST3 and test in DAW:
+```bash
+cp -r build/Flarksiesis_artefacts/Release/VST3/Flarksiesis.vst3 ~/.vst3/
+# Rescan plugins in Reaper/Bitwig/etc.
+```
+
+## Dependencies (Arch Linux)
+```bash
+base-devel cmake alsa-lib freetype2 libx11 libxrandr libxinerama libxcursor git
+```

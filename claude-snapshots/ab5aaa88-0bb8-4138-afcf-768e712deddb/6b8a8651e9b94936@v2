@@ -1,0 +1,553 @@
+#include "gui.h"
+#include <math.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <time.h>
+
+// Matrix initialization
+void matrix_init(gui_context_t *gui) {
+    srand((unsigned int)time(NULL));
+    
+    for (int i = 0; i < MATRIX_WIDTH; ++i) {
+        gui->columns[i].x = i;
+        gui->columns[i].y = -rand() % MATRIX_HEIGHT;
+        gui->columns[i].speed = 0.5f + (rand() % 100) / 100.0f;
+        gui->columns[i].current_char = MATRIX_CHARS[rand() % (sizeof(MATRIX_CHARS) - 1)];
+        gui->columns[i].brightness = 0.0f;
+        gui->columns[i].target_brightness = 0.0f;
+    }
+    
+    gui->time_accumulator = 0.0f;
+}
+
+// Update matrix animation
+void matrix_update(gui_context_t *gui, float delta_time) {
+    gui->time_accumulator += delta_time;
+    
+    for (int i = 0; i < MATRIX_WIDTH; ++i) {
+        matrix_column_t *col = &gui->columns[i];
+        
+        // Update position
+        col->y += col->speed * delta_time * 60.0f; // Normalize to 60fps
+        
+        // Reset when off screen
+        if (col->y >= MATRIX_HEIGHT) {
+            col->y = -1;
+            col->speed = 0.5f + (rand() % 100) / 100.0f;
+            col->current_char = MATRIX_CHARS[rand() % (sizeof(MATRIX_CHARS) - 1)];
+        }
+        
+        // Update brightness based on spectrum data
+        if (gui->spectrum.spectrum[0] > 0.01f) {
+            float normalized_freq = (float)i / (float)MATRIX_WIDTH;
+            uint32_t spectrum_index = (uint32_t)(normalized_freq * (MAX_FREQUENCY_BINS - 1));
+            col->target_brightness = gui->spectrum.spectrum[spectrum_index] * 2.0f;
+        } else {
+            col->target_brightness = 0.0f;
+        }
+        
+        // Smooth brightness transition
+        col->brightness += (col->target_brightness - col->brightness) * 0.1f;
+        
+        // Change character occasionally
+        if (col->brightness > 0.5f && ((rand() % 1000) == 0)) {
+            col->current_char = MATRIX_CHARS[rand() % (sizeof(MATRIX_CHARS) - 1)];
+        }
+    }
+}
+
+// Spectrum analyzer initialization
+void spectrum_init(spectrum_analyzer_t *spectrum) {
+    memset(spectrum, 0, sizeof(spectrum_analyzer_t));
+    spectrum->sample_count = 0;
+}
+
+// Simple FFT (Fast Fourier Transform) implementation
+static void fft_r2(float *real, float *imag, int n) {
+    if (n <= 1) return;
+    
+    // Bit reversal
+    for (int i = 1, j = 0; i < n; i++) {
+        int bit = n >> 1;
+        for (; j & bit; bit >>= 1) {
+            j ^= bit;
+        }
+        j ^= bit;
+        
+        if (i < j) {
+            float temp = real[i];
+            real[i] = real[j];
+            real[j] = temp;
+            temp = imag[i];
+            imag[i] = imag[j];
+            imag[j] = temp;
+        }
+    }
+    
+    // FFT computation
+    for (int len = 2; len <= n; len <<= 1) {
+        float ang = -2.0f * M_PI / len;
+        float wlen_real = cosf(ang);
+        float wlen_imag = sinf(ang);
+        
+        for (int i = 0; i < n; i += len) {
+            float w_real = 1.0f;
+            float w_imag = 0.0f;
+            
+            for (int j = 0; j < len / 2; j++) {
+                float u_real = real[i + j];
+                float u_imag = imag[i + j];
+                float v_real = real[i + j + len / 2] * w_real - imag[i + j + len / 2] * w_imag;
+                float v_imag = real[i + j + len / 2] * w_imag + imag[i + j + len / 2] * w_real;
+                
+                real[i + j] = u_real + v_real;
+                imag[i + j] = u_imag + v_imag;
+                real[i + j + len / 2] = u_real - v_real;
+                imag[i + j + len / 2] = u_imag - v_imag;
+                
+                float temp_real = w_real * wlen_real - w_imag * wlen_imag;
+                float temp_imag = w_real * wlen_imag + w_imag * wlen_real;
+                w_real = temp_real;
+                w_imag = temp_imag;
+            }
+        }
+    }
+}
+
+// Analyze audio spectrum
+void spectrum_analyze(spectrum_analyzer_t *spectrum, const float *audio_data, uint32_t frames) {
+    if (frames < MAX_FREQUENCY_BINS) return;
+    
+    // Use Hamming window
+    static float window[MAX_FREQUENCY_BINS];
+    static bool window_initialized = false;
+    
+    if (!window_initialized) {
+        for (int i = 0; i < MAX_FREQUENCY_BINS; i++) {
+            window[i] = 0.54f - 0.46f * cosf(2.0f * M_PI * i / (MAX_FREQUENCY_BINS - 1));
+        }
+        window_initialized = true;
+    }
+    
+    // Prepare data for FFT
+    float real[MAX_FREQUENCY_BINS];
+    float imag[MAX_FREQUENCY_BINS];
+    
+    for (int i = 0; i < MAX_FREQUENCY_BINS; i++) {
+        real[i] = audio_data[i] * window[i];
+        imag[i] = 0.0f;
+    }
+    
+    // Perform FFT
+    fft_r2(real, imag, MAX_FREQUENCY_BINS);
+    
+    // Calculate magnitude spectrum
+    for (int i = 0; i < MAX_FREQUENCY_BINS / 2; i++) {
+        float magnitude = sqrtf(real[i] * real[i] + imag[i] * imag[i]) / MAX_FREQUENCY_BINS;
+        spectrum->spectrum[i] = magnitude;
+    }
+    
+    // Apply some smoothing
+    for (int i = 0; i < MAX_FREQUENCY_BINS / 2; i++) {
+        if (i > 0) {
+            spectrum->spectrum[i] = (spectrum->spectrum[i] * 0.7f) + (spectrum->spectrum[i-1] * 0.3f);
+        }
+    }
+}
+
+// Update peak values for decay effect
+void spectrum_update_peaks(spectrum_analyzer_t *spectrum) {
+    for (int i = 0; i < MAX_FREQUENCY_BINS / 2; i++) {
+        if (spectrum->spectrum[i] > spectrum->peak_values[i]) {
+            spectrum->peak_values[i] = spectrum->spectrum[i];
+        } else {
+            spectrum->peak_values[i] *= 0.95f; // Decay
+        }
+    }
+}
+
+// Handle audio data from plugin
+void gui_handle_audio_data(gui_context_t *gui, const float *audio_data, uint32_t frames) {
+    pthread_mutex_lock(&gui->mutex);
+    
+    if (frames >= MAX_FREQUENCY_BINS) {
+        spectrum_analyze(&gui->spectrum, audio_data, frames);
+        spectrum_update_peaks(&gui->spectrum);
+    }
+    
+    pthread_mutex_unlock(&gui->mutex);
+}
+
+// OpenGL initialization
+void opengl_init() {
+    glDisable(GL_DEPTH_TEST);
+    glEnable(GL_BLEND);
+    glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+}
+
+// Setup orthographic projection
+void opengl_setup_projection(uint32_t width, uint32_t height) {
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, MATRIX_WIDTH, 0, MATRIX_HEIGHT, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+    glViewport(0, 0, width, height);
+}
+
+// Clear screen with dark background
+void opengl_clear_screen() {
+    glClearColor(0.0f, 0.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+}
+
+// Draw a single character in matrix style
+void opengl_draw_character(float x, float y, float size, char c, float brightness) {
+    if (brightness <= 0.01f) return;
+    
+    // Matrix green color with brightness
+    float alpha = brightness;
+    float r = 0.0f, g = alpha, b = 0.0f;
+    
+    glColor4f(r, g, b, alpha);
+    
+    // Simple bitmap font rendering
+    glBegin(GL_QUADS);
+    glVertex2f(x, y);
+    glVertex2f(x + size, y);
+    glVertex2f(x + size, y + size);
+    glVertex2f(x, y + size);
+    glEnd();
+    
+    // Add glow effect
+    if (brightness > 0.3f) {
+        glColor4f(r * 0.5f, g * 0.5f, b * 0.5f, alpha * 0.3f);
+        for (int i = 1; i <= 2; i++) {
+            glBegin(GL_QUADS);
+            glVertex2f(x - i*0.1f, y - i*0.1f);
+            glVertex2f(x + size + i*0.1f, y - i*0.1f);
+            glVertex2f(x + size + i*0.1f, y + size + i*0.1f);
+            glVertex2f(x - i*0.1f, y + size + i*0.1f);
+            glEnd();
+        }
+    }
+}
+
+// Render the matrix visualization
+void matrix_render(gui_context_t *gui) {
+    opengl_clear_screen();
+    
+    float cell_size = 1.0f;
+    
+    for (int i = 0; i < MATRIX_WIDTH; ++i) {
+        matrix_column_t *col = &gui->columns[i];
+        
+        if (col->y >= 0 && col->y < MATRIX_HEIGHT) {
+            int y_pos = (int)col->y;
+            
+            // Draw trailing characters for glow effect
+            for (int trail = 0; trail < 5; trail++) {
+                float trail_y = y_pos - trail * 0.8f;
+                float trail_brightness = col->brightness * (1.0f - trail * 0.2f);
+                
+                if (trail_y >= 0 && trail_y < MATRIX_HEIGHT) {
+                    opengl_draw_character(col->x, trail_y, cell_size * 0.8f, 
+                                        col->current_char, trail_brightness);
+                }
+            }
+        }
+    }
+}
+
+// GUI creation
+bool gui_create(gui_context_t *gui, const clap_plugin_t *plugin, uint32_t width, uint32_t height) {
+    memset(gui, 0, sizeof(gui_context_t));
+
+    gui->width = width;
+    gui->height = height;
+    gui->plugin = plugin;
+
+    if (pthread_mutex_init(&gui->mutex, NULL) != 0) {
+        return false;
+    }
+
+    // Initialize components
+    matrix_init(gui);
+    spectrum_init(&gui->spectrum);
+
+    // Initialize knobs with positions and labels
+    gui->cutoff_knob.x = GUI_WIDTH * 0.25f;
+    gui->cutoff_knob.y = GUI_HEIGHT * 0.5f;
+    gui->cutoff_knob.radius = 60.0f;
+    gui->cutoff_knob.value = 0.5f; // Default to middle position
+    gui->cutoff_knob.label = "CUTOFF";
+    gui->cutoff_knob.dragging = false;
+
+    gui->resonance_knob.x = GUI_WIDTH * 0.5f;
+    gui->resonance_knob.y = GUI_HEIGHT * 0.5f;
+    gui->resonance_knob.radius = 60.0f;
+    gui->resonance_knob.value = 0.071f; // Default Q=0.707
+    gui->resonance_knob.label = "RESONANCE";
+    gui->resonance_knob.dragging = false;
+
+    gui->gain_knob.x = GUI_WIDTH * 0.75f;
+    gui->gain_knob.y = GUI_HEIGHT * 0.5f;
+    gui->gain_knob.radius = 60.0f;
+    gui->gain_knob.value = 0.5f; // Default to 0dB
+    gui->gain_knob.label = "GAIN";
+    gui->gain_knob.dragging = false;
+
+    gui->running = true;
+
+    printf("GUI created: %dx%d\n", width, height);
+    return true;
+}
+
+// GUI destruction
+void gui_destroy(gui_context_t *gui) {
+    gui->running = false;
+    pthread_mutex_destroy(&gui->mutex);
+}
+
+// Update GUI with audio buffer
+void gui_update(gui_context_t *gui, const float *audio_buffer, uint32_t frames, double sample_rate) {
+    if (!gui->running) return;
+    
+    // Update matrix animation
+    matrix_update(gui, 1.0f / 60.0f); // Assume 60fps
+    
+    // Store audio data for processing
+    if (audio_buffer && frames > 0) {
+        static float *audio_copy = NULL;
+        static uint32_t audio_copy_size = 0;
+        
+        if (audio_copy_size < frames) {
+            if (audio_copy) free(audio_copy);
+            audio_copy = (float *)malloc(frames * sizeof(float));
+            audio_copy_size = frames;
+        }
+        
+        if (audio_copy) {
+            memcpy(audio_copy, audio_buffer, frames * sizeof(float));
+            gui_handle_audio_data(gui, audio_copy, frames);
+        }
+    }
+}
+
+// Draw text using simple bitmap rendering
+void opengl_draw_text(float x, float y, float size, const char *text, float r, float g, float b, float a) {
+    glColor4f(r, g, b, a);
+    float cursor_x = x;
+
+    while (*text) {
+        // Simple character rendering (could be enhanced with actual font rendering)
+        glBegin(GL_QUADS);
+        glVertex2f(cursor_x, y);
+        glVertex2f(cursor_x + size * 0.6f, y);
+        glVertex2f(cursor_x + size * 0.6f, y + size);
+        glVertex2f(cursor_x, y + size);
+        glEnd();
+
+        cursor_x += size * 0.7f;
+        text++;
+    }
+}
+
+// Draw "flark" logo using vector graphics
+void opengl_draw_logo(float x, float y, float size) {
+    glColor4f(COLOR_ORANGE_R, COLOR_ORANGE_G, COLOR_ORANGE_B, 1.0f);
+
+    // Draw simplified "flark" text
+    opengl_draw_text(x, y, size, "flark", COLOR_ORANGE_R, COLOR_ORANGE_G, COLOR_ORANGE_B, 1.0f);
+}
+
+// Draw rotary knob with orange color scheme
+void opengl_draw_knob(knob_t *knob) {
+    if (!knob) return;
+
+    float x = knob->x;
+    float y = knob->y;
+    float radius = knob->radius;
+    float value = knob->value;
+
+    // Draw outer ring with tick marks
+    glColor4f(0.3f, 0.2f, 0.1f, 1.0f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(x, y);
+    for (int i = 0; i <= 360; i += 10) {
+        float angle = i * M_PI / 180.0f;
+        glVertex2f(x + cosf(angle) * (radius + 10.0f), y + sinf(angle) * (radius + 10.0f));
+    }
+    glEnd();
+
+    // Draw tick marks around knob
+    glColor4f(0.6f, 0.4f, 0.2f, 0.8f);
+    for (int i = 0; i < 11; i++) {
+        float tick_angle = (-140.0f + i * 28.0f) * M_PI / 180.0f;
+        float x1 = x + cosf(tick_angle) * (radius + 5.0f);
+        float y1 = y + sinf(tick_angle) * (radius + 5.0f);
+        float x2 = x + cosf(tick_angle) * (radius + 12.0f);
+        float y2 = y + sinf(tick_angle) * (radius + 12.0f);
+
+        glBegin(GL_LINES);
+        glVertex2f(x1, y1);
+        glVertex2f(x2, y2);
+        glEnd();
+    }
+
+    // Draw main knob body (gradient effect)
+    int segments = 64;
+    for (int ring = 0; ring < 5; ring++) {
+        float ring_radius = radius * (1.0f - ring * 0.15f);
+        float brightness = 1.0f - ring * 0.15f;
+
+        glColor4f(COLOR_ORANGE_R * brightness, COLOR_ORANGE_G * brightness, COLOR_ORANGE_B * brightness, 1.0f);
+        glBegin(GL_TRIANGLE_FAN);
+        glVertex2f(x, y);
+        for (int i = 0; i <= segments; i++) {
+            float angle = i * 2.0f * M_PI / segments;
+            glVertex2f(x + cosf(angle) * ring_radius, y + sinf(angle) * ring_radius);
+        }
+        glEnd();
+    }
+
+    // Draw pointer indicator
+    float pointer_angle = (-140.0f + value * 280.0f) * M_PI / 180.0f;
+    float pointer_x = x + cosf(pointer_angle) * (radius * 0.7f);
+    float pointer_y = y + sinf(pointer_angle) * (radius * 0.7f);
+
+    glColor4f(1.0f, 1.0f, 1.0f, 1.0f);
+    glLineWidth(3.0f);
+    glBegin(GL_LINES);
+    glVertex2f(x, y);
+    glVertex2f(pointer_x, pointer_y);
+    glEnd();
+    glLineWidth(1.0f);
+
+    // Draw center dot
+    glColor4f(0.2f, 0.15f, 0.1f, 1.0f);
+    glBegin(GL_TRIANGLE_FAN);
+    glVertex2f(x, y);
+    for (int i = 0; i <= 16; i++) {
+        float angle = i * 2.0f * M_PI / 16;
+        glVertex2f(x + cosf(angle) * 8.0f, y + sinf(angle) * 8.0f);
+    }
+    glEnd();
+
+    // Draw label
+    if (knob->label) {
+        opengl_draw_text(x - radius * 0.8f, y - radius - 30.0f, 20.0f, knob->label, 1.0f, 1.0f, 1.0f, 1.0f);
+    }
+}
+
+// Draw colorful spectrum/waveform display
+void opengl_draw_spectrum_display(gui_context_t *gui, float x, float y, float width, float height) {
+    if (!gui) return;
+
+    pthread_mutex_lock(&gui->mutex);
+
+    // Draw background grid
+    glColor4f(0.2f, 0.2f, 0.2f, 0.3f);
+    glLineWidth(1.0f);
+
+    // Vertical grid lines
+    for (int i = 0; i <= 10; i++) {
+        float grid_x = x + (i * width / 10.0f);
+        glBegin(GL_LINES);
+        glVertex2f(grid_x, y);
+        glVertex2f(grid_x, y + height);
+        glEnd();
+    }
+
+    // Horizontal grid lines
+    for (int i = 0; i <= 5; i++) {
+        float grid_y = y + (i * height / 5.0f);
+        glBegin(GL_LINES);
+        glVertex2f(x, grid_y);
+        glVertex2f(x + width, grid_y);
+        glEnd();
+    }
+
+    // Draw spectrum bars with rainbow colors
+    int num_bars = MAX_FREQUENCY_BINS / 2;
+    float bar_width = width / num_bars;
+
+    for (int i = 0; i < num_bars; i++) {
+        float magnitude = gui->spectrum.spectrum[i];
+        float bar_height = magnitude * height * 100.0f; // Scale up
+        if (bar_height > height) bar_height = height;
+
+        // Rainbow color based on frequency
+        float hue = (float)i / num_bars;
+        float r = sinf(hue * M_PI) * 0.5f + 0.5f;
+        float g = sinf((hue + 0.33f) * M_PI) * 0.5f + 0.5f;
+        float b = sinf((hue + 0.66f) * M_PI) * 0.5f + 0.5f;
+
+        glColor4f(r, g, b, 0.8f);
+
+        float bar_x = x + i * bar_width;
+        glBegin(GL_QUADS);
+        glVertex2f(bar_x, y);
+        glVertex2f(bar_x + bar_width * 0.8f, y);
+        glVertex2f(bar_x + bar_width * 0.8f, y + bar_height);
+        glVertex2f(bar_x, y + bar_height);
+        glEnd();
+    }
+
+    pthread_mutex_unlock(&gui->mutex);
+}
+
+// Render GUI with full interface
+void gui_render(gui_context_t *gui) {
+    // Set up 2D projection for UI
+    glMatrixMode(GL_PROJECTION);
+    glLoadIdentity();
+    glOrtho(0, GUI_WIDTH, 0, GUI_HEIGHT, -1, 1);
+    glMatrixMode(GL_MODELVIEW);
+    glLoadIdentity();
+
+    // Clear background
+    glClearColor(0.05f, 0.05f, 0.05f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Draw Matrix rain background (scaled to window)
+    glPushMatrix();
+    glScalef(GUI_WIDTH / (float)MATRIX_WIDTH, GUI_HEIGHT / (float)MATRIX_HEIGHT, 1.0f);
+
+    float cell_size = 1.0f;
+    for (int i = 0; i < MATRIX_WIDTH; ++i) {
+        matrix_column_t *col = &gui->columns[i];
+
+        if (col->y >= 0 && col->y < MATRIX_HEIGHT) {
+            int y_pos = (int)col->y;
+
+            for (int trail = 0; trail < 5; trail++) {
+                float trail_y = y_pos - trail * 0.8f;
+                float trail_brightness = col->brightness * (1.0f - trail * 0.2f) * 0.3f; // Dimmer for background
+
+                if (trail_y >= 0 && trail_y < MATRIX_HEIGHT) {
+                    opengl_draw_character(col->x, trail_y, cell_size * 0.8f,
+                                        col->current_char, trail_brightness);
+                }
+            }
+        }
+    }
+    glPopMatrix();
+
+    // Draw logo and title
+    opengl_draw_logo(80.0f, GUI_HEIGHT - 120.0f, 60.0f);
+    opengl_draw_text(280.0f, GUI_HEIGHT - 100.0f, 48.0f, "flark's MatrixFilter", 1.0f, 1.0f, 1.0f, 1.0f);
+
+    // Draw knobs
+    opengl_draw_knob(&gui->cutoff_knob);
+    opengl_draw_knob(&gui->resonance_knob);
+    opengl_draw_knob(&gui->gain_knob);
+
+    // Draw spectrum display at bottom
+    opengl_draw_spectrum_display(gui, 100.0f, 80.0f, GUI_WIDTH - 200.0f, 180.0f);
+
+    // Draw labels
+    opengl_draw_text(80.0f, 30.0f, 16.0f, "INPUT", 0.7f, 0.7f, 0.7f, 1.0f);
+    opengl_draw_text(GUI_WIDTH / 2 - 50.0f, 30.0f, 16.0f, "OUTPUT", 0.7f, 0.7f, 0.7f, 1.0f);
+    opengl_draw_text(GUI_WIDTH - 180.0f, 30.0f, 16.0f, "ON/OFF", 0.7f, 0.7f, 0.7f, 1.0f);
+}

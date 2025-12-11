@@ -1,0 +1,2481 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+#include "DSP/StemSeparator.h"
+#if USE_HIP || USE_OPENCL
+#include "GPU/GPUStemSeparator.h"
+#endif
+
+//==============================================================================
+// StemMixerSource - Mixes separated stems with mute/solo/volume controls
+class StemperatorEditor::StemMixerSource : public juce::PositionableAudioSource
+{
+public:
+    StemMixerSource (std::array<juce::AudioBuffer<float>, 4>& stems, StemperatorProcessor& proc)
+        : stemBuffers (stems), processor (proc)
+    {
+    }
+
+    void prepareToPlay (int samplesPerBlockExpected, double sampleRate) override
+    {
+        currentSampleRate = sampleRate;
+    }
+
+    void releaseResources() override {}
+
+    void getNextAudioBlock (const juce::AudioSourceChannelInfo& bufferToFill) override
+    {
+        bufferToFill.clearActiveBufferRegion();
+
+        if (stemBuffers[0].getNumSamples() == 0)
+            return;
+
+        auto& apvts = processor.getParameters();
+
+        // Get mute/solo states
+        std::array<bool, 4> muted, soloed;
+        bool anySoloed = false;
+
+        const char* muteIDs[] = { "vocalsMute", "drumsMute", "bassMute", "otherMute" };
+        const char* soloIDs[] = { "vocalsSolo", "drumsSolo", "bassSolo", "otherSolo" };
+        const char* gainIDs[] = { "vocalsGain", "drumsGain", "bassGain", "otherGain" };
+
+        for (int i = 0; i < 4; ++i)
+        {
+            muted[i] = apvts.getRawParameterValue (muteIDs[i])->load() > 0.5f;
+            soloed[i] = apvts.getRawParameterValue (soloIDs[i])->load() > 0.5f;
+            if (soloed[i])
+                anySoloed = true;
+        }
+
+        float masterGain = juce::Decibels::decibelsToGain (apvts.getRawParameterValue ("masterGain")->load());
+
+        int numSamples = bufferToFill.numSamples;
+        int startSample = bufferToFill.startSample;
+
+        // Calculate samples to read from stem buffers
+        juce::int64 stemStart = currentPosition;
+        juce::int64 stemEnd = stemStart + numSamples;
+
+        if (stemStart >= stemBuffers[0].getNumSamples())
+        {
+            currentPosition = 0;  // Loop back
+            stemStart = 0;
+            stemEnd = numSamples;
+        }
+
+        int samplesToRead = (int) std::min ((juce::int64) numSamples,
+                                             (juce::int64) stemBuffers[0].getNumSamples() - stemStart);
+
+        if (samplesToRead <= 0)
+            return;
+
+        // Mix stems
+        for (int stemIdx = 0; stemIdx < 4; ++stemIdx)
+        {
+            // Check if this stem should play
+            bool shouldPlay = ! muted[stemIdx];
+            if (anySoloed)
+                shouldPlay = soloed[stemIdx];
+
+            if (! shouldPlay)
+                continue;
+
+            float stemGain = juce::Decibels::decibelsToGain (
+                apvts.getRawParameterValue (gainIDs[stemIdx])->load());
+            float finalGain = stemGain * masterGain;
+
+            auto& stemBuffer = stemBuffers[stemIdx];
+            int stemChannels = stemBuffer.getNumChannels();
+            int outChannels = bufferToFill.buffer->getNumChannels();
+
+            for (int ch = 0; ch < outChannels; ++ch)
+            {
+                int srcCh = std::min (ch, stemChannels - 1);
+                bufferToFill.buffer->addFrom (ch, startSample,
+                                               stemBuffer, srcCh, (int) stemStart,
+                                               samplesToRead, finalGain);
+            }
+        }
+
+        currentPosition += samplesToRead;
+    }
+
+    void setNextReadPosition (juce::int64 newPosition) override
+    {
+        currentPosition = newPosition;
+    }
+
+    juce::int64 getNextReadPosition() const override
+    {
+        return currentPosition;
+    }
+
+    juce::int64 getTotalLength() const override
+    {
+        return stemBuffers[0].getNumSamples();
+    }
+
+    bool isLooping() const override { return looping; }
+    void setLooping (bool shouldLoop) override { looping = shouldLoop; }
+
+private:
+    std::array<juce::AudioBuffer<float>, 4>& stemBuffers;
+    StemperatorProcessor& processor;
+    juce::int64 currentPosition = 0;
+    double currentSampleRate = 44100.0;
+    bool looping = false;
+};
+
+StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
+    : AudioProcessorEditor (&p), processor (p)
+{
+    // Apply premium look and feel
+    setLookAndFeel (&premiumLookAndFeel);
+
+    // Initialize format manager for audio file loading
+    formatManager = std::make_unique<juce::AudioFormatManager>();
+    formatManager->registerBasicFormats();
+
+    // Setup menu bar for standalone mode
+    if (isStandalone())
+    {
+        commandManager.registerAllCommandsForTarget (this);
+        menuBar = std::make_unique<juce::MenuBarComponent> (this);
+        addAndMakeVisible (*menuBar);
+
+        // Setup transport controls
+        setupTransportControls();
+    }
+
+    // Create stem channels with premium colors
+    const char* names[] = { "VOCALS", "DRUMS", "BASS", "OTHER" };
+    const char* gainIDs[] = { "vocalsGain", "drumsGain", "bassGain", "otherGain" };
+    const char* muteIDs[] = { "vocalsMute", "drumsMute", "bassMute", "otherMute" };
+    const char* soloIDs[] = { "vocalsSolo", "drumsSolo", "bassSolo", "otherSolo" };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        stemChannels[i] = std::make_unique<StemChannel> (names[i], stemColours[static_cast<size_t> (i)]);
+        stemChannels[i]->attachToParameters (processor.getParameters(), gainIDs[i], muteIDs[i], soloIDs[i]);
+        addAndMakeVisible (*stemChannels[i]);
+    }
+
+    // Visualizer
+    addAndMakeVisible (visualizer);
+
+    // Master slider - vertical fader style
+    setupSlider (masterSlider, PremiumLookAndFeel::Colours::accent);
+    masterSlider.setSliderStyle (juce::Slider::LinearVertical);
+    masterSlider.setTextValueSuffix (" dB");
+
+    // Create attachment BEFORE setting other properties - it sets range and default value
+    masterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "masterGain", masterSlider);
+
+    masterLabel.setJustificationType (juce::Justification::centred);
+    masterLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+    addAndMakeVisible (masterLabel);
+
+    // Focus controls - rotary knobs
+    setupKnob (vocalsFocusSlider, vocalsFocusLabel, "VOCAL FOCUS", stemColours[0]);
+    setupKnob (bassCutoffSlider, bassCutoffLabel, "BASS CUTOFF", stemColours[2]);
+    setupKnob (drumSensSlider, drumSensLabel, "DRUM SENS", stemColours[1]);
+
+    vocalsFocusAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "vocalsFocus", vocalsFocusSlider);
+    bassCutoffAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "bassCutoff", bassCutoffSlider);
+    drumSensAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "drumSensitivity", drumSensSlider);
+
+    // Quality selector
+    qualityBox.addItem ("Fast", 1);
+    qualityBox.addItem ("Balanced", 2);
+    qualityBox.addItem ("Best", 3);
+    addAndMakeVisible (qualityBox);
+
+    qualityLabel.setJustificationType (juce::Justification::centred);
+    qualityLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+    addAndMakeVisible (qualityLabel);
+
+    qualityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        processor.getParameters(), "quality", qualityBox);
+
+    // Title - large and prominent
+    titleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+    titleLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (titleLabel);
+
+    // Subtitle - show GPU and AI status
+    juce::String subtitle = "AI-POWERED STEM SEPARATION | " + processor.getGPUInfo();
+
+    // Add Demucs status
+    if (processor.isDemucsAvailable())
+        subtitle += " | Demucs: Ready";
+
+    subtitleLabel.setText (subtitle, juce::dontSendNotification);
+    subtitleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+    subtitleLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (subtitleLabel);
+
+    // Brand label (right-aligned)
+    brandLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::accent);
+    brandLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (brandLabel);
+
+    // Initialize export stem levels
+    for (auto& level : exportStemLevels)
+        level.store (0.0f);
+
+    // Register keyboard listener for Escape to cancel
+    addKeyListener (this);
+    setWantsKeyboardFocus (true);
+
+    // Grab focus on startup so menu commands work immediately
+    grabKeyboardFocus();
+
+    // Start timer for level updates
+    startTimerHz (30);
+
+    // Resizable with wide range for small laptops to large monitors
+    setResizable (true, true);
+    setResizeLimits (600, 400, 1600, 1000);
+    setSize (850, 550);
+}
+
+StemperatorEditor::~StemperatorEditor()
+{
+    setLookAndFeel (nullptr);
+    stopTimer();
+    transportSource.setSource (nullptr);
+}
+
+//==============================================================================
+// Focus handling - ensure menu works immediately
+void StemperatorEditor::parentHierarchyChanged()
+{
+    AudioProcessorEditor::parentHierarchyChanged();
+
+    // When we get a parent (window), schedule focus grab after window is fully realized
+    if (isStandalone() && getParentComponent() != nullptr)
+    {
+        // Delay focus grab to allow window manager to finish setup
+        juce::Timer::callAfterDelay (100, [this]()
+        {
+            if (auto* peer = getPeer())
+            {
+                peer->toFront (true);
+                peer->grabFocus();
+            }
+            grabKeyboardFocus();
+        });
+    }
+}
+
+void StemperatorEditor::visibilityChanged()
+{
+    AudioProcessorEditor::visibilityChanged();
+
+    // When becoming visible, schedule focus grab
+    if (isVisible() && isStandalone())
+    {
+        juce::Timer::callAfterDelay (50, [this]()
+        {
+            grabKeyboardFocus();
+        });
+    }
+}
+
+//==============================================================================
+// Standalone detection
+bool StemperatorEditor::isStandalone() const
+{
+    return juce::PluginHostType().isInterAppAudioConnected() == false
+        && juce::JUCEApplicationBase::isStandaloneApp();
+}
+
+//==============================================================================
+// MenuBarModel implementation
+juce::StringArray StemperatorEditor::getMenuBarNames()
+{
+    return { "File", "Export", "Help" };
+}
+
+juce::PopupMenu StemperatorEditor::getMenuForIndex (int menuIndex, const juce::String&)
+{
+    juce::PopupMenu menu;
+
+    if (menuIndex == 0)  // File menu
+    {
+        menu.addCommandItem (&commandManager, cmdLoadFile);
+        menu.addCommandItem (&commandManager, cmdLoadStems);
+        menu.addSeparator();
+        menu.addCommandItem (&commandManager, cmdSeparate);
+        menu.addCommandItem (&commandManager, cmdBatchProcess);
+        menu.addSeparator();
+        menu.addCommandItem (&commandManager, cmdPlay);
+        menu.addCommandItem (&commandManager, cmdPlayStems);
+        menu.addCommandItem (&commandManager, cmdStop);
+    }
+    else if (menuIndex == 1)  // Export menu
+    {
+        menu.addCommandItem (&commandManager, cmdExportAllStems);
+        menu.addSeparator();
+        menu.addCommandItem (&commandManager, cmdExportVocals);
+        menu.addCommandItem (&commandManager, cmdExportDrums);
+        menu.addCommandItem (&commandManager, cmdExportBass);
+        menu.addCommandItem (&commandManager, cmdExportOther);
+    }
+    else if (menuIndex == 2)  // Help menu
+    {
+        menu.addCommandItem (&commandManager, cmdAbout);
+    }
+
+    return menu;
+}
+
+void StemperatorEditor::menuItemSelected (int, int)
+{
+    // Handled by command manager
+}
+
+//==============================================================================
+// ApplicationCommandTarget implementation
+void StemperatorEditor::getAllCommands (juce::Array<juce::CommandID>& commands)
+{
+    commands.addArray ({
+        cmdLoadFile,
+        cmdSeparate,
+        cmdLoadStems,
+        cmdBatchProcess,
+        cmdExportAllStems,
+        cmdExportVocals,
+        cmdExportDrums,
+        cmdExportBass,
+        cmdExportOther,
+        cmdPlay,
+        cmdStop,
+        cmdPlayStems,
+        cmdAbout
+    });
+}
+
+void StemperatorEditor::getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result)
+{
+    switch (commandID)
+    {
+        case cmdLoadFile:
+            result.setInfo ("Load Audio File...", "Load an audio file for stem separation", "File", 0);
+            result.addDefaultKeypress ('o', juce::ModifierKeys::commandModifier);
+            break;
+        case cmdSeparate:
+            result.setInfo ("Separate Into Stems", "Separate file into stems for playback", "File", 0);
+            result.addDefaultKeypress ('s', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
+            result.setActive (hasLoadedFile && ! isExporting.load());
+            break;
+        case cmdLoadStems:
+            result.setInfo ("Load Stems Folder...", "Load previously exported stem files", "File", 0);
+            result.addDefaultKeypress ('l', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
+            break;
+        case cmdBatchProcess:
+            result.setInfo ("Batch Process...", "Process multiple audio files into stems", "File", 0);
+            result.addDefaultKeypress ('b', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
+            result.setActive (! isExporting.load());
+            break;
+        case cmdExportAllStems:
+            result.setInfo ("Export All Stems...", "Export all separated stems to files", "Export", 0);
+            result.addDefaultKeypress ('e', juce::ModifierKeys::commandModifier | juce::ModifierKeys::shiftModifier);
+            result.setActive (hasLoadedFile);
+            break;
+        case cmdExportVocals:
+            result.setInfo ("Export Vocals...", "Export vocals stem", "Export", 0);
+            result.setActive (hasLoadedFile);
+            break;
+        case cmdExportDrums:
+            result.setInfo ("Export Drums...", "Export drums stem", "Export", 0);
+            result.setActive (hasLoadedFile);
+            break;
+        case cmdExportBass:
+            result.setInfo ("Export Bass...", "Export bass stem", "Export", 0);
+            result.setActive (hasLoadedFile);
+            break;
+        case cmdExportOther:
+            result.setInfo ("Export Other...", "Export other/instruments stem", "Export", 0);
+            result.setActive (hasLoadedFile);
+            break;
+        case cmdPlay:
+            result.setInfo ("Play Original", "Play the original audio file", "Transport", 0);
+            result.setActive (hasLoadedFile);
+            break;
+        case cmdPlayStems:
+            result.setInfo ("Play Stems", "Play separated stems (use mute/solo/volume controls)", "Transport", 0);
+            result.addDefaultKeypress (juce::KeyPress::spaceKey, juce::ModifierKeys::noModifiers);
+            result.setActive (hasSeparatedStems);
+            break;
+        case cmdStop:
+            result.setInfo ("Stop", "Stop playback", "Transport", 0);
+            result.setActive (hasLoadedFile || hasSeparatedStems);
+            break;
+        case cmdAbout:
+            result.setInfo ("About Stemperator", "Show application info", "Help", 0);
+            break;
+        default:
+            break;
+    }
+}
+
+bool StemperatorEditor::perform (const juce::ApplicationCommandTarget::InvocationInfo& info)
+{
+    switch (info.commandID)
+    {
+        case cmdLoadFile:
+            loadAudioFile();
+            return true;
+        case cmdSeparate:
+            separateCurrentFile();
+            return true;
+        case cmdLoadStems:
+            {
+                fileChooser = std::make_unique<juce::FileChooser> (
+                    "Select folder containing stems...",
+                    lastStemFolder.exists() ? lastStemFolder : currentAudioFile.getParentDirectory(),
+                    "",
+                    true);
+
+                fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                    [this] (const juce::FileChooser& c)
+                    {
+                        auto folder = c.getResult();
+                        if (folder != juce::File())
+                            loadStemsFromFolder (folder);
+                    });
+            }
+            return true;
+        case cmdBatchProcess:
+            batchProcessFiles();
+            return true;
+        case cmdExportAllStems:
+            exportStems (-1);
+            return true;
+        case cmdExportVocals:
+            exportStems (0);
+            return true;
+        case cmdExportDrums:
+            exportStems (1);
+            return true;
+        case cmdExportBass:
+            exportStems (2);
+            return true;
+        case cmdExportOther:
+            exportStems (3);
+            return true;
+        case cmdPlay:
+            // Stop stem playback and play original
+            transportSource.stop();
+            if (readerSource)
+            {
+                transportSource.setSource (readerSource.get(), 0, nullptr, loadedSampleRate);
+                // Connect to processor for audio output
+                if (isStandalone())
+                    processor.setPlaybackSource (&transportSource);
+            }
+            transportSource.setPosition (0.0);
+            transportSource.start();
+            return true;
+        case cmdPlayStems:
+            if (hasSeparatedStems)
+            {
+                // Switch to stem mixer playback
+                transportSource.stop();
+                if (! stemMixerSource)
+                    stemMixerSource = std::make_unique<StemMixerSource> (separatedStems, processor);
+                transportSource.setSource (stemMixerSource.get(), 0, nullptr, loadedSampleRate);
+
+                // Connect to processor for audio output
+                if (isStandalone())
+                    processor.setPlaybackSource (&transportSource);
+
+                transportSource.setPosition (0.0);
+                transportSource.start();
+            }
+            return true;
+        case cmdStop:
+            transportSource.stop();
+            transportSource.setPosition (0.0);
+            return true;
+        case cmdAbout:
+            juce::AlertWindow::showMessageBoxAsync (
+                juce::MessageBoxIconType::InfoIcon,
+                "About Stemperator",
+                "Stemperator v1.0\n\n"
+                "AI-Powered Stem Separation\n"
+                "by flarkAUDIO\n\n"
+                "Separates audio into:\n"
+                "- Vocals\n"
+                "- Drums\n"
+                "- Bass\n"
+                "- Other instruments\n\n"
+                "Use File > Separate to process,\n"
+                "then Play Stems with mute/solo/volume.");
+            return true;
+        default:
+            return false;
+    }
+}
+
+//==============================================================================
+// File handling
+void StemperatorEditor::loadAudioFile()
+{
+    // Use native file dialog with common audio formats including MP3
+    fileChooser = std::make_unique<juce::FileChooser> (
+        "Select an audio file to separate...",
+        juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+        "*.wav;*.mp3;*.flac;*.aiff;*.ogg;*.m4a;*.wma",
+        true);  // useNativeDialogs = true for speed
+
+    auto chooserFlags = juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles;
+
+    fileChooser->launchAsync (chooserFlags, [this] (const juce::FileChooser& c)
+    {
+        auto file = c.getResult();
+        if (file != juce::File())
+            loadAudioFile (file);
+    });
+}
+
+void StemperatorEditor::loadAudioFile (const juce::File& file)
+{
+    if (! file.existsAsFile())
+        return;
+
+    // Stop any current playback first to avoid race conditions
+    transportSource.stop();
+    transportSource.setSource (nullptr);
+
+    // Disconnect from processor
+    if (isStandalone())
+        processor.setPlaybackSource (nullptr);
+
+    // Clear old sources
+    readerSource.reset();
+    stemMixerSource.reset();
+
+    // Update UI immediately
+    if (fileNameLabel)
+        fileNameLabel->setText ("Loading: " + file.getFileName(), juce::dontSendNotification);
+
+    auto* reader = formatManager->createReaderFor (file);
+    if (reader != nullptr)
+    {
+        currentAudioFile = file;
+        hasLoadedFile = true;
+        loadedSampleRate = reader->sampleRate;
+
+        // Load entire file into buffer for processing
+        loadedAudioBuffer.setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+        reader->read (&loadedAudioBuffer, 0, (int) reader->lengthInSamples, 0, true, true);
+
+        // Setup transport source for playback
+        readerSource = std::make_unique<juce::AudioFormatReaderSource> (reader, true);
+        transportSource.setSource (readerSource.get(), 0, nullptr, reader->sampleRate);
+
+        // Connect transport to processor for audio output (standalone only)
+        if (isStandalone())
+            processor.setPlaybackSource (&transportSource);
+
+        // Update UI
+        if (fileNameLabel)
+            fileNameLabel->setText (file.getFileName() + " | Press Space to play", juce::dontSendNotification);
+
+        commandManager.commandStatusChanged();
+
+        // Show duration in time label
+        auto duration = loadedAudioBuffer.getNumSamples() / reader->sampleRate;
+        auto minutes = (int) (duration / 60.0);
+        auto seconds = (int) duration % 60;
+
+        if (timeLabel)
+            timeLabel->setText ("0:00 / " + juce::String (minutes) + ":" +
+                juce::String (seconds).paddedLeft ('0', 2), juce::dontSendNotification);
+
+        // Clear any previous separated stems
+        hasSeparatedStems = false;
+    }
+    else
+    {
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Load Failed",
+            "Could not load: " + file.getFileName() + "\n\n"
+            "Make sure it's a supported audio format.");
+    }
+}
+
+void StemperatorEditor::exportStems (int stemIndex)
+{
+    if (! hasLoadedFile)
+    {
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "No File Loaded",
+            "Please load an audio file first using File > Load Audio File");
+        return;
+    }
+
+    juce::String title = (stemIndex < 0) ? "Select folder for stem export" : "Save " + juce::String (StemperatorProcessor::stemNames[stemIndex]) + " stem";
+    juce::String defaultName = currentAudioFile.getFileNameWithoutExtension();
+
+    if (stemIndex < 0)
+    {
+        // Export all stems - choose folder
+        // Use openMode for directory selection (more compatible on Linux)
+        fileChooser = std::make_unique<juce::FileChooser> (
+            title,
+            currentAudioFile.getParentDirectory().getChildFile (defaultName + "_stems"),
+            "",
+            true);  // useNativeDialogs
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [this] (const juce::FileChooser& c)
+            {
+                auto folder = c.getResult();
+
+                if (folder == juce::File())
+                    return;
+
+                // Create folder if needed
+                folder.createDirectory();
+
+                // Show progress
+                if (fileNameLabel)
+                    fileNameLabel->setText ("Preparing AI separation...", juce::dontSendNotification);
+
+                // Copy data for thread safety
+                auto bufferCopy = std::make_shared<juce::AudioBuffer<float>> (loadedAudioBuffer);
+                auto sampleRate = loadedSampleRate;
+                auto inputFile = currentAudioFile;
+
+                // Get quality setting - maps to model selection
+                int qualityIndex = qualityBox.getSelectedItemIndex();
+                juce::String qualityName = qualityBox.getItemText (qualityBox.getSelectedId() - 1);
+
+                // Map quality to Demucs model
+                juce::String modelName;
+                if (qualityIndex == 0)
+                    modelName = "htdemucs";       // Fast
+                else if (qualityIndex == 1)
+                    modelName = "htdemucs";       // Balanced (same model, good balance)
+                else
+                    modelName = "htdemucs_ft";    // Best (fine-tuned, slower but better)
+
+                juce::Thread::launch ([this, folder, bufferCopy, sampleRate, inputFile, qualityName, modelName]()
+                {
+                    // Set export state
+                    isExporting.store (true);
+                    cancelExport.store (false);
+                    exportProgress.store (0.0f);
+                    for (auto& level : exportStemLevels)
+                        level.store (0.0f);
+
+                    try
+                    {
+                        auto startTime = juce::Time::getMillisecondCounterHiRes();
+
+                        const int totalSamples = bufferCopy->getNumSamples();
+                        double audioDurationSec = (double) totalSamples / sampleRate;
+                        int mins = (int) (audioDurationSec / 60.0);
+                        int secs = (int) audioDurationSec % 60;
+                        juce::String durationStr = juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2);
+
+                        // Find the Python script and venv - try multiple locations
+                        auto executableFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+                        auto executableDir = executableFile.getParentDirectory();
+
+                        // Try relative to executable (build/Stemperator_artefacts/Standalone/)
+                        auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
+
+                        auto venvPython = projectRoot.getChildFile (".venv/bin/python");
+                        auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+                        // If not found, try hardcoded development path
+                        if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
+                        {
+                            projectRoot = juce::File ("/home/flark/GIT/Stemperator");
+                            venvPython = projectRoot.getChildFile (".venv/bin/python");
+                            separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+                        }
+
+                        // Check if AI separator is available
+                        bool useAI = venvPython.existsAsFile() && separatorScript.existsAsFile();
+                        juce::String accelInfo = useAI ? "Demucs AI (" + modelName + ")" : "Spectral (AI unavailable)";
+
+                        // Debug output
+                        std::cerr << "Export All - useAI: " << (useAI ? "yes" : "no")
+                                  << " venvPython: " << venvPython.getFullPathName().toStdString() << std::endl;
+
+                        // Show initial status
+                        juce::MessageManager::callAsync ([this, accelInfo, qualityName, durationStr]()
+                        {
+                            if (fileNameLabel)
+                                fileNameLabel->setText ("Separating " + durationStr + " | " + qualityName + " | " + accelInfo + " | ESC=cancel", juce::dontSendNotification);
+                        });
+
+                        const char* stemNames[] = { "Vocals", "Drums", "Bass", "Other" };
+                        const char* stemFileNames[] = { "vocals", "drums", "bass", "other" };
+                        std::array<float, 4> peakLevels = { 0.0f, 0.0f, 0.0f, 0.0f };
+                        std::array<juce::int64, 4> fileSizes = { 0, 0, 0, 0 };
+                        int savedCount = 0;
+                        bool wasCancelled = false;
+
+                        if (useAI)
+                        {
+                            // === AI-BASED SEPARATION (Demucs) ===
+
+                            // Create a temp directory for processing
+                            auto tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                              .getChildFile ("stemperator_" + juce::String (juce::Random::getSystemRandom().nextInt64()));
+                            tempDir.createDirectory();
+
+                            // Save input audio to temp WAV file
+                            auto tempInputFile = tempDir.getChildFile ("input.wav");
+
+                            juce::MessageManager::callAsync ([this]()
+                            {
+                                if (fileNameLabel)
+                                    fileNameLabel->setText ("Saving audio for AI processing...", juce::dontSendNotification);
+                            });
+
+                            // Write input to temp file
+                            {
+                                juce::WavAudioFormat wavFormat;
+                                auto outputStream = std::make_unique<juce::FileOutputStream> (tempInputFile);
+                                if (outputStream->openedOk())
+                                {
+                                    auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                                        wavFormat.createWriterFor (
+                                            outputStream.release(),
+                                            sampleRate,
+                                            static_cast<unsigned int> (std::min (2, bufferCopy->getNumChannels())),
+                                            24, {}, 0));
+
+                                    if (writer)
+                                        writer->writeFromAudioSampleBuffer (*bufferCopy, 0, bufferCopy->getNumSamples());
+                                }
+                            }
+
+                            exportProgress.store (0.1f);
+
+                            // Check for cancel
+                            if (cancelExport.load())
+                            {
+                                wasCancelled = true;
+                                tempDir.deleteRecursively();
+                            }
+                            else
+                            {
+                                // Run AI separation via Python subprocess
+                                juce::MessageManager::callAsync ([this, modelName]()
+                                {
+                                    if (fileNameLabel)
+                                        fileNameLabel->setText ("Running Demucs AI separation (" + modelName + ")... | ESC=cancel", juce::dontSendNotification);
+                                });
+
+                                // Animate stem levels during AI processing
+                                for (int i = 0; i < 4; ++i)
+                                    exportStemLevels[i].store (0.3f);
+
+                                // Build command arguments as StringArray for proper handling of spaces
+                                juce::StringArray args;
+                                args.add (venvPython.getFullPathName());
+                                args.add (separatorScript.getFullPathName());
+                                args.add (tempInputFile.getFullPathName());
+                                args.add (tempDir.getFullPathName());
+                                args.add ("--model");
+                                args.add (modelName);
+
+                                std::cerr << "Export args: " << args.joinIntoString (" | ").toStdString() << std::endl;
+                                std::cerr << "Temp input file exists: " << (tempInputFile.existsAsFile() ? "yes" : "no")
+                                          << " size: " << tempInputFile.getSize() << std::endl;
+
+                                // Run the separation process
+                                juce::ChildProcess process;
+                                bool started = process.start (args);
+
+                                if (started)
+                                {
+                                    // Wait for completion with real progress from Python
+                                    int currentPercent = 10;
+                                    juce::String currentStage = "Starting";
+                                    juce::String processOutput;
+
+                                    while (process.isRunning())
+                                    {
+                                        // Check for cancel
+                                        if (cancelExport.load())
+                                        {
+                                            process.kill();
+                                            wasCancelled = true;
+                                            break;
+                                        }
+
+                                        // Read available output from process (progress lines)
+                                        char buffer[256];
+                                        auto bytesRead = process.readProcessOutput (buffer, sizeof (buffer) - 1);
+                                        if (bytesRead > 0)
+                                        {
+                                            buffer[bytesRead] = '\0';
+                                            processOutput += buffer;
+
+                                            // Parse progress lines: PROGRESS:<percent>:<stage>
+                                            while (processOutput.contains ("\n"))
+                                            {
+                                                auto newlinePos = processOutput.indexOf ("\n");
+                                                auto line = processOutput.substring (0, newlinePos).trim();
+                                                processOutput = processOutput.substring (newlinePos + 1);
+
+                                                if (line.startsWith ("PROGRESS:"))
+                                                {
+                                                    auto parts = juce::StringArray::fromTokens (line.substring (9), ":", "");
+                                                    if (parts.size() >= 1)
+                                                        currentPercent = parts[0].getIntValue();
+                                                    if (parts.size() >= 2)
+                                                        currentStage = parts[1];
+                                                }
+                                            }
+                                        }
+
+                                        // Update progress display
+                                        exportProgress.store (currentPercent / 100.0f);
+
+                                        // Animate stem levels based on progress
+                                        float animPhase = currentPercent / 100.0f;
+                                        for (int i = 0; i < 4; ++i)
+                                        {
+                                            float level = 0.3f + 0.4f * std::sin (animPhase * 10.0f + i * 1.5f);
+                                            exportStemLevels[i].store (std::max (0.1f, level));
+                                        }
+
+                                        double elapsed = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
+                                        int mins = (int) elapsed / 60;
+                                        int secs = (int) elapsed % 60;
+                                        juce::String status = "AI: " + juce::String (currentPercent) + "% | " + currentStage + " | "
+                                            + juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2) + " | ESC=cancel";
+
+                                        juce::MessageManager::callAsync ([this, status]()
+                                        {
+                                            if (fileNameLabel)
+                                                fileNameLabel->setText (status, juce::dontSendNotification);
+                                        });
+
+                                        juce::Thread::sleep (100);
+                                    }
+
+                                    if (! wasCancelled)
+                                    {
+                                        // Read output from Python (JSON with file paths)
+                                        juce::String output = process.readAllProcessOutput();
+                                        int exitCode = process.getExitCode();
+
+                                        if (exitCode == 0)
+                                        {
+                                            exportProgress.store (0.9f);
+
+                                            // Copy stems to output folder
+                                            juce::MessageManager::callAsync ([this]()
+                                            {
+                                                if (fileNameLabel)
+                                                    fileNameLabel->setText ("Copying stems to output folder...", juce::dontSendNotification);
+                                            });
+
+                                            juce::AudioFormatManager formatMgr;
+                                            formatMgr.registerBasicFormats();
+
+                                            // Get original filename without extension for naming stems
+                                            auto baseFileName = inputFile.getFileNameWithoutExtension();
+
+                                            for (int i = 0; i < 4; ++i)
+                                            {
+                                                auto stemSrcFile = tempDir.getChildFile (juce::String (stemFileNames[i]) + ".wav");
+                                                // Name stems as: originalfilename_stemname.wav
+                                                auto stemDstFile = folder.getChildFile (baseFileName + "_" + juce::String (stemFileNames[i]) + ".wav");
+
+                                                if (stemSrcFile.existsAsFile())
+                                                {
+                                                    // Read the stem file to get peak level
+                                                    auto* reader = formatMgr.createReaderFor (stemSrcFile);
+                                                    if (reader)
+                                                    {
+                                                        juce::AudioBuffer<float> stemBuffer ((int) reader->numChannels, (int) reader->lengthInSamples);
+                                                        reader->read (&stemBuffer, 0, (int) reader->lengthInSamples, 0, true, true);
+
+                                                        // Calculate peak
+                                                        for (int ch = 0; ch < stemBuffer.getNumChannels(); ++ch)
+                                                            peakLevels[i] = std::max (peakLevels[i], stemBuffer.getMagnitude (ch, 0, stemBuffer.getNumSamples()));
+
+                                                        delete reader;
+                                                    }
+
+                                                    // Copy file to output folder
+                                                    stemDstFile.deleteFile();
+                                                    stemSrcFile.copyFileTo (stemDstFile);
+                                                    fileSizes[i] = stemDstFile.getSize();
+                                                    savedCount++;
+
+                                                    // Update visual feedback
+                                                    exportStemLevels[i].store (std::min (1.0f, peakLevels[i] * 3.0f));
+                                                }
+                                            }
+
+                                            // Check if any stems were actually saved
+                                            if (savedCount == 0)
+                                            {
+                                                wasCancelled = true;
+
+                                                // List files in temp dir for debugging
+                                                juce::StringArray tempFiles;
+                                                for (const auto& file : tempDir.findChildFiles (juce::File::findFiles, false))
+                                                    tempFiles.add (file.getFileName());
+
+                                                juce::MessageManager::callAsync ([this, tempFiles, output]()
+                                                {
+                                                    juce::String debugInfo = "Expected stems: vocals.wav, drums.wav, bass.wav, other.wav\n";
+                                                    debugInfo += "Files found in temp dir: " + tempFiles.joinIntoString (", ") + "\n\n";
+                                                    debugInfo += "Python output:\n" + output.substring (0, 500);
+                                                    juce::AlertWindow::showMessageBoxAsync (
+                                                        juce::MessageBoxIconType::WarningIcon,
+                                                        "AI Separation Failed",
+                                                        "AI reported success but no stem files were created.\n\n" + debugInfo);
+                                                });
+                                            }
+                                        }
+                                        else
+                                        {
+                                            // AI failed - mark as cancelled to prevent success dialog
+                                            wasCancelled = true;
+
+                                            juce::MessageManager::callAsync ([this, output, exitCode]()
+                                            {
+                                                juce::AlertWindow::showMessageBoxAsync (
+                                                    juce::MessageBoxIconType::WarningIcon,
+                                                    "AI Separation Failed",
+                                                    "The AI model returned an error (exit code " + juce::String (exitCode) + ").\n\n"
+                                                    "Check that audio-separator is installed correctly.\n\n"
+                                                    "Output: " + output.substring (0, 500));
+                                            });
+                                        }
+                                    }
+                                }
+                                else
+                                {
+                                    // Failed to start process
+                                    juce::MessageManager::callAsync ([this]()
+                                    {
+                                        juce::AlertWindow::showMessageBoxAsync (
+                                            juce::MessageBoxIconType::WarningIcon,
+                                            "AI Separation Unavailable",
+                                            "Could not start the AI separation process.\n\n"
+                                            "Make sure the Python virtual environment is set up:\n"
+                                            "cd /path/to/Stemperator && python3 -m venv .venv\n"
+                                            ".venv/bin/pip install audio-separator[gpu]");
+                                    });
+                                    wasCancelled = true;
+                                }
+
+                                // Clean up temp directory
+                                tempDir.deleteRecursively();
+                            }
+                        }
+                        else
+                        {
+                            // === FALLBACK: SPECTRAL SEPARATION ===
+                            // (When AI is not available)
+
+                            const int numChannels = std::min (2, bufferCopy->getNumChannels());
+                            const int blockSize = 2048;
+                            const int totalBlocks = (totalSamples + blockSize - 1) / blockSize;
+
+#if USE_HIP || USE_OPENCL
+                            GPUStemSeparator gpuSeparator;
+                            gpuSeparator.prepare (sampleRate, blockSize);
+                            bool useGPU = gpuSeparator.isUsingGPU();
+#else
+                            bool useGPU = false;
+#endif
+                            StemSeparator cpuSeparator;
+                            cpuSeparator.prepare (sampleRate, blockSize);
+
+                            std::array<juce::AudioBuffer<float>, 4> outputStems;
+                            for (auto& stem : outputStems)
+                            {
+                                stem.setSize (numChannels, totalSamples);
+                                stem.clear();
+                            }
+
+                            int blockCount = 0;
+
+                            for (int startSample = 0; startSample < totalSamples; startSample += blockSize)
+                            {
+                                if (cancelExport.load())
+                                {
+                                    wasCancelled = true;
+                                    break;
+                                }
+
+                                int samplesToProcess = std::min (blockSize, totalSamples - startSample);
+
+                                juce::AudioBuffer<float> blockBuffer (numChannels, samplesToProcess);
+                                for (int ch = 0; ch < numChannels; ++ch)
+                                    blockBuffer.copyFrom (ch, 0, *bufferCopy, ch, startSample, samplesToProcess);
+
+                                std::array<juce::AudioBuffer<float>, 4>* stemsPtr;
+#if USE_HIP || USE_OPENCL
+                                if (useGPU)
+                                {
+                                    gpuSeparator.process (blockBuffer);
+                                    stemsPtr = &gpuSeparator.getStems();
+                                }
+                                else
+#endif
+                                {
+                                    cpuSeparator.process (blockBuffer);
+                                    stemsPtr = &cpuSeparator.getStems();
+                                }
+                                auto& stems = *stemsPtr;
+
+                                for (int stemIdx = 0; stemIdx < 4; ++stemIdx)
+                                {
+                                    int samplesToCopy = std::min (samplesToProcess, stems[stemIdx].getNumSamples());
+                                    for (int ch = 0; ch < numChannels; ++ch)
+                                    {
+                                        if (samplesToCopy > 0)
+                                        {
+                                            outputStems[stemIdx].copyFrom (ch, startSample, stems[stemIdx], ch, 0, samplesToCopy);
+                                            float peak = stems[stemIdx].getMagnitude (ch, 0, samplesToCopy);
+                                            peakLevels[stemIdx] = std::max (peakLevels[stemIdx], peak);
+                                        }
+                                    }
+                                    float currentLevel = stems[stemIdx].getMagnitude (0, 0, std::min (samplesToProcess, stems[stemIdx].getNumSamples()));
+                                    exportStemLevels[stemIdx].store (std::min (1.0f, currentLevel * 3.0f));
+                                }
+
+                                blockCount++;
+                                float progress = (float) blockCount / (float) totalBlocks;
+                                exportProgress.store (progress);
+
+                                if (blockCount % 5 == 0 || blockCount == totalBlocks)
+                                {
+                                    int percent = (int) (progress * 100.0f);
+                                    double elapsed = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
+                                    double eta = elapsed > 0.1 ? (elapsed / progress) - elapsed : 0.0;
+
+                                    juce::String status = juce::String (percent) + "% | ETA: " + juce::String ((int) eta) + "s | ESC=cancel";
+
+                                    juce::MessageManager::callAsync ([this, status]()
+                                    {
+                                        if (fileNameLabel)
+                                            fileNameLabel->setText (status, juce::dontSendNotification);
+                                    });
+                                }
+                            }
+
+                            // Save stems
+                            if (! wasCancelled)
+                            {
+                                juce::WavAudioFormat wavFormat;
+                                auto baseFileName = inputFile.getFileNameWithoutExtension();
+
+                                for (int i = 0; i < 4; ++i)
+                                {
+                                    if (outputStems[i].getNumSamples() == 0)
+                                        continue;
+
+                                    // Name stems as: originalfilename_stemname.wav
+                                    auto stemFile = folder.getChildFile (baseFileName + "_" + juce::String (stemFileNames[i]) + ".wav");
+                                    stemFile.deleteFile();
+
+                                    auto outputStream = std::make_unique<juce::FileOutputStream> (stemFile);
+                                    if (outputStream->openedOk())
+                                    {
+                                        auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                                            wavFormat.createWriterFor (
+                                                outputStream.release(),
+                                                sampleRate,
+                                                static_cast<unsigned int> (outputStems[i].getNumChannels()),
+                                                24, {}, 0));
+
+                                        if (writer)
+                                        {
+                                            writer->writeFromAudioSampleBuffer (outputStems[i], 0, outputStems[i].getNumSamples());
+                                            savedCount++;
+                                            fileSizes[i] = stemFile.getSize();
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Handle cancellation
+                        if (wasCancelled)
+                        {
+                            isExporting.store (false);
+                            juce::MessageManager::callAsync ([this]()
+                            {
+                                if (fileNameLabel)
+                                    fileNameLabel->setText ("Export cancelled", juce::dontSendNotification);
+
+                                juce::AlertWindow::showMessageBoxAsync (
+                                    juce::MessageBoxIconType::InfoIcon,
+                                    "Cancelled",
+                                    "Export was cancelled by user.");
+                            });
+                            return;
+                        }
+
+                        // Calculate processing stats
+                        double processingTime = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
+                        double audioDuration = (double) totalSamples / sampleRate;
+                        double speedMultiplier = audioDuration / processingTime;
+
+                        // Build stats string
+                        juce::String statsStr = "Separation complete!\n\n";
+                        statsStr += "Method: " + accelInfo + "\n";
+                        statsStr += "Duration: " + juce::String (audioDuration, 1) + "s processed in "
+                                 + juce::String (processingTime, 1) + "s ("
+                                 + juce::String (speedMultiplier, 2) + "x realtime)\n\n";
+                        statsStr += "Stem Statistics:\n";
+
+                        for (int i = 0; i < 4; ++i)
+                        {
+                            float peakDb = juce::Decibels::gainToDecibels (peakLevels[i], -60.0f);
+                            juce::String sizeStr = juce::File::descriptionOfSizeInBytes (fileSizes[i]);
+                            statsStr += "  " + juce::String (stemNames[i]) + ": Peak "
+                                     + juce::String (peakDb, 1) + " dB | " + sizeStr + "\n";
+                        }
+
+                        statsStr += "\nExported to:\n" + folder.getFullPathName();
+
+                        // Reset export state
+                        isExporting.store (false);
+                        for (auto& level : exportStemLevels)
+                            level.store (0.0f);
+
+                        juce::MessageManager::callAsync ([this, folder, savedCount, statsStr]()
+                        {
+                            if (fileNameLabel)
+                                fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
+
+                            // Show completion dialog with Open Folder option
+                            auto options = juce::MessageBoxOptions()
+                                .withIconType (juce::MessageBoxIconType::InfoIcon)
+                                .withTitle ("Export Complete")
+                                .withMessage (statsStr)
+                                .withButton ("OK")
+                                .withButton ("Open Folder");
+
+                            juce::AlertWindow::showAsync (options, [folder] (int result)
+                            {
+                                if (result == 1)  // "Open Folder" button (0=OK, 1=Open Folder)
+                                {
+                                    // revealToUser() doesn't always work on Linux, use xdg-open
+                                    #if JUCE_LINUX
+                                    juce::ChildProcess proc;
+                                    proc.start ("xdg-open " + folder.getFullPathName().quoted());
+                                    #else
+                                    folder.revealToUser();
+                                    #endif
+                                }
+                            });
+                        });
+                    }
+                    catch (...)
+                    {
+                        isExporting.store (false);
+                        juce::MessageManager::callAsync ([this]()
+                        {
+                            if (fileNameLabel)
+                                fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
+
+                            juce::AlertWindow::showMessageBoxAsync (
+                                juce::MessageBoxIconType::WarningIcon,
+                                "Export Failed",
+                                "An error occurred during stem separation.");
+                        });
+                    }
+                });
+            });
+    }
+    else
+    {
+        // Export single stem - use AI separation for best results
+        fileChooser = std::make_unique<juce::FileChooser> (
+            title,
+            currentAudioFile.getParentDirectory().getChildFile (
+                defaultName + "_" + StemperatorProcessor::stemNames[stemIndex] + ".wav"),
+            "*.wav",
+            true);  // useNativeDialogs
+
+        // Get quality setting for model selection
+        int qualityIndex = qualityBox.getSelectedItemIndex();
+        juce::String modelName;
+        if (qualityIndex == 0)
+            modelName = "htdemucs";       // Fast
+        else if (qualityIndex == 1)
+            modelName = "htdemucs";       // Balanced
+        else
+            modelName = "htdemucs_ft";    // Best
+
+        fileChooser->launchAsync (juce::FileBrowserComponent::saveMode,
+            [this, stemIndex, modelName] (const juce::FileChooser& c)
+            {
+                auto file = c.getResult();
+
+                if (file == juce::File())
+                    return;
+
+                // Show progress
+                if (fileNameLabel)
+                    fileNameLabel->setText ("Preparing AI separation for " + juce::String (StemperatorProcessor::stemNames[stemIndex]) + "...", juce::dontSendNotification);
+
+                auto bufferCopy = std::make_shared<juce::AudioBuffer<float>> (loadedAudioBuffer);
+                auto sampleRate = loadedSampleRate;
+
+                juce::Thread::launch ([this, stemIndex, file, bufferCopy, sampleRate, modelName]()
+                {
+                    isExporting.store (true);
+                    cancelExport.store (false);
+
+                    try
+                    {
+                        const char* stemFileNames[] = { "vocals", "drums", "bass", "other" };
+                        auto startTime = juce::Time::getMillisecondCounterHiRes();
+
+                        // Find the Python script and venv - try multiple locations
+                        auto executableFile = juce::File::getSpecialLocation (juce::File::currentExecutableFile);
+                        auto executableDir = executableFile.getParentDirectory();
+
+                        // Try relative to executable (build/Stemperator_artefacts/Standalone/)
+                        auto projectRoot = executableDir.getParentDirectory().getParentDirectory().getParentDirectory();
+
+                        auto venvPython = projectRoot.getChildFile (".venv/bin/python");
+                        auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+                        // If not found, try hardcoded development path
+                        if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
+                        {
+                            projectRoot = juce::File ("/home/flark/GIT/Stemperator");
+                            venvPython = projectRoot.getChildFile (".venv/bin/python");
+                            separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+                        }
+
+                        bool useAI = venvPython.existsAsFile() && separatorScript.existsAsFile();
+
+                        // Debug: log paths to stderr so we can see them
+                        std::cerr << "Executable: " << executableFile.getFullPathName().toStdString() << std::endl;
+                        std::cerr << "Project root: " << projectRoot.getFullPathName().toStdString() << std::endl;
+                        std::cerr << "venvPython: " << venvPython.getFullPathName().toStdString()
+                                  << " exists: " << (venvPython.existsAsFile() ? "yes" : "no") << std::endl;
+                        std::cerr << "separatorScript: " << separatorScript.getFullPathName().toStdString()
+                                  << " exists: " << (separatorScript.existsAsFile() ? "yes" : "no") << std::endl;
+                        std::cerr << "useAI: " << (useAI ? "yes" : "no") << std::endl;
+
+                        if (useAI)
+                        {
+                            // AI-based separation
+                            auto tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                              .getChildFile ("stemperator_" + juce::String (juce::Random::getSystemRandom().nextInt64()));
+                            tempDir.createDirectory();
+
+                            auto tempInputFile = tempDir.getChildFile ("input.wav");
+
+                            // Show writing status
+                            juce::MessageManager::callAsync ([this]()
+                            {
+                                if (fileNameLabel)
+                                    fileNameLabel->setText ("Writing temp audio file...", juce::dontSendNotification);
+                            });
+
+                            // Write input to temp file
+                            {
+                                juce::WavAudioFormat wavFormat;
+                                auto outputStream = std::make_unique<juce::FileOutputStream> (tempInputFile);
+                                if (outputStream->openedOk())
+                                {
+                                    auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                                        wavFormat.createWriterFor (
+                                            outputStream.release(),
+                                            sampleRate,
+                                            static_cast<unsigned int> (std::min (2, bufferCopy->getNumChannels())),
+                                            24, {}, 0));
+
+                                    if (writer)
+                                        writer->writeFromAudioSampleBuffer (*bufferCopy, 0, bufferCopy->getNumSamples());
+                                }
+                            }
+
+                            juce::MessageManager::callAsync ([this, modelName]()
+                            {
+                                if (fileNameLabel)
+                                    fileNameLabel->setText ("Running Demucs AI (" + modelName + ")... | ESC=cancel", juce::dontSendNotification);
+                            });
+
+                            // Build command arguments as StringArray for proper handling of spaces
+                            juce::StringArray args;
+                            args.add (venvPython.getFullPathName());
+                            args.add (separatorScript.getFullPathName());
+                            args.add (tempInputFile.getFullPathName());
+                            args.add (tempDir.getFullPathName());
+                            args.add ("--model");
+                            args.add (modelName);
+
+                            juce::ChildProcess process;
+                            bool started = process.start (args);
+                            bool wasCancelled = false;
+
+                            if (started)
+                            {
+                                while (process.isRunning())
+                                {
+                                    if (cancelExport.load())
+                                    {
+                                        process.kill();
+                                        wasCancelled = true;
+                                        break;
+                                    }
+
+                                    double elapsed = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
+                                    juce::String status = "AI separating... " + juce::String ((int) elapsed) + "s | ESC=cancel";
+
+                                    juce::MessageManager::callAsync ([this, status]()
+                                    {
+                                        if (fileNameLabel)
+                                            fileNameLabel->setText (status, juce::dontSendNotification);
+                                    });
+
+                                    juce::Thread::sleep (200);
+                                }
+
+                                if (! wasCancelled && process.getExitCode() == 0)
+                                {
+                                    // Copy the requested stem to output file
+                                    auto stemSrcFile = tempDir.getChildFile (juce::String (stemFileNames[stemIndex]) + ".wav");
+                                    if (stemSrcFile.existsAsFile())
+                                    {
+                                        file.deleteFile();
+                                        stemSrcFile.copyFileTo (file);
+                                    }
+                                }
+                            }
+
+                            tempDir.deleteRecursively();
+
+                            if (wasCancelled)
+                            {
+                                isExporting.store (false);
+                                juce::MessageManager::callAsync ([this]()
+                                {
+                                    if (fileNameLabel)
+                                        fileNameLabel->setText ("Export cancelled", juce::dontSendNotification);
+                                });
+                                return;
+                            }
+                        }
+                        else
+                        {
+                            // Fallback to spectral separation
+                            StemSeparator separator;
+
+                            const int totalSamples = bufferCopy->getNumSamples();
+                            const int numChannels = std::min (2, bufferCopy->getNumChannels());
+                            const int blockSize = 2048;
+
+                            separator.prepare (sampleRate, blockSize);
+
+                            juce::AudioBuffer<float> outputStem (numChannels, totalSamples);
+                            outputStem.clear();
+
+                            for (int startSample = 0; startSample < totalSamples; startSample += blockSize)
+                            {
+                                if (cancelExport.load())
+                                {
+                                    isExporting.store (false);
+                                    juce::MessageManager::callAsync ([this]()
+                                    {
+                                        if (fileNameLabel)
+                                            fileNameLabel->setText ("Export cancelled", juce::dontSendNotification);
+                                    });
+                                    return;
+                                }
+
+                                int samplesToProcess = std::min (blockSize, totalSamples - startSample);
+
+                                juce::AudioBuffer<float> blockBuffer (numChannels, samplesToProcess);
+                                for (int ch = 0; ch < numChannels; ++ch)
+                                    blockBuffer.copyFrom (ch, 0, *bufferCopy, ch, startSample, samplesToProcess);
+
+                                separator.process (blockBuffer);
+                                auto& stems = separator.getStems();
+
+                                int samplesToCopy = std::min (samplesToProcess, stems[stemIndex].getNumSamples());
+                                for (int ch = 0; ch < numChannels; ++ch)
+                                {
+                                    if (samplesToCopy > 0)
+                                        outputStem.copyFrom (ch, startSample, stems[stemIndex], ch, 0, samplesToCopy);
+                                }
+                            }
+
+                            juce::WavAudioFormat wavFormat;
+                            file.deleteFile();
+
+                            auto outputStream = std::make_unique<juce::FileOutputStream> (file);
+                            if (outputStream->openedOk() && outputStem.getNumSamples() > 0)
+                            {
+                                auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                                    wavFormat.createWriterFor (
+                                        outputStream.release(),
+                                        sampleRate,
+                                        static_cast<unsigned int> (outputStem.getNumChannels()),
+                                        24, {}, 0));
+
+                                if (writer)
+                                    writer->writeFromAudioSampleBuffer (outputStem, 0, outputStem.getNumSamples());
+                            }
+                        }
+
+                        isExporting.store (false);
+
+                        juce::MessageManager::callAsync ([this, file]()
+                        {
+                            if (fileNameLabel)
+                                fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
+
+                            juce::AlertWindow::showMessageBoxAsync (
+                                juce::MessageBoxIconType::InfoIcon,
+                                "Export Complete",
+                                "Stem exported to:\n" + file.getFullPathName());
+                        });
+                    }
+                    catch (...)
+                    {
+                        isExporting.store (false);
+                        juce::MessageManager::callAsync ([this]()
+                        {
+                            if (fileNameLabel)
+                                fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
+
+                            juce::AlertWindow::showMessageBoxAsync (
+                                juce::MessageBoxIconType::WarningIcon,
+                                "Export Failed",
+                                "An error occurred during export.");
+                        });
+                    }
+                });
+            });
+    }
+}
+
+void StemperatorEditor::showExportProgress (const juce::String& message)
+{
+    // Simple progress indication - could be replaced with a progress bar
+    DBG (message);
+}
+
+//==============================================================================
+// Transport controls
+void StemperatorEditor::setupTransportControls()
+{
+    playButton = std::make_unique<juce::TextButton> ("Play");
+    playButton->onClick = [this]() { commandManager.invokeDirectly (cmdPlay, false); };
+    addAndMakeVisible (*playButton);
+
+    stopButton = std::make_unique<juce::TextButton> ("Stop");
+    stopButton->onClick = [this]() { commandManager.invokeDirectly (cmdStop, false); };
+    addAndMakeVisible (*stopButton);
+
+    fileNameLabel = std::make_unique<juce::Label> ("", "No file loaded");
+    fileNameLabel->setJustificationType (juce::Justification::centredLeft);
+    fileNameLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+    addAndMakeVisible (*fileNameLabel);
+
+    timeLabel = std::make_unique<juce::Label> ("", "0:00 / 0:00");
+    timeLabel->setJustificationType (juce::Justification::centredRight);
+    timeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+    addAndMakeVisible (*timeLabel);
+
+    positionSlider = std::make_unique<juce::Slider> (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+    positionSlider->setRange (0.0, 1.0);
+    positionSlider->onDragStart = [this]()
+    {
+        // Remember if we were playing when drag started
+        wasPlayingBeforeSeek = transportSource.isPlaying();
+    };
+    positionSlider->onValueChange = [this]()
+    {
+        if (hasLoadedFile)
+        {
+            auto length = transportSource.getLengthInSeconds();
+            if (length > 0)
+                transportSource.setPosition (positionSlider->getValue() * length);
+        }
+    };
+    addAndMakeVisible (*positionSlider);
+
+    // Volume slider for playback
+    volumeSlider = std::make_unique<juce::Slider> (juce::Slider::LinearHorizontal, juce::Slider::NoTextBox);
+    volumeSlider->setRange (0.0, 1.5, 0.01);  // Allow up to 150% volume
+    volumeSlider->setValue (1.0);
+    volumeSlider->setSkewFactorFromMidPoint (1.0);  // Linear feel around 100%
+    volumeSlider->setDoubleClickReturnValue (true, 1.0);  // Double-click to reset
+    volumeSlider->setPopupDisplayEnabled (true, true, this);  // Show value popup on hover/drag
+    volumeSlider->setTextValueSuffix ("%");
+    volumeSlider->textFromValueFunction = [] (double value) { return juce::String (juce::roundToInt (value * 100)); };
+    volumeSlider->onValueChange = [this]()
+    {
+        transportSource.setGain ((float) volumeSlider->getValue());
+    };
+    volumeSlider->setColour (juce::Slider::thumbColourId, PremiumLookAndFeel::Colours::accent);
+    volumeSlider->setColour (juce::Slider::trackColourId, PremiumLookAndFeel::Colours::accent.darker (0.3f));
+    addAndMakeVisible (*volumeSlider);
+
+    volumeLabel = std::make_unique<juce::Label> ("", "VOL");
+    volumeLabel->setJustificationType (juce::Justification::centredRight);
+    volumeLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+    addAndMakeVisible (*volumeLabel);
+}
+
+void StemperatorEditor::updateTransportDisplay()
+{
+    if (! isStandalone() || ! hasLoadedFile)
+        return;
+
+    auto position = transportSource.getCurrentPosition();
+    auto length = transportSource.getLengthInSeconds();
+
+    if (length > 0)
+    {
+        positionSlider->setValue (position / length, juce::dontSendNotification);
+
+        auto formatTime = [] (double seconds) {
+            int mins = (int) (seconds / 60.0);
+            int secs = (int) seconds % 60;
+            return juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2);
+        };
+
+        timeLabel->setText (formatTime (position) + " / " + formatTime (length), juce::dontSendNotification);
+    }
+}
+
+void StemperatorEditor::setupSlider (juce::Slider& slider, juce::Colour colour)
+{
+    slider.setColour (juce::Slider::thumbColourId, colour);
+    slider.setColour (juce::Slider::trackColourId, colour.darker (0.3f));
+    slider.setColour (juce::Slider::textBoxTextColourId, PremiumLookAndFeel::Colours::textBright);
+    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    slider.setColour (juce::Slider::textBoxBackgroundColourId, PremiumLookAndFeel::Colours::bgPanel);
+    addAndMakeVisible (slider);
+}
+
+void StemperatorEditor::setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text, juce::Colour colour)
+{
+    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    setupSlider (slider, colour);
+
+    label.setText (text, juce::dontSendNotification);
+    label.setJustificationType (juce::Justification::centred);
+    label.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+    addAndMakeVisible (label);
+}
+
+void StemperatorEditor::updateFontSizes()
+{
+    float scale = getScaleFactor();
+
+    // Title fonts scale with window
+    titleLabel.setFont (juce::FontOptions (32.0f * scale).withStyle ("Bold"));
+    subtitleLabel.setFont (juce::FontOptions (11.0f * scale));
+    brandLabel.setFont (juce::FontOptions (14.0f * scale).withStyle ("Bold"));
+    masterLabel.setFont (juce::FontOptions (13.0f * scale).withStyle ("Bold"));
+
+    // Control labels
+    float labelSize = 10.0f * scale;
+    vocalsFocusLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
+    bassCutoffLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
+    drumSensLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
+    qualityLabel.setFont (juce::FontOptions (11.0f * scale).withStyle ("Bold"));
+
+    // Slider text boxes scale
+    int textBoxWidth = scaled (60);
+    int textBoxHeight = scaled (20);
+    masterSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, textBoxHeight);
+
+    int knobTextHeight = scaled (16);
+    vocalsFocusSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+    bassCutoffSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+    drumSensSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+}
+
+void StemperatorEditor::paint (juce::Graphics& g)
+{
+    float scale = getScaleFactor();
+    int headerHeight = scaled (65);
+    int footerHeight = scaled (95);
+
+    // Premium gradient background
+    juce::ColourGradient bgGradient (
+        PremiumLookAndFeel::Colours::bgDark, 0, 0,
+        PremiumLookAndFeel::Colours::bgMid, 0, (float) getHeight(), false);
+    bgGradient.addColour (0.5, PremiumLookAndFeel::Colours::bgLight.interpolatedWith (
+        PremiumLookAndFeel::Colours::bgDark, 0.7f));
+    g.setGradientFill (bgGradient);
+    g.fillAll();
+
+    // Subtle grid pattern for depth (scales with size)
+    int gridSpacing = juce::jmax (2, scaled (3));
+    g.setColour (PremiumLookAndFeel::Colours::textDim.withAlpha (0.03f));
+    for (int y = 0; y < getHeight(); y += gridSpacing)
+        g.drawHorizontalLine (y, 0, (float) getWidth());
+
+    // Header separator with accent glow
+    juce::ColourGradient separatorGradient (
+        PremiumLookAndFeel::Colours::accent.withAlpha (0.0f), 0, (float) headerHeight,
+        PremiumLookAndFeel::Colours::accent.withAlpha (0.5f), getWidth() * 0.5f, (float) headerHeight, false);
+    separatorGradient.addColour (1.0, PremiumLookAndFeel::Colours::accent.withAlpha (0.0f));
+    g.setGradientFill (separatorGradient);
+    g.fillRect (0, headerHeight, getWidth(), juce::jmax (1, scaled (2)));
+
+    // Footer separator
+    int footerTop = getHeight() - footerHeight;
+    g.setGradientFill (separatorGradient);
+    g.fillRect (0, footerTop, getWidth(), 1);
+
+    // Panel backgrounds for stem channels area
+    int margin = scaled (15);
+    int channelWidth = scaled (95);
+    auto channelsPanelArea = juce::Rectangle<int> (margin, headerHeight + scaled (8),
+                                                   channelWidth * 4 + scaled (20),
+                                                   getHeight() - headerHeight - footerHeight - scaled (16));
+    g.setColour (PremiumLookAndFeel::Colours::bgPanel.withAlpha (0.3f));
+    g.fillRoundedRectangle (channelsPanelArea.toFloat(), scaled (8.0f));
+}
+
+void StemperatorEditor::resized()
+{
+    // Update font sizes for current scale
+    updateFontSizes();
+
+    float scale = getScaleFactor();
+    auto bounds = getLocalBounds();
+
+    // Menu bar for standalone mode
+    int menuBarHeight = 0;
+    if (isStandalone() && menuBar)
+    {
+        menuBarHeight = scaled (24);
+        menuBar->setBounds (bounds.removeFromTop (menuBarHeight));
+    }
+
+    // Transport bar for standalone mode
+    int transportHeight = 0;
+    if (isStandalone() && playButton)
+    {
+        transportHeight = scaled (36);
+        auto transportArea = bounds.removeFromTop (transportHeight);
+        transportArea = transportArea.reduced (scaled (10), scaled (4));
+
+        // Play/Stop buttons
+        playButton->setBounds (transportArea.removeFromLeft (scaled (60)));
+        transportArea.removeFromLeft (scaled (5));
+        stopButton->setBounds (transportArea.removeFromLeft (scaled (60)));
+        transportArea.removeFromLeft (scaled (10));
+
+        // Volume control on the right
+        if (volumeSlider)
+        {
+            volumeLabel->setBounds (transportArea.removeFromRight (scaled (30)));
+            volumeSlider->setBounds (transportArea.removeFromRight (scaled (80)));
+            transportArea.removeFromRight (scaled (10));
+        }
+
+        // Time label
+        timeLabel->setBounds (transportArea.removeFromRight (scaled (100)));
+        transportArea.removeFromRight (scaled (10));
+
+        // File name and position slider
+        fileNameLabel->setBounds (transportArea.removeFromTop (scaled (14)));
+        positionSlider->setBounds (transportArea);
+    }
+
+    // Scaled dimensions
+    int headerHeight = scaled (65);
+    int footerHeight = scaled (95);
+    int margin = scaled (15);
+    int spacing = scaled (10);
+
+    // Header area
+    auto header = bounds.removeFromTop (headerHeight);
+    auto headerLeft = header.removeFromLeft (header.getWidth() / 2).reduced (scaled (20), scaled (12));
+    titleLabel.setBounds (headerLeft.removeFromTop (scaled (32)));
+    subtitleLabel.setBounds (headerLeft);
+
+    auto headerRight = header.reduced (scaled (20), scaled (20));
+    brandLabel.setBounds (headerRight);
+
+    // Footer with focus controls
+    auto footer = bounds.removeFromBottom (footerHeight);
+    auto controlsArea = footer.reduced (scaled (20), scaled (10));
+
+    int knobWidth = scaled (80);
+
+    // Focus knobs on the left
+    auto knobArea = controlsArea.removeFromLeft (knobWidth * 3 + scaled (30));
+
+    auto vocalKnob = knobArea.removeFromLeft (knobWidth);
+    vocalsFocusLabel.setBounds (vocalKnob.removeFromTop (scaled (14)));
+    vocalsFocusSlider.setBounds (vocalKnob.reduced (scaled (4), 0));
+
+    knobArea.removeFromLeft (scaled (5));
+    auto bassKnob = knobArea.removeFromLeft (knobWidth);
+    bassCutoffLabel.setBounds (bassKnob.removeFromTop (scaled (14)));
+    bassCutoffSlider.setBounds (bassKnob.reduced (scaled (4), 0));
+
+    knobArea.removeFromLeft (scaled (5));
+    auto drumKnob = knobArea.removeFromLeft (knobWidth);
+    drumSensLabel.setBounds (drumKnob.removeFromTop (scaled (14)));
+    drumSensSlider.setBounds (drumKnob.reduced (scaled (4), 0));
+
+    // Quality selector
+    auto qualityArea = controlsArea.removeFromLeft (scaled (100)).reduced (scaled (10), scaled (12));
+    qualityLabel.setBounds (qualityArea.removeFromTop (scaled (14)));
+    qualityArea.removeFromTop (scaled (4));
+    qualityBox.setBounds (qualityArea.removeFromTop (scaled (28)));
+
+    // Main content area
+    bounds.reduce (margin, scaled (8));
+
+    // Stem channels (left section) - proportional width
+    int channelWidth = scaled (95);
+    auto channelsArea = bounds.removeFromLeft (channelWidth * 4 + scaled (20));
+    channelsArea.removeFromTop (scaled (5));
+
+    for (size_t i = 0; i < 4; ++i)
+    {
+        stemChannels[i]->setBounds (channelsArea.removeFromLeft (channelWidth).reduced (scaled (2), 0));
+    }
+
+    // Master fader
+    bounds.removeFromLeft (spacing);
+    int masterWidth = scaled (75);
+    auto masterArea = bounds.removeFromLeft (masterWidth).reduced (0, scaled (5));
+    masterLabel.setBounds (masterArea.removeFromTop (scaled (22)));
+    masterSlider.setBounds (masterArea);
+
+    // Visualizer (remaining space - flexible)
+    bounds.removeFromLeft (margin);
+    visualizer.setBounds (bounds.reduced (0, scaled (5)));
+
+    // Notify stem channels to update their internal scaling
+    for (auto& channel : stemChannels)
+        channel->repaint();
+}
+
+void StemperatorEditor::timerCallback()
+{
+    // During export: show export stem levels as visual feedback
+    if (isExporting.load())
+    {
+        for (size_t i = 0; i < 4; ++i)
+        {
+            float level = exportStemLevels[i].load();
+            stemChannels[i]->setLevel (level);
+        }
+
+        // Update visualizer with export levels
+        visualizer.setStemLevels (
+            exportStemLevels[0].load(),
+            exportStemLevels[1].load(),
+            exportStemLevels[2].load(),
+            exportStemLevels[3].load());
+        visualizer.setInputLevel (exportProgress.load());
+    }
+    else
+    {
+        // Normal mode: show processor levels
+        for (size_t i = 0; i < 4; ++i)
+        {
+            float level = processor.getStemLevel (static_cast<StemperatorProcessor::Stem> (i));
+            stemChannels[i]->setLevel (level);
+        }
+
+        // Update visualizer
+        visualizer.setStemLevels (
+            processor.getStemLevel (StemperatorProcessor::Vocals),
+            processor.getStemLevel (StemperatorProcessor::Drums),
+            processor.getStemLevel (StemperatorProcessor::Bass),
+            processor.getStemLevel (StemperatorProcessor::Other));
+        visualizer.setInputLevel (processor.getInputLevel());
+    }
+
+    // Update transport display in standalone mode
+    updateTransportDisplay();
+}
+
+bool StemperatorEditor::keyPressed (const juce::KeyPress& key, juce::Component*)
+{
+    if (key == juce::KeyPress::escapeKey && isExporting.load())
+    {
+        cancelExport.store (true);
+
+        if (fileNameLabel)
+            fileNameLabel->setText ("Cancelling...", juce::dontSendNotification);
+
+        return true;
+    }
+    return false;
+}
+
+//==============================================================================
+// FileDragAndDropTarget
+bool StemperatorEditor::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    // Accept audio files
+    for (const auto& file : files)
+    {
+        juce::File f (file);
+        auto ext = f.getFileExtension().toLowerCase();
+        if (ext == ".wav" || ext == ".mp3" || ext == ".flac" ||
+            ext == ".aiff" || ext == ".ogg" || ext == ".m4a")
+            return true;
+    }
+    return false;
+}
+
+void StemperatorEditor::filesDropped (const juce::StringArray& files, int, int)
+{
+    // Load the first valid audio file
+    for (const auto& file : files)
+    {
+        juce::File f (file);
+        auto ext = f.getFileExtension().toLowerCase();
+        if (ext == ".wav" || ext == ".mp3" || ext == ".flac" ||
+            ext == ".aiff" || ext == ".ogg" || ext == ".m4a")
+        {
+            loadAudioFile (f);
+            break;
+        }
+    }
+}
+
+//==============================================================================
+// Stem separation and playback
+void StemperatorEditor::separateCurrentFile()
+{
+    if (! hasLoadedFile)
+    {
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "No File Loaded",
+            "Please load an audio file first using File > Load Audio File");
+        return;
+    }
+
+    // Get quality setting for model selection
+    int qualityIndex = qualityBox.getSelectedItemIndex();
+    juce::String modelName = (qualityIndex >= 2) ? "htdemucs_ft" : "htdemucs";
+
+    auto bufferCopy = std::make_shared<juce::AudioBuffer<float>> (loadedAudioBuffer);
+    auto sampleRate = loadedSampleRate;
+
+    if (fileNameLabel)
+        fileNameLabel->setText ("Preparing AI separation...", juce::dontSendNotification);
+
+    juce::Thread::launch ([this, bufferCopy, sampleRate, modelName]()
+    {
+        isExporting.store (true);
+        cancelExport.store (false);
+
+        try
+        {
+            auto startTime = juce::Time::getMillisecondCounterHiRes();
+
+            // Find the Python script and venv
+            auto projectRoot = juce::File ("/home/flark/GIT/Stemperator");
+            auto venvPython = projectRoot.getChildFile (".venv/bin/python");
+            auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+            if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
+            {
+                juce::MessageManager::callAsync ([this]()
+                {
+                    juce::AlertWindow::showMessageBoxAsync (
+                        juce::MessageBoxIconType::WarningIcon,
+                        "AI Not Available",
+                        "Could not find the Python environment.\n\n"
+                        "Please set up the virtual environment first.");
+                    isExporting.store (false);
+                });
+                return;
+            }
+
+            // Create temp directory
+            auto tempDir = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                              .getChildFile ("stemperator_sep_" + juce::String (juce::Random::getSystemRandom().nextInt64()));
+            tempDir.createDirectory();
+
+            auto tempInputFile = tempDir.getChildFile ("input.wav");
+
+            // Write input to temp file
+            {
+                juce::WavAudioFormat wavFormat;
+                auto outputStream = std::make_unique<juce::FileOutputStream> (tempInputFile);
+                if (outputStream->openedOk())
+                {
+                    auto writer = std::unique_ptr<juce::AudioFormatWriter> (
+                        wavFormat.createWriterFor (
+                            outputStream.release(),
+                            sampleRate,
+                            static_cast<unsigned int> (std::min (2, bufferCopy->getNumChannels())),
+                            24, {}, 0));
+
+                    if (writer)
+                        writer->writeFromAudioSampleBuffer (*bufferCopy, 0, bufferCopy->getNumSamples());
+                }
+            }
+
+            juce::MessageManager::callAsync ([this, modelName]()
+            {
+                if (fileNameLabel)
+                    fileNameLabel->setText ("Running Demucs AI (" + modelName + ")... | ESC=cancel", juce::dontSendNotification);
+            });
+
+            // Animate stem levels during processing
+            for (int i = 0; i < 4; ++i)
+                exportStemLevels[i].store (0.3f);
+
+            // Build command arguments as StringArray for proper handling of spaces
+            juce::StringArray args;
+            args.add (venvPython.getFullPathName());
+            args.add (separatorScript.getFullPathName());
+            args.add (tempInputFile.getFullPathName());
+            args.add (tempDir.getFullPathName());
+            args.add ("--model");
+            args.add (modelName);
+
+            juce::ChildProcess process;
+            bool started = process.start (args);
+            bool wasCancelled = false;
+
+            if (started)
+            {
+                // Wait for completion with real progress from Python
+                int currentPercent = 10;
+                juce::String currentStage = "Starting";
+                juce::String processOutput;
+
+                while (process.isRunning())
+                {
+                    if (cancelExport.load())
+                    {
+                        process.kill();
+                        wasCancelled = true;
+                        break;
+                    }
+
+                    // Read available output from process (progress lines)
+                    char buffer[256];
+                    auto bytesRead = process.readProcessOutput (buffer, sizeof (buffer) - 1);
+                    if (bytesRead > 0)
+                    {
+                        buffer[bytesRead] = '\0';
+                        processOutput += buffer;
+
+                        // Parse progress lines: PROGRESS:<percent>:<stage>
+                        while (processOutput.contains ("\n"))
+                        {
+                            auto newlinePos = processOutput.indexOf ("\n");
+                            auto line = processOutput.substring (0, newlinePos).trim();
+                            processOutput = processOutput.substring (newlinePos + 1);
+
+                            if (line.startsWith ("PROGRESS:"))
+                            {
+                                auto parts = juce::StringArray::fromTokens (line.substring (9), ":", "");
+                                if (parts.size() >= 1)
+                                    currentPercent = parts[0].getIntValue();
+                                if (parts.size() >= 2)
+                                    currentStage = parts[1];
+                            }
+                        }
+                    }
+
+                    // Update progress display
+                    exportProgress.store (currentPercent / 100.0f);
+
+                    // Animate stem levels based on progress
+                    float animPhase = currentPercent / 100.0f;
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        float level = 0.3f + 0.4f * std::sin (animPhase * 10.0f + i * 1.5f);
+                        exportStemLevels[i].store (std::max (0.1f, level));
+                    }
+
+                    double elapsed = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
+                    int mins = (int) elapsed / 60;
+                    int secs = (int) elapsed % 60;
+                    juce::String status = "AI: " + juce::String (currentPercent) + "% | " + currentStage + " | "
+                        + juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2) + " | ESC=cancel";
+
+                    juce::MessageManager::callAsync ([this, status]()
+                    {
+                        if (fileNameLabel)
+                            fileNameLabel->setText (status, juce::dontSendNotification);
+                    });
+
+                    juce::Thread::sleep (100);
+                }
+
+                if (! wasCancelled && process.getExitCode() == 0)
+                {
+                    // Load stems into memory
+                    juce::MessageManager::callAsync ([this]()
+                    {
+                        if (fileNameLabel)
+                            fileNameLabel->setText ("Loading stems into memory...", juce::dontSendNotification);
+                    });
+
+                    const char* stemFileNames[] = { "vocals", "drums", "bass", "other" };
+                    juce::AudioFormatManager formatMgr;
+                    formatMgr.registerBasicFormats();
+
+                    bool allLoaded = true;
+                    for (int i = 0; i < 4; ++i)
+                    {
+                        auto stemFile = tempDir.getChildFile (juce::String (stemFileNames[i]) + ".wav");
+                        if (stemFile.existsAsFile())
+                        {
+                            auto* reader = formatMgr.createReaderFor (stemFile);
+                            if (reader)
+                            {
+                                separatedStems[i].setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+                                reader->read (&separatedStems[i], 0, (int) reader->lengthInSamples, 0, true, true);
+                                delete reader;
+                                exportStemLevels[i].store (0.8f);
+                            }
+                            else
+                            {
+                                allLoaded = false;
+                            }
+                        }
+                        else
+                        {
+                            allLoaded = false;
+                        }
+                    }
+
+                    if (allLoaded)
+                    {
+                        hasSeparatedStems = true;
+                        lastStemFolder = tempDir;
+
+                        double processingTime = (juce::Time::getMillisecondCounterHiRes() - startTime) / 1000.0;
+
+                        juce::MessageManager::callAsync ([this, processingTime]()
+                        {
+                            if (fileNameLabel)
+                                fileNameLabel->setText ("Stems ready! Use Play Stems or Space | " +
+                                    juce::String (processingTime, 1) + "s", juce::dontSendNotification);
+
+                            commandManager.commandStatusChanged();
+
+                            // Automatically create stem mixer and start playback
+                            stemMixerSource = std::make_unique<StemMixerSource> (separatedStems, processor);
+                            transportSource.stop();
+                            transportSource.setSource (stemMixerSource.get(), 0, nullptr, loadedSampleRate);
+                        });
+                    }
+                }
+                else if (wasCancelled)
+                {
+                    juce::MessageManager::callAsync ([this]()
+                    {
+                        if (fileNameLabel)
+                            fileNameLabel->setText ("Separation cancelled", juce::dontSendNotification);
+                    });
+                }
+            }
+
+            // Clean up temp files (but keep stems in memory)
+            tempDir.deleteRecursively();
+
+            isExporting.store (false);
+            for (auto& level : exportStemLevels)
+                level.store (0.0f);
+        }
+        catch (...)
+        {
+            isExporting.store (false);
+            juce::MessageManager::callAsync ([this]()
+            {
+                if (fileNameLabel)
+                    fileNameLabel->setText (currentAudioFile.getFileName(), juce::dontSendNotification);
+
+                juce::AlertWindow::showMessageBoxAsync (
+                    juce::MessageBoxIconType::WarningIcon,
+                    "Separation Failed",
+                    "An error occurred during separation.");
+            });
+        }
+    });
+}
+
+void StemperatorEditor::loadStemsFromFolder (const juce::File& folder)
+{
+    if (! folder.isDirectory())
+        return;
+
+    const char* stemFileNames[] = { "vocals", "drums", "bass", "other" };
+    juce::AudioFormatManager formatMgr;
+    formatMgr.registerBasicFormats();
+
+    bool allLoaded = true;
+    double sampleRate = 44100.0;
+
+    if (fileNameLabel)
+        fileNameLabel->setText ("Loading stems from " + folder.getFileName() + "...", juce::dontSendNotification);
+
+    for (int i = 0; i < 4; ++i)
+    {
+        auto stemFile = folder.getChildFile (juce::String (stemFileNames[i]) + ".wav");
+        if (stemFile.existsAsFile())
+        {
+            auto* reader = formatMgr.createReaderFor (stemFile);
+            if (reader)
+            {
+                separatedStems[i].setSize ((int) reader->numChannels, (int) reader->lengthInSamples);
+                reader->read (&separatedStems[i], 0, (int) reader->lengthInSamples, 0, true, true);
+                sampleRate = reader->sampleRate;
+                delete reader;
+            }
+            else
+            {
+                allLoaded = false;
+            }
+        }
+        else
+        {
+            allLoaded = false;
+        }
+    }
+
+    if (allLoaded)
+    {
+        hasSeparatedStems = true;
+        lastStemFolder = folder;
+        loadedSampleRate = sampleRate;
+
+        // Create stem mixer
+        stemMixerSource = std::make_unique<StemMixerSource> (separatedStems, processor);
+        transportSource.stop();
+        transportSource.setSource (stemMixerSource.get(), 0, nullptr, loadedSampleRate);
+
+        if (fileNameLabel)
+            fileNameLabel->setText ("Stems loaded from " + folder.getFileName() + " | Press Space to play", juce::dontSendNotification);
+
+        commandManager.commandStatusChanged();
+    }
+    else
+    {
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Load Failed",
+            "Could not find all stem files in folder.\n\n"
+            "Expected: vocals.wav, drums.wav, bass.wav, other.wav");
+    }
+}
+
+void StemperatorEditor::updateStemPlayback()
+{
+    // This is called when mute/solo/volume changes
+    // The StemMixerSource reads parameters directly, so we just need to repaint
+    for (auto& channel : stemChannels)
+        channel->repaint();
+}
+
+//==============================================================================
+// Batch processing
+void StemperatorEditor::batchProcessFiles()
+{
+    if (isExporting.load())
+    {
+        juce::AlertWindow::showMessageBoxAsync (
+            juce::MessageBoxIconType::WarningIcon,
+            "Busy",
+            "Already processing. Please wait for current operation to complete.");
+        return;
+    }
+
+    // Get quality setting for model selection
+    int qualityIndex = qualityBox.getSelectedItemIndex();
+    juce::String modelName = (qualityIndex >= 2) ? "htdemucs_ft" : "htdemucs";
+
+    // First, choose input files
+    fileChooser = std::make_unique<juce::FileChooser> (
+        "Select Audio Files for Batch Processing",
+        juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+        "*.wav;*.mp3;*.flac;*.aiff;*.ogg;*.m4a",
+        true);  // Use native dialog
+
+    fileChooser->launchAsync (
+        juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles | juce::FileBrowserComponent::canSelectMultipleItems,
+        [this, modelName] (const juce::FileChooser& fc)
+        {
+            auto results = fc.getResults();
+            if (results.isEmpty())
+                return;
+
+            // Now choose output directory
+            fileChooser = std::make_unique<juce::FileChooser> (
+                "Select Output Directory for Stems",
+                results[0].getParentDirectory(),
+                "",
+                true);
+
+            auto filesToProcess = std::make_shared<juce::Array<juce::File>>();
+            for (const auto& f : results)
+                filesToProcess->add (f);
+
+            fileChooser->launchAsync (
+                juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                [this, filesToProcess, modelName] (const juce::FileChooser& fc2)
+                {
+                    auto outputDir = fc2.getResult();
+                    if (! outputDir.isDirectory())
+                        return;
+
+                    // Start batch processing in background thread
+                    juce::Thread::launch ([this, filesToProcess, outputDir, modelName]()
+                    {
+                        isExporting.store (true);
+                        cancelExport.store (false);
+
+                        auto projectRoot = juce::File ("/home/flark/GIT/Stemperator");
+                        auto venvPython = projectRoot.getChildFile (".venv/bin/python");
+                        auto separatorScript = projectRoot.getChildFile ("Source/AI/audio_separator_process.py");
+
+                        if (! venvPython.existsAsFile() || ! separatorScript.existsAsFile())
+                        {
+                            juce::MessageManager::callAsync ([this]()
+                            {
+                                juce::AlertWindow::showMessageBoxAsync (
+                                    juce::MessageBoxIconType::WarningIcon,
+                                    "AI Not Available",
+                                    "Could not find the Python environment.");
+                                isExporting.store (false);
+                            });
+                            return;
+                        }
+
+                        int totalFiles = filesToProcess->size();
+                        int processedFiles = 0;
+                        int failedFiles = 0;
+                        auto batchStartTime = juce::Time::getMillisecondCounterHiRes();
+
+                        for (const auto& inputFile : *filesToProcess)
+                        {
+                            if (cancelExport.load())
+                                break;
+
+                            // Skip directories - only process actual files
+                            if (! inputFile.existsAsFile())
+                            {
+                                std::cerr << "Skipping non-file: " << inputFile.getFullPathName().toStdString() << std::endl;
+                                continue;
+                            }
+
+                            processedFiles++;
+                            juce::String statusMsg = "Batch: " + juce::String (processedFiles) + "/" + juce::String (totalFiles) +
+                                " - " + inputFile.getFileName() + " | ESC=cancel";
+
+                            juce::MessageManager::callAsync ([this, statusMsg]()
+                            {
+                                if (fileNameLabel)
+                                    fileNameLabel->setText (statusMsg, juce::dontSendNotification);
+                            });
+
+                            // Create output folder for this file's stems
+                            auto stemFolder = outputDir.getChildFile (inputFile.getFileNameWithoutExtension() + "_stems");
+                            stemFolder.createDirectory();
+
+                            // Check if the input path has problematic characters (unicode, special chars)
+                            // If so, create a symlink in /tmp to avoid shell escaping issues
+                            auto actualInputPath = inputFile.getFullPathName();
+                            juce::File tempLink;
+                            bool useTempLink = false;
+
+                            // Check for non-ASCII or special shell characters in path
+                            bool hasProblematic = false;
+                            for (int c = 0; c < actualInputPath.length(); ++c)
+                            {
+                                auto ch = actualInputPath[c];
+                                // Check for non-ASCII (unicode) or shell-special characters
+                                if (ch > 127 || ch == '[' || ch == ']' || ch == '(' || ch == ')' ||
+                                    ch == '&' || ch == ';' || ch == '|' || ch == '$' || ch == '`' ||
+                                    ch == '!' || ch == '*' || ch == '?' || ch == '{' || ch == '}')
+                                {
+                                    hasProblematic = true;
+                                    break;
+                                }
+                            }
+
+                            if (hasProblematic)
+                            {
+                                // Create symlink with safe name in temp directory
+                                auto safeExt = inputFile.getFileExtension();
+                                tempLink = juce::File::getSpecialLocation (juce::File::tempDirectory)
+                                              .getChildFile ("stemperator_batch_" + juce::String (juce::Random::getSystemRandom().nextInt64()) + safeExt);
+
+                                // Try to create symlink first (faster, no copy)
+                                juce::String linkCmd = "ln -sf " + inputFile.getFullPathName().quoted() + " " + tempLink.getFullPathName().quoted();
+                                int result = std::system (linkCmd.toRawUTF8());
+
+                                if (result == 0 && tempLink.existsAsFile())
+                                {
+                                    useTempLink = true;
+                                    actualInputPath = tempLink.getFullPathName();
+                                    std::cerr << "Batch: Using symlink for file with special characters: " << actualInputPath.toStdString() << std::endl;
+                                }
+                                else
+                                {
+                                    std::cerr << "Batch: Symlink failed, processing file directly" << std::endl;
+                                }
+                            }
+
+                            std::cerr << "Batch processing: " << actualInputPath.toStdString() << std::endl;
+
+                            // Build command
+                            juce::StringArray args;
+                            args.add (venvPython.getFullPathName());
+                            args.add (separatorScript.getFullPathName());
+                            args.add (actualInputPath);
+                            args.add (stemFolder.getFullPathName());
+                            args.add ("--model");
+                            args.add (modelName);
+
+                            std::cerr << "Args: " << args.joinIntoString (" | ").toStdString() << std::endl;
+
+                            juce::ChildProcess process;
+                            bool started = process.start (args);
+
+                            if (started)
+                            {
+                                auto fileStartTime = juce::Time::getMillisecondCounterHiRes();
+
+                                // Animate while processing
+                                while (process.isRunning())
+                                {
+                                    if (cancelExport.load())
+                                    {
+                                        process.kill();
+                                        break;
+                                    }
+
+                                    double elapsed = (juce::Time::getMillisecondCounterHiRes() - fileStartTime) / 1000.0;
+                                    static const char* dots[] = { "   ", ".  ", ".. ", "..." };
+                                    int dotIdx = ((int) (elapsed * 2)) % 4;
+
+                                    int mins = (int) elapsed / 60;
+                                    int secs = (int) elapsed % 60;
+
+                                    juce::String animStatus = "Batch " + juce::String (processedFiles) + "/" + juce::String (totalFiles) +
+                                        ": " + inputFile.getFileNameWithoutExtension() + dots[dotIdx] + " " +
+                                        juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2) + " | ESC=cancel";
+
+                                    juce::MessageManager::callAsync ([this, animStatus]()
+                                    {
+                                        if (fileNameLabel)
+                                            fileNameLabel->setText (animStatus, juce::dontSendNotification);
+                                    });
+
+                                    // Animate stem levels
+                                    for (int i = 0; i < 4; ++i)
+                                    {
+                                        float level = 0.3f + 0.4f * std::sin ((float) elapsed * 2.0f + i * 1.5f);
+                                        exportStemLevels[i].store (std::max (0.1f, level));
+                                    }
+
+                                    juce::Thread::sleep (200);
+                                }
+
+                                if (process.getExitCode() == 0 && ! cancelExport.load())
+                                {
+                                    // Rename stems to include original filename: songname_vocals.wav, etc.
+                                    const char* stemNames[] = { "vocals", "drums", "bass", "other" };
+                                    auto baseFileName = inputFile.getFileNameWithoutExtension();
+
+                                    for (const auto& stemName : stemNames)
+                                    {
+                                        auto oldFile = stemFolder.getChildFile (juce::String (stemName) + ".wav");
+                                        auto newFile = stemFolder.getChildFile (baseFileName + "_" + juce::String (stemName) + ".wav");
+
+                                        if (oldFile.existsAsFile() && oldFile != newFile)
+                                            oldFile.moveFileTo (newFile);
+                                    }
+                                }
+                                else if (! cancelExport.load())
+                                {
+                                    failedFiles++;
+                                }
+                            }
+                            else
+                            {
+                                failedFiles++;
+                            }
+
+                            // Clean up temp symlink if used
+                            if (useTempLink && tempLink.existsAsFile())
+                                tempLink.deleteFile();
+                        }
+
+                        // Clear stem level animation
+                        for (auto& level : exportStemLevels)
+                            level.store (0.0f);
+
+                        double totalTime = (juce::Time::getMillisecondCounterHiRes() - batchStartTime) / 1000.0;
+                        int successCount = processedFiles - failedFiles;
+
+                        juce::MessageManager::callAsync ([this, successCount, failedFiles, totalTime, outputDir, totalFiles]()
+                        {
+                            isExporting.store (false);
+
+                            if (cancelExport.load())
+                            {
+                                if (fileNameLabel)
+                                    fileNameLabel->setText ("Batch cancelled", juce::dontSendNotification);
+                            }
+                            else
+                            {
+                                int mins = (int) totalTime / 60;
+                                int secs = (int) totalTime % 60;
+
+                                juce::String summary = "Batch complete: " + juce::String (successCount) + "/" + juce::String (totalFiles) +
+                                    " files in " + juce::String (mins) + ":" + juce::String (secs).paddedLeft ('0', 2);
+
+                                if (failedFiles > 0)
+                                    summary += " (" + juce::String (failedFiles) + " failed)";
+
+                                if (fileNameLabel)
+                                    fileNameLabel->setText (summary, juce::dontSendNotification);
+
+                                // Show completion dialog
+                                juce::AlertWindow::showMessageBoxAsync (
+                                    juce::MessageBoxIconType::InfoIcon,
+                                    "Batch Processing Complete",
+                                    "Processed " + juce::String (successCount) + " of " + juce::String (totalFiles) + " files.\n\n"
+                                    "Output location:\n" + outputDir.getFullPathName() +
+                                    (failedFiles > 0 ? "\n\n" + juce::String (failedFiles) + " file(s) failed to process." : ""));
+                            }
+
+                            commandManager.commandStatusChanged();
+                        });
+                    });
+                });
+        });
+}

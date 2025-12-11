@@ -1,0 +1,28 @@
+# Build
+build/
+cmake-build-*/
+*.o
+*.a
+*.so
+*.dylib
+
+# JUCE
+JUCE/
+
+# IDE
+.idea/
+.vscode/
+*.xcodeproj/
+*.xcworkspace/
+
+# Models (too large for git)
+models/*.pt
+models/*.onnx
+models/*.bin
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log

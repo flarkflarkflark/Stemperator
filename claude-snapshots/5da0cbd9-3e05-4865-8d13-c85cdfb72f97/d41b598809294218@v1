@@ -1,0 +1,123 @@
+/**
+ * Custom Standalone App Wrapper
+ *
+ * Overrides JUCE's default standalone plugin wrapper to:
+ * - Intercept window close requests
+ * - Show "unsaved changes" dialog before quitting
+ * - Allow the editor to handle the quit confirmation
+ */
+
+#include <JuceHeader.h>
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+//==============================================================================
+// Custom StandaloneFilterWindow that intercepts close button
+class StemperatorStandaloneWindow : public juce::StandaloneFilterWindow
+{
+public:
+    StemperatorStandaloneWindow (const juce::String& title,
+                                  juce::Colour backgroundColour,
+                                  juce::StandalonePluginHolder* pluginHolder,
+                                  bool takeOwnershipOfPluginHolder)
+        : StandaloneFilterWindow (title, backgroundColour, pluginHolder, takeOwnershipOfPluginHolder)
+    {
+    }
+
+    void closeButtonPressed() override
+    {
+        // Get the editor and check if it wants to handle the quit
+        if (auto* holder = getPluginHolder())
+        {
+            if (auto* processor = holder->processor.get())
+            {
+                if (auto* editor = dynamic_cast<StemperatorEditor*> (processor->getActiveEditor()))
+                {
+                    // Let the editor handle quit via its command system
+                    // This will show the save dialog if needed
+                    editor->perform (juce::ApplicationCommandTarget::InvocationInfo (
+                        StemperatorEditor::CommandIDs::cmdQuit));
+                    return;  // Don't close - let the command handle it
+                }
+            }
+        }
+
+        // Fallback: just quit
+        juce::JUCEApplication::getInstance()->systemRequestedQuit();
+    }
+
+private:
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorStandaloneWindow)
+};
+
+//==============================================================================
+// Custom Standalone App
+class StemperatorStandaloneApp : public juce::JUCEApplication
+{
+public:
+    StemperatorStandaloneApp() = default;
+
+    const juce::String getApplicationName() override    { return "Stemperator"; }
+    const juce::String getApplicationVersion() override { return "1.0.0"; }
+    bool moreThanOneInstanceAllowed() override          { return true; }
+
+    void initialise (const juce::String& /*commandLine*/) override
+    {
+        // Create the plugin holder
+        pluginHolder = std::make_unique<juce::StandalonePluginHolder> (
+            getAudioDeviceSetup(), juce::StandalonePluginHolder::PluginInOuts(),
+            true, // shouldTakeOwnershipOfPluginHolder
+            juce::String(), // preferredDefaultDeviceName
+            nullptr, // preferredSetupOptions
+            juce::StringArray(), // constrainToConfiguration
+            false, // autoOpenMidiDevices
+            true  // enableExternalPluginFormat
+        );
+
+        // Create our custom window
+        mainWindow = std::make_unique<StemperatorStandaloneWindow> (
+            getApplicationName(),
+            juce::Colours::black,
+            pluginHolder.get(),
+            false  // don't take ownership - we own it
+        );
+
+        mainWindow->setVisible (true);
+    }
+
+    void shutdown() override
+    {
+        mainWindow = nullptr;
+        pluginHolder = nullptr;
+    }
+
+    void systemRequestedQuit() override
+    {
+        // This is called when the system requests quit (e.g., from the save dialog)
+        quit();
+    }
+
+    void anotherInstanceStarted (const juce::String& /*commandLine*/) override
+    {
+        // Bring window to front
+        if (mainWindow != nullptr)
+            mainWindow->toFront (true);
+    }
+
+private:
+    juce::StandalonePluginHolder::AudioDeviceSetup getAudioDeviceSetup()
+    {
+        juce::StandalonePluginHolder::AudioDeviceSetup setup;
+        // Use default settings
+        return setup;
+    }
+
+    std::unique_ptr<juce::StandalonePluginHolder> pluginHolder;
+    std::unique_ptr<StemperatorStandaloneWindow> mainWindow;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorStandaloneApp)
+};
+
+//==============================================================================
+// This macro creates the application's main() function
+START_JUCE_APPLICATION (StemperatorStandaloneApp)

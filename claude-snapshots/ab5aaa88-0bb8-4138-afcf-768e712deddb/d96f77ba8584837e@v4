@@ -1,0 +1,127 @@
+#include "plugin.h"
+#include "gui.h"
+#include <clap/ext/gui.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+// External reference to GUI extension (defined at the end of this file)
+extern clap_plugin_gui_t s_plugin_gui;
+
+// GUI context for the plugin
+static gui_context_t *s_gui_context = NULL;
+
+// GUI extension methods
+static bool gui_is_api_supported(const clap_plugin_t *plugin, const char *api, bool is_floating) {
+    if (strcmp(api, CLAP_WINDOW_API_WIN32) == 0) {
+        return true; // Windows GUI supported
+    }
+    if (strcmp(api, CLAP_WINDOW_API_COCOA) == 0) {
+        return true; // macOS GUI supported  
+    }
+    if (strcmp(api, CLAP_WINDOW_API_X11) == 0) {
+        return true; // Linux GUI supported
+    }
+    return false;
+}
+
+static bool clap_gui_create(const clap_plugin_t *plugin, const char *api, bool is_floating) {
+    if (s_gui_context) {
+        return false; // GUI already exists
+    }
+
+    s_gui_context = (gui_context_t *)malloc(sizeof(gui_context_t));
+    if (!s_gui_context) {
+        return false;
+    }
+
+    // Use default GUI size from constants
+    if (!gui_create(s_gui_context, plugin, GUI_WIDTH, GUI_HEIGHT)) {
+        free(s_gui_context);
+        s_gui_context = NULL;
+        return false;
+    }
+
+    printf("CLAP GUI created successfully (%dx%d)\n", GUI_WIDTH, GUI_HEIGHT);
+    return true;
+}
+
+static void gui_destroy(const clap_plugin_t *plugin) {
+    if (s_gui_context) {
+        gui_destroy(s_gui_context);
+        free(s_gui_context);
+        s_gui_context = NULL;
+    }
+}
+
+static bool gui_set_scale(const clap_plugin_t *plugin, double scale) {
+    // Handle DPI scaling if needed
+    printf("GUI scale set to: %.2f\n", scale);
+    return true;
+}
+
+static bool gui_get_size(const clap_plugin_t *plugin, uint32_t *width, uint32_t *height) {
+    if (!s_gui_context) return false;
+    
+    *width = s_gui_context->width;
+    *height = s_gui_context->height;
+    return true;
+}
+
+static bool gui_can_resize(const clap_plugin_t *plugin) {
+    return true;
+}
+
+static bool gui_set_size(const clap_plugin_t *plugin, uint32_t width, uint32_t height) {
+    if (!s_gui_context) return false;
+    
+    s_gui_context->width = width;
+    s_gui_context->height = height;
+    printf("GUI resized to: %dx%d\n", width, height);
+    return true;
+}
+
+static bool gui_set_parent(const clap_plugin_t *plugin, const clap_window_t *window) {
+    printf("GUI parent set\n");
+    return true;
+}
+
+static bool gui_set_transient(const clap_plugin_t *plugin, const clap_window_t *window) {
+    printf("GUI transient window set\n");
+    return true;
+}
+
+static void gui_suggest_title(const clap_plugin_t *plugin, const char *title) {
+    printf("GUI title: %s\n", title);
+}
+
+static bool gui_show(const clap_plugin_t *plugin) {
+    printf("GUI shown\n");
+    return true;
+}
+
+static bool gui_hide(const clap_plugin_t *plugin) {
+    printf("GUI hidden\n");
+    return true;
+}
+
+// Note: GUI update with audio data happens in the process function
+// This stub function is no longer needed
+
+clap_plugin_gui_t s_plugin_gui = {
+    .is_api_supported = gui_is_api_supported,
+    .get_preferred_api = NULL,  // No preference
+    .create = clap_gui_create,
+    .destroy = gui_destroy,
+    .set_scale = gui_set_scale,
+    .get_size = gui_get_size,
+    .can_resize = gui_can_resize,
+    .get_resize_hints = NULL,  // No resize hints
+    .adjust_size = NULL,  // No size adjustment
+    .set_size = gui_set_size,
+    .set_parent = gui_set_parent,
+    .set_transient = gui_set_transient,
+    .suggest_title = gui_suggest_title,
+    .show = gui_show,
+    .hide = gui_hide,
+};

@@ -1,0 +1,263 @@
+#include "dsp.h"
+
+#define _USE_MATH_DEFINES
+#include <math.h>
+#include <string.h>
+
+#ifndef M_PI
+#define M_PI 3.14159265358979323846
+#endif
+
+// Utility functions
+float freq_to_omega(float frequency, float sample_rate) {
+    return 2.0f * M_PI * frequency / sample_rate;
+}
+
+float db_to_gain(float db) {
+    return powf(10.0f, db / 20.0f);
+}
+
+float gain_to_db(float gain) {
+    return 20.0f * log10f(gain);
+}
+
+float clampf(float value, float min_val, float max_val) {
+    if (value < min_val) return min_val;
+    if (value > max_val) return max_val;
+    return value;
+}
+
+// Initialize biquad filter coefficients
+static void calculate_biquad_coefficients(filter_t *filter) {
+    float w0 = freq_to_omega(filter->cutoff_freq, filter->sample_rate);
+    float cos_w0 = cosf(w0);
+    float sin_w0 = sinf(w0);
+    float alpha = sin_w0 / (2.0f * filter->resonance);
+    float A = powf(10.0f, filter->gain / 40.0f);
+    
+    switch (filter->type) {
+        case FILTER_TYPE_LOWPASS: {
+            float b0 = (1.0f - cos_w0) / 2.0f;
+            float b1 = 1.0f - cos_w0;
+            float b2 = (1.0f - cos_w0) / 2.0f;
+            float a0 = 1.0f + alpha;
+            float a1 = -2.0f * cos_w0;
+            float a2 = 1.0f - alpha;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+        
+        case FILTER_TYPE_HIGHPASS: {
+            float b0 = (1.0f + cos_w0) / 2.0f;
+            float b1 = -(1.0f + cos_w0);
+            float b2 = (1.0f + cos_w0) / 2.0f;
+            float a0 = 1.0f + alpha;
+            float a1 = -2.0f * cos_w0;
+            float a2 = 1.0f - alpha;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+        
+        case FILTER_TYPE_BANDPASS: {
+            float b0 = sin_w0 / 2.0f;
+            float b1 = 0.0f;
+            float b2 = -sin_w0 / 2.0f;
+            float a0 = 1.0f + alpha;
+            float a1 = -2.0f * cos_w0;
+            float a2 = 1.0f - alpha;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+        
+        case FILTER_TYPE_NOTCH: {
+            float b0 = 1.0f;
+            float b1 = -2.0f * cos_w0;
+            float b2 = 1.0f;
+            float a0 = 1.0f + alpha;
+            float a1 = -2.0f * cos_w0;
+            float a2 = 1.0f - alpha;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+        
+        case FILTER_TYPE_PEAKING: {
+            float cos_w0 = cosf(w0);
+            float sin_w0 = sinf(w0);
+            float alpha = sin_w0 / (2.0f * filter->resonance);
+            
+            float b0 = 1.0f + alpha * A;
+            float b1 = -2.0f * cos_w0;
+            float b2 = 1.0f - alpha * A;
+            float a0 = 1.0f + alpha / A;
+            float a1 = -2.0f * cos_w0;
+            float a2 = 1.0f - alpha / A;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+        
+        case FILTER_TYPE_LOWSHELF: {
+            float cos_w0 = cosf(w0);
+            float sin_w0 = sinf(w0);
+            float A = powf(10.0f, filter->gain / 40.0f);
+            float beta = sqrtf(A) / filter->resonance;
+            
+            float b0 = A * ((A + 1.0f) - (A - 1.0f) * cos_w0 + beta * sin_w0);
+            float b1 = 2.0f * A * ((A - 1.0f) - (A + 1.0f) * cos_w0);
+            float b2 = A * ((A + 1.0f) - (A - 1.0f) * cos_w0 - beta * sin_w0);
+            float a0 = (A + 1.0f) + (A - 1.0f) * cos_w0 + beta * sin_w0;
+            float a1 = -2.0f * ((A - 1.0f) + (A + 1.0f) * cos_w0);
+            float a2 = (A + 1.0f) + (A - 1.0f) * cos_w0 - beta * sin_w0;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+        
+        case FILTER_TYPE_HIGHSHELF: {
+            float cos_w0 = cosf(w0);
+            float sin_w0 = sinf(w0);
+            float A = powf(10.0f, filter->gain / 40.0f);
+            float beta = sqrtf(A) / filter->resonance;
+            
+            float b0 = A * ((A + 1.0f) + (A - 1.0f) * cos_w0 + beta * sin_w0);
+            float b1 = -2.0f * A * ((A - 1.0f) + (A + 1.0f) * cos_w0);
+            float b2 = A * ((A + 1.0f) + (A - 1.0f) * cos_w0 - beta * sin_w0);
+            float a0 = (A + 1.0f) - (A - 1.0f) * cos_w0 + beta * sin_w0;
+            float a1 = 2.0f * ((A - 1.0f) - (A + 1.0f) * cos_w0);
+            float a2 = (A + 1.0f) - (A - 1.0f) * cos_w0 - beta * sin_w0;
+            
+            filter->b0 = b0 / a0;
+            filter->b1 = b1 / a0;
+            filter->b2 = b2 / a0;
+            filter->a1 = a1 / a0;
+            filter->a2 = a2 / a0;
+            filter->a0 = 1.0f;
+            break;
+        }
+    }
+}
+
+void filter_init(filter_t *filter, filter_type_t type, float cutoff_freq, float resonance, float gain, float sample_rate) {
+    memset(filter, 0, sizeof(filter_t));
+    
+    filter->type = type;
+    filter->cutoff_freq = cutoff_freq;
+    filter->resonance = resonance;
+    filter->gain = gain;
+    filter->sample_rate = sample_rate;
+    filter->initialized = false;
+    
+    filter_reset(filter);
+}
+
+void filter_set_parameters(filter_t *filter, filter_type_t type, float cutoff_freq, float resonance, float gain) {
+    bool type_changed = (filter->type != type);
+    
+    filter->type = type;
+    filter->cutoff_freq = cutoff_freq;
+    filter->resonance = resonance;
+    filter->gain = gain;
+    
+    if (type_changed || !filter->initialized) {
+        calculate_biquad_coefficients(filter);
+        filter->initialized = true;
+    }
+}
+
+void filter_set_sample_rate(filter_t *filter, float sample_rate) {
+    filter->sample_rate = sample_rate;
+    if (filter->initialized) {
+        calculate_biquad_coefficients(filter);
+    }
+}
+
+float filter_process_sample(filter_t *filter, float input) {
+    if (!filter->initialized) {
+        calculate_biquad_coefficients(filter);
+        filter->initialized = true;
+    }
+    
+    // Direct Form I biquad implementation
+    float output = filter->b0 * input + filter->b1 * filter->x1 + filter->b2 * filter->x2
+                 - filter->a1 * filter->y1 - filter->a2 * filter->y2;
+    
+    // Update delays
+    filter->x2 = filter->x1;
+    filter->x1 = input;
+    filter->y2 = filter->y1;
+    filter->y1 = output;
+    
+    return output;
+}
+
+void filter_process_block(filter_t *filter, const float *input, float *output, uint32_t frames) {
+    for (uint32_t i = 0; i < frames; ++i) {
+        output[i] = filter_process_sample(filter, input[i]);
+    }
+}
+
+void filter_reset(filter_t *filter) {
+    filter->x1 = filter->x2 = 0.0f;
+    filter->y1 = filter->y2 = 0.0f;
+}
+
+void filter_get_frequency_response(filter_t *filter, float frequency, float *magnitude_db, float *phase_deg) {
+    if (!filter->initialized) {
+        calculate_biquad_coefficients(filter);
+        filter->initialized = true;
+    }
+    
+    float omega = freq_to_omega(frequency, filter->sample_rate);
+    float cos_omega = cosf(omega);
+    float sin_omega = sinf(omega);
+    
+    // Calculate frequency response at omega
+    float num_real = filter->b0 + filter->b1 * cos_omega + filter->b2 * cos(2.0f * omega);
+    float num_imag = filter->b1 * sin_omega + filter->b2 * sin(2.0f * omega);
+    float den_real = 1.0f + filter->a1 * cos_omega + filter->a2 * cos(2.0f * omega);
+    float den_imag = filter->a1 * sin_omega + filter->a2 * sin(2.0f * omega);
+    
+    // Calculate magnitude and phase
+    float num_mag = sqrtf(num_real * num_real + num_imag * num_imag);
+    float den_mag = sqrtf(den_real * den_real + den_imag * den_imag);
+    
+    *magnitude_db = gain_to_db(num_mag / den_mag);
+    
+    float num_phase = atan2f(num_imag, num_real);
+    float den_phase = atan2f(den_imag, den_real);
+    *phase_deg = (num_phase - den_phase) * 180.0f / M_PI;
+}

@@ -1,0 +1,204 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "PluginProcessor.h"
+#include "GUI/StemChannel.h"
+#include "GUI/Visualizer.h"
+#include "GUI/PremiumLookAndFeel.h"
+
+/**
+ * StemperatorEditor - Premium plugin GUI with scalable layout
+ *
+ * FabFilter-inspired design with famous scalable tweaks:
+ * - Proportional scaling for all elements
+ * - Font sizes adapt to window size
+ * - Works great from 600x400 to 1600x1000
+ * - Maintains visual balance at any size
+ *
+ * Standalone mode adds:
+ * - File menu for loading audio files
+ * - Export menu for saving separated stems
+ * - Transport controls for playback
+ */
+class StemperatorEditor : public juce::AudioProcessorEditor,
+                          public juce::Timer,
+                          public juce::MenuBarModel,
+                          public juce::ApplicationCommandTarget,
+                          public juce::KeyListener,
+                          public juce::FileDragAndDropTarget
+{
+public:
+    explicit StemperatorEditor (StemperatorProcessor&);
+    ~StemperatorEditor() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void timerCallback() override;
+    void parentHierarchyChanged() override;
+    void visibilityChanged() override;
+
+    // KeyListener - for Escape to cancel
+    bool keyPressed (const juce::KeyPress& key, juce::Component* originatingComponent) override;
+
+    // FileDragAndDropTarget - for drag & drop audio files
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
+    // MenuBarModel interface
+    juce::StringArray getMenuBarNames() override;
+    juce::PopupMenu getMenuForIndex (int menuIndex, const juce::String& menuName) override;
+    void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
+
+    // ApplicationCommandTarget interface
+    juce::ApplicationCommandTarget* getNextCommandTarget() override { return nullptr; }
+    void getAllCommands (juce::Array<juce::CommandID>& commands) override;
+    void getCommandInfo (juce::CommandID commandID, juce::ApplicationCommandInfo& result) override;
+    bool perform (const juce::ApplicationCommandTarget::InvocationInfo& info) override;
+
+    // Check if running as standalone (not in a DAW)
+    bool isStandalone() const;
+
+private:
+    StemperatorProcessor& processor;
+    PremiumLookAndFeel premiumLookAndFeel;
+
+    // Base dimensions for scaling calculations
+    static constexpr int baseWidth = 850;
+    static constexpr int baseHeight = 550;
+
+    // Get current scale factor
+    float getScaleFactor() const
+    {
+        float scaleX = (float) getWidth() / baseWidth;
+        float scaleY = (float) getHeight() / baseHeight;
+        return juce::jmin (scaleX, scaleY);  // Use smaller to maintain aspect
+    }
+
+    // Scale a value based on current size
+    int scaled (int value) const { return juce::roundToInt (value * getScaleFactor()); }
+    float scaled (float value) const { return value * getScaleFactor(); }
+
+    // Stem channels
+    std::array<std::unique_ptr<StemChannel>, 4> stemChannels;
+
+    // Visualizer
+    Visualizer visualizer;
+
+    // Master section
+    juce::Slider masterSlider;
+    juce::Label masterLabel { {}, "MASTER" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
+
+    // Focus controls
+    juce::Slider vocalsFocusSlider;
+    juce::Slider bassCutoffSlider;
+    juce::Slider drumSensSlider;
+    juce::Label vocalsFocusLabel { {}, "VOCAL FOCUS" };
+    juce::Label bassCutoffLabel { {}, "BASS CUTOFF" };
+    juce::Label drumSensLabel { {}, "DRUM SENS" };
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> vocalsFocusAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bassCutoffAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> drumSensAttachment;
+
+    // Quality selector
+    juce::ComboBox qualityBox;
+    juce::Label qualityLabel { {}, "QUALITY" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityAttachment;
+
+    // Header components
+    juce::Label titleLabel { {}, "STEMPERATOR" };
+    juce::Label subtitleLabel { {}, "AI-POWERED STEM SEPARATION" };
+    juce::Label brandLabel { {}, "flarkAUDIO" };
+
+    // Colours
+    const std::array<juce::Colour, 4> stemColours = {
+        PremiumLookAndFeel::Colours::vocals,
+        PremiumLookAndFeel::Colours::drums,
+        PremiumLookAndFeel::Colours::bass,
+        PremiumLookAndFeel::Colours::other
+    };
+
+    void setupSlider (juce::Slider& slider, juce::Colour colour);
+    void setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text, juce::Colour colour);
+    void updateFontSizes();
+
+    // Command IDs for menu actions
+    enum CommandIDs
+    {
+        cmdLoadFile = 1,
+        cmdSeparate,         // Separate file into stems (load into memory for playback)
+        cmdLoadStems,        // Load previously exported stems
+        cmdBatchProcess,     // Batch process multiple files
+        cmdExportAllStems,
+        cmdExportVocals,
+        cmdExportDrums,
+        cmdExportBass,
+        cmdExportOther,
+        cmdExportMix,        // Export mixed stems with current volume/mute settings
+        cmdPlay,
+        cmdStop,
+        cmdPlayStems,        // Play separated stems (with mute/solo applied)
+        cmdOpenStemFolder,   // Open folder containing stems
+        cmdAbout,
+        cmdQuit              // Exit the application
+    };
+
+    // File menu functionality
+    void loadAudioFile();
+    void loadAudioFile (const juce::File& file);  // Load specific file
+    void exportStems (int stemIndex = -1);  // -1 = all stems
+    void exportMixedStems();  // Export stems merged with current volume/mute settings
+    void showExportProgress (const juce::String& message);
+    void batchProcessFiles();  // Process multiple audio files
+    void openStemFolder();     // Open folder containing exported stems
+    void loadStemsAfterExport (const juce::File& folder);  // Load stems into playback after export
+
+    // Standalone-specific components
+    std::unique_ptr<juce::MenuBarComponent> menuBar;
+    juce::ApplicationCommandManager commandManager;
+
+    // Audio file handling for standalone
+    std::unique_ptr<juce::AudioFormatManager> formatManager;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    std::unique_ptr<juce::FileChooser> fileChooser;  // Keep alive during async operation
+    juce::AudioTransportSource transportSource;
+    juce::File currentAudioFile;
+    juce::AudioBuffer<float> loadedAudioBuffer;
+    double loadedSampleRate = 44100.0;
+    bool hasLoadedFile = false;
+
+    // Separated stem playback
+    std::array<juce::AudioBuffer<float>, 4> separatedStems;  // Vocals, Drums, Bass, Other
+    bool hasSeparatedStems = false;
+    juce::File lastStemFolder;  // Remember where stems were exported
+
+    // Stem mixer for playback
+    class StemMixerSource;
+    std::unique_ptr<StemMixerSource> stemMixerSource;
+
+    void separateCurrentFile();  // Separate without exporting
+    void loadStemsFromFolder (const juce::File& folder);  // Load previously exported stems
+    void updateStemPlayback();  // Apply mute/solo/volume to playback
+
+    // Export state
+    std::atomic<bool> isExporting { false };
+    std::atomic<bool> cancelExport { false };
+    std::atomic<float> exportProgress { 0.0f };
+    std::array<std::atomic<float>, 4> exportStemLevels;  // For visual feedback
+
+    // Transport controls (standalone only)
+    std::unique_ptr<juce::TextButton> playButton;
+    std::unique_ptr<juce::TextButton> stopButton;
+    std::unique_ptr<juce::Slider> positionSlider;
+    std::unique_ptr<juce::Slider> volumeSlider;
+    std::unique_ptr<juce::Label> fileNameLabel;
+    std::unique_ptr<juce::Label> timeLabel;
+    std::unique_ptr<juce::Label> volumeLabel;
+    bool wasPlayingBeforeSeek = false;
+
+    void setupTransportControls();
+    void updateTransportDisplay();
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorEditor)
+};

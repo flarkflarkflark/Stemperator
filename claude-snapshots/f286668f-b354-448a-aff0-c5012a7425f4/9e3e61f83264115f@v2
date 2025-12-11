@@ -1,0 +1,192 @@
+# AI Image Prompts voor Stemperator Screenshots
+
+Gebruik deze prompts om promotional/conceptuele afbeeldingen te genereren voor de Stemperator README.
+
+## REAPER Visuele Kenmerken
+
+Voor authentieke REAPER-style afbeeldingen, deze elementen zijn belangrijk:
+
+- **Kleurenschema**: Donkergrijs (#333333) achtergrond, lichtgrijze (#666666) panelen
+- **Track Control Panel (TCP)**: Links, ~150px breed, met track naam, M/S/R knoppen, volume fader
+- **Arrange view**: Horizontale waveforms met peak visualization
+- **Transport bar**: Bovenaan met play/stop/record knoppen, tijdsindicator
+- **Mixer**: Onderaan of rechts, verticale faders
+- **Font**: Tahoma of Arial, klein (11-12px)
+
+## Kleurenpalet Stemperator (uit de code)
+
+| Stem   | RGB             | Hex       | Beschrijving |
+|--------|-----------------|-----------|--------------|
+| Vocals | 255, 100, 100   | #FF6464   | Koraalrood   |
+| Drums  | 100, 200, 255   | #64C8FF   | Hemelsblauw  |
+| Bass   | 150, 100, 255   | #9664FF   | Paars/violet |
+| Other  | 100, 255, 150   | #64FF96   | Mintgroen    |
+| Guitar | 255, 180, 80    | #FFB450   | Oranje       |
+| Piano  | 255, 120, 200   | #FF78C8   | Roze         |
+
+---
+
+## 1. Midjourney
+
+**Website:** https://www.midjourney.com/
+
+### Prompt 1: REAPER met Stemperator resultaat
+
+```
+Screenshot of REAPER digital audio workstation, dark grey theme. Arrange window showing 5 horizontal tracks stacked vertically. Top track labeled "Original Mix" is muted (greyed out waveform). Below are 4 stem tracks with vibrant colored waveforms: "Vocals" track in coral red #FF6464, "Drums" track in sky blue #64C8FF, "Bass" track in purple #9664FF, "Other" track in mint green #64FF96. Left side shows Track Control Panel with track names, mute/solo buttons, and volume sliders. Transport bar at top with timecode. Photorealistic software screenshot, professional audio production, 16:9 --ar 16:9 --v 6
+```
+
+### Prompt 2: REAPER Time Selection Workflow
+
+```
+REAPER DAW screenshot showing time selection workflow. Dark grey interface. Single audio track with stereo waveform. A highlighted time selection region (lighter overlay) spanning 4 bars in the middle of the arrangement. Right-click context menu visible showing "Stemperator" submenu with options "Karaoke", "Vocals Only", "Drums Only", "All Stems". Cursor positioned on the selection. Transport bar showing bar/beat time. Realistic software UI, professional music production --ar 16:9 --v 6
+```
+
+### Prompt 3: REAPER Toolbar met Stemperator Icons
+
+```
+Close-up of REAPER toolbar area, dark grey theme. Custom toolbar showing 8 colorful icon buttons in a row: settings gear icon, microphone icon (red tint), drum icon (blue tint), bass guitar icon (purple tint), guitar icon (orange tint), piano keys icon (pink tint), "4" stem icon, "6" stem icon. Icons are 30x30 pixels, slightly rounded, modern flat design. Below toolbar is the arrange view with faded waveforms. Realistic software interface screenshot --ar 16:9 --v 6
+```
+
+### Prompt 4: Before/After in REAPER
+
+```
+Split comparison in REAPER DAW. Left half labeled "BEFORE": single stereo track with complex mixed waveform in grey/white. Right half labeled "AFTER": same timeline position but now showing 4 separate tracks with individual stem waveforms in coral red (vocals), sky blue (drums), purple (bass), mint green (other). Track Control Panels visible on left showing track names. Dark grey REAPER theme, timeline ruler at top, professional audio software aesthetic --ar 16:9 --v 6
+```
+
+---
+
+## 2. DALL-E 3 / Bing Image Creator
+
+**Website:** https://chat.openai.com/ of https://www.bing.com/images/create
+
+**Let op:** Bing heeft een karakterlimiet (~480 tekens). Onderstaande prompts zijn ingekort.
+
+### Prompt 1: REAPER Arrange View met Stems
+
+```
+REAPER DAW screenshot, dark grey theme. 5 audio tracks: top "Song.mp3" muted grey, below 4 stems with colored waveforms - Vocals red, Drums blue, Bass purple, Other green. Track names on left panel. Timeline ruler at top. Realistic software screenshot.
+```
+
+### Prompt 2: Stemperator Dialog in REAPER
+
+```
+REAPER DAW with floating dialog "Stemperator - AI Stem Separation". Dark theme. Checkboxes: Vocals (red), Drums (blue), Bass (purple), Other (green). Buttons: Cancel, Separate. REAPER arrange view darkened behind. Software UI screenshot.
+```
+
+### Prompt 3: REAPER Workflow - Selectie naar Stems
+
+```
+3-panel workflow: REAPER DAW dark theme. Panel 1 SELECT: audio track with time selection. Panel 2 PROCESS: dialog with progress bar. Panel 3 RESULT: 4 colored stem tracks (red, blue, purple, green). Arrows between panels.
+```
+
+### Prompt 4: REAPER Producer Perspectief
+
+```
+Music producer at computer showing REAPER DAW. Screen shows colorful stem tracks: red vocals, blue drums, purple bass, green other. Dark grey interface with mixer. Studio lighting, shallow depth of field on screen.
+```
+
+---
+
+## 3. Ideogram
+
+**Website:** https://ideogram.ai/
+
+Ideogram is bijzonder goed in tekst rendering - perfect voor REAPER UI met leesbare labels.
+
+### Prompt 1: REAPER Track Control Panel Detail
+
+```
+Detailed view of REAPER DAW Track Control Panel, dark grey theme. Shows 4 tracks stacked vertically with exact labels: "Vocals" with red color bar, "Drums" with blue color bar, "Bass" with purple color bar, "Other" with green color bar. Each track shows: track name text, M S R buttons (Mute Solo Record), volume fader, pan knob. Small VU meters showing activity. Font is small sans-serif. To the right, partial view of arrange area with matching colored waveforms. Photorealistic software screenshot, authentic REAPER interface style.
+```
+
+### Prompt 2: Stemperator Menu in REAPER
+
+```
+Screenshot of REAPER DAW showing right-click context menu. Dark grey interface. Menu shows hierarchical structure: "Item processing" > "Stemperator" submenu expanded showing options: "AI Stem Separation...", "Quick: Karaoke", "Quick: Vocals Only", "Quick: Drums Only", "Quick: Bass Only", "Quick: All Stems". Each menu item has proper spacing and hover highlight. Background shows arrange view with audio waveform. Realistic Windows/Linux application menu styling. Clear readable text.
+```
+
+### Prompt 3: REAPER Toolbar Icons Close-up
+
+```
+Extreme close-up of REAPER custom toolbar, dark grey background. Row of 10 square buttons (30x30 pixels each) with icons and labels below: gear icon "Setup", microphone "Vocals", drum "Drums", bass guitar "Bass", electric guitar "Guitar", piano "Piano", waveform "Other", grid "4-Stem", grid "6-Stem", layers "Explode". Icons have subtle color tints matching stem colors (red, blue, purple, orange, pink, green). Clean flat design, slight button borders. Text labels in small sans-serif font below each icon.
+```
+
+### Prompt 4: REAPER Project met Stemperator Resultaat
+
+```
+Full REAPER DAW interface screenshot, dark grey default theme. Top: transport bar with play/stop buttons, time display showing "2:34.567", tempo "120 BPM". Left: Track Control Panel showing 5 tracks - "Mix (Original)" muted, "Vocals", "Drums", "Bass", "Other" with colored indicators. Center: Arrange view with horizontal waveforms, the original grey/muted, stems in red, blue, purple, green. Timeline ruler showing bars 1-16. Bottom: Mixer panel with 4 visible channel strips. Right edge: Media Explorer collapsed. Authentic REAPER v7 appearance, photorealistic.
+```
+
+---
+
+## 4. Bonus: Animated GIF Storyboard
+
+Voor een geanimeerde GIF kun je deze frames genereren:
+
+### Frame 1 (0.0s): Selectie
+```
+REAPER arrange view, single track "mysong.mp3" with waveform, mouse cursor clicking on the media item to select it (selection highlight visible)
+```
+
+### Frame 2 (0.5s): Menu
+```
+Same view, right-click menu open showing "Stemperator > AI Stem Separation..."
+```
+
+### Frame 3 (1.0s): Dialog
+```
+Stemperator dialog open, checkboxes for all stems checked, mouse hovering over "Separate" button
+```
+
+### Frame 4 (1.5s): Processing
+```
+Dialog showing progress bar at 60%, text "Processing: Separating stems..."
+```
+
+### Frame 5 (2.0s): Resultaat
+```
+4 new tracks visible with colored waveforms, original track muted, zoom slightly adjusted to show all tracks
+```
+
+---
+
+## Tips voor REAPER-specifieke afbeeldingen
+
+1. **Gebruik REAPER's standaard thema** - Dark grey (#333) is herkenbaar
+2. **Track hoogte ~60-80px** - Standaard REAPER proportie
+3. **TCP breedte ~150px** - Met M/S/R knoppen zichtbaar
+4. **Waveform style** - Peak visualization, niet spectral
+5. **Lettertype** - Klein, sans-serif (Tahoma/Arial 11px)
+6. **Geen fancy effecten** - REAPER is functioneel, niet flashy
+
+## REAPER Versie Referentie
+
+Gebruik REAPER v6 of v7 style (2020-2024):
+- Flat design buttons
+- Subtle gradients
+- High contrast track colors
+- Modern iconography
+
+---
+
+## Aanbevolen afbeeldingsformaten voor README
+
+| Gebruik | Formaat | Resolutie |
+|---------|---------|-----------|
+| Hero/banner | 16:9 | 1920x1080 of 1280x720 |
+| Inline screenshot | 16:9 | 800x450 |
+| Dialog detail | 4:3 | 600x450 |
+| Toolbar detail | 6:1 | 600x100 |
+
+## Na generatie
+
+Upload de afbeeldingen naar `/home/flark/GIT/Stemperator/docs/images/` en voeg ze toe aan de README met:
+
+```markdown
+![Stemperator in REAPER](docs/images/reaper-stems.png)
+
+![Stemperator Dialog](docs/images/dialog.png)
+
+![Workflow: Select → Process → Result](docs/images/workflow.gif)
+```

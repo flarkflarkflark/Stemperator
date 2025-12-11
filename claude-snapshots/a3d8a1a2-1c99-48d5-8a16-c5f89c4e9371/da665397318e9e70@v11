@@ -1,0 +1,785 @@
+-- @description Stemperator - AI Stem Separation
+-- @author flarkAUDIO
+-- @version 1.0.0
+-- @changelog
+--   Initial release
+-- @provides
+--   [main] .
+--   [nomain] audio_separator_process.py
+-- @link Repository https://github.com/flarkflarkflark/Stemperator
+-- @about
+--   # Stemperator - AI Stem Separation
+--
+--   High-quality AI-powered stem separation using Demucs/audio-separator.
+--   Separates the selected media item (respecting splits/edits) into 4 stems:
+--   Vocals, Drums, Bass, and Other.
+--
+--   ## Features
+--   - Processes ONLY the selected item portion (respects splits!)
+--   - Choose which stems to extract via checkboxes
+--   - Option to create new tracks or replace in-place (as takes)
+--   - GPU acceleration support (NVIDIA CUDA, AMD ROCm)
+--   - Progress indicator during processing
+--
+--   ## Requirements
+--   - Python 3.9+ with audio-separator:
+--     `pip install audio-separator[gpu]`
+--   - ffmpeg installed and in PATH
+--
+--   ## Usage
+--   1. Select a media item (can be a split/trimmed portion)
+--   2. Run this script (Actions > Stemperator)
+--   3. Select which stems you want (checkboxes)
+--   4. Choose output mode: New tracks or In-place (as takes)
+--   5. Wait for AI processing (~10-60 seconds depending on length)
+--
+--   ## License
+--   MIT License - https://opensource.org/licenses/MIT
+
+local SCRIPT_NAME = "Stemperator: AI Stem Separation"
+
+-- Get script path for finding audio_separator_process.py
+local info = debug.getinfo(1, "S")
+local script_path = info.source:match("@?(.*/)")
+if not script_path then script_path = "" end
+
+-- Configuration - Auto-detect paths
+local function findPython()
+    -- Try common python paths
+    local paths = {
+        script_path .. "../.venv/bin/python",
+        script_path .. ".venv/bin/python",
+        os.getenv("HOME") .. "/.local/bin/python3",
+        "/usr/bin/python3",
+        "python3",
+        "python",
+    }
+    for _, p in ipairs(paths) do
+        local handle = io.popen('which "' .. p .. '" 2>/dev/null || echo ""')
+        if handle then
+            local result = handle:read("*a"):gsub("%s+", "")
+            handle:close()
+            if result ~= "" then return result end
+        end
+        -- Try direct path
+        local f = io.open(p, "r")
+        if f then f:close(); return p end
+    end
+    return "python3"  -- fallback
+end
+
+local function findSeparatorScript()
+    -- Try paths relative to script location
+    local paths = {
+        script_path .. "audio_separator_process.py",
+        script_path .. "../AI/audio_separator_process.py",
+        script_path .. "../../Source/AI/audio_separator_process.py",
+    }
+    for _, p in ipairs(paths) do
+        local f = io.open(p, "r")
+        if f then f:close(); return p end
+    end
+    return script_path .. "audio_separator_process.py"  -- fallback
+end
+
+local PYTHON_PATH = findPython()
+local SEPARATOR_SCRIPT = findSeparatorScript()
+
+-- Stem configuration (with selection state)
+local STEMS = {
+    { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav", selected = true },
+    { name = "Drums",  color = {100, 200, 255}, file = "drums.wav", selected = true },
+    { name = "Bass",   color = {150, 100, 255}, file = "bass.wav", selected = true },
+    { name = "Other",  color = {100, 255, 150}, file = "other.wav", selected = true },
+}
+
+-- Settings (persist between runs)
+local SETTINGS = {
+    model = "htdemucs",
+    createNewTracks = true,
+    createFolder = true,  -- Create folder track to group stems
+}
+
+-- GUI state
+local GUI = {
+    running = false,
+    result = nil,  -- nil = running, true = OK, false = cancelled
+}
+
+local function rgbToReaperColor(r, g, b)
+    return reaper.ColorToNative(r, g, b) | 0x1000000
+end
+
+-- Draw a checkbox and return if it was clicked
+local function drawCheckbox(x, y, checked, label, r, g, b)
+    local boxSize = 18
+    local clicked = false
+
+    -- Measure label width for click area
+    local labelWidth = gfx.measurestr(label)
+    local totalWidth = boxSize + 8 + labelWidth
+
+    -- Check for mouse click (include label in click area)
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+
+    if mouseDown and mx >= x and mx <= x + totalWidth and my >= y and my <= y + boxSize then
+        if not GUI.wasMouseDown then
+            clicked = true
+        end
+    end
+
+    -- Draw checkbox background (neutral colors, not stem-colored)
+    if checked then
+        gfx.set(0.3, 0.5, 0.7, 1)  -- Blue-ish when checked
+    else
+        gfx.set(0.3, 0.3, 0.3, 1)  -- Dark gray when unchecked
+    end
+    gfx.rect(x, y, boxSize, boxSize, 1)
+
+    -- Draw checkbox border
+    gfx.set(0.6, 0.6, 0.6, 1)
+    gfx.rect(x, y, boxSize, boxSize, 0)
+
+    -- Draw checkmark if checked
+    if checked then
+        gfx.set(1, 1, 1, 1)
+        gfx.line(x + 3, y + 9, x + 7, y + 13)
+        gfx.line(x + 7, y + 13, x + 14, y + 4)
+        gfx.line(x + 3, y + 10, x + 7, y + 14)
+        gfx.line(x + 7, y + 14, x + 14, y + 5)
+    end
+
+    -- Draw label with stem color
+    gfx.set(r/255, g/255, b/255, 1)
+    gfx.x = x + boxSize + 8
+    gfx.y = y + 2
+    gfx.drawstr(label)
+
+    return clicked
+end
+
+-- Draw a radio button and return if it was clicked
+local function drawRadio(x, y, selected, label)
+    local radius = 8
+    local clicked = false
+
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+
+    if mouseDown and mx >= x and mx <= x + radius * 2 and my >= y and my <= y + radius * 2 then
+        if not GUI.wasMouseDown then
+            clicked = true
+        end
+    end
+
+    -- Draw outer circle
+    gfx.set(0.6, 0.6, 0.6, 1)
+    gfx.circle(x + radius, y + radius, radius, 0, 1)
+
+    -- Draw inner circle if selected
+    if selected then
+        gfx.set(0.4, 0.7, 1, 1)
+        gfx.circle(x + radius, y + radius, radius - 3, 1, 1)
+    end
+
+    -- Draw label
+    gfx.set(0.9, 0.9, 0.9, 1)
+    gfx.x = x + radius * 2 + 8
+    gfx.y = y + 2
+    gfx.drawstr(label)
+
+    return clicked
+end
+
+-- Draw a button and return if it was clicked
+local function drawButton(x, y, w, h, label, isDefault)
+    local clicked = false
+    local mx, my = gfx.mouse_x, gfx.mouse_y
+    local mouseDown = gfx.mouse_cap & 1 == 1
+    local hover = mx >= x and mx <= x + w and my >= y and my <= y + h
+
+    if mouseDown and hover then
+        if not GUI.wasMouseDown then
+            clicked = true
+        end
+    end
+
+    -- Button background
+    if hover then
+        if isDefault then
+            gfx.set(0.3, 0.5, 0.8, 1)
+        else
+            gfx.set(0.4, 0.4, 0.4, 1)
+        end
+    else
+        if isDefault then
+            gfx.set(0.2, 0.4, 0.7, 1)
+        else
+            gfx.set(0.3, 0.3, 0.3, 1)
+        end
+    end
+    gfx.rect(x, y, w, h, 1)
+
+    -- Button border
+    gfx.set(0.6, 0.6, 0.6, 1)
+    gfx.rect(x, y, w, h, 0)
+
+    -- Button label (centered)
+    gfx.set(1, 1, 1, 1)
+    local tw, th = gfx.measurestr(label)
+    gfx.x = x + (w - tw) / 2
+    gfx.y = y + (h - th) / 2
+    gfx.drawstr(label)
+
+    return clicked
+end
+
+-- Main dialog loop
+local function dialogLoop()
+    -- Clear background
+    gfx.set(0.18, 0.18, 0.2, 1)
+    gfx.rect(0, 0, gfx.w, gfx.h, 1)
+
+    -- Title
+    gfx.set(1, 1, 1, 1)
+    gfx.setfont(1, "Arial", 18, string.byte('b'))
+    gfx.x = 20
+    gfx.y = 15
+    gfx.drawstr("Stemperator - AI Stem Separation")
+
+    -- Reset to normal font
+    gfx.setfont(1, "Arial", 14)
+
+    -- Section: Stems to Extract
+    gfx.set(0.7, 0.7, 0.7, 1)
+    gfx.x = 20
+    gfx.y = 50
+    gfx.drawstr("Select stems to extract:")
+
+    -- Stem checkboxes
+    local y = 75
+    for i, stem in ipairs(STEMS) do
+        if drawCheckbox(30, y, stem.selected, stem.name, stem.color[1], stem.color[2], stem.color[3]) then
+            STEMS[i].selected = not STEMS[i].selected
+        end
+        y = y + 28
+    end
+
+    -- Section: Model
+    gfx.set(0.7, 0.7, 0.7, 1)
+    gfx.x = 180
+    gfx.y = 50
+    gfx.drawstr("AI Model:")
+
+    if drawRadio(190, 75, SETTINGS.model == "htdemucs", "Fast (htdemucs)") then
+        SETTINGS.model = "htdemucs"
+    end
+    if drawRadio(190, 103, SETTINGS.model == "htdemucs_ft", "Quality (htdemucs_ft)") then
+        SETTINGS.model = "htdemucs_ft"
+    end
+
+    -- Section: Output
+    gfx.set(0.7, 0.7, 0.7, 1)
+    gfx.x = 180
+    gfx.y = 140
+    gfx.drawstr("Output mode:")
+
+    if drawRadio(190, 165, SETTINGS.createNewTracks, "Create new tracks") then
+        SETTINGS.createNewTracks = true
+    end
+    if drawRadio(190, 193, not SETTINGS.createNewTracks, "In-place (as takes)") then
+        SETTINGS.createNewTracks = false
+    end
+
+    -- Folder option (only shown when creating new tracks)
+    if SETTINGS.createNewTracks then
+        if drawCheckbox(190, 223, SETTINGS.createFolder, "Group in folder", 180, 180, 180) then
+            SETTINGS.createFolder = not SETTINGS.createFolder
+        end
+    end
+
+    -- Buttons
+    local btnY = gfx.h - 45
+    if drawButton(gfx.w - 200, btnY, 85, 30, "Cancel", false) then
+        GUI.result = false
+    end
+    if drawButton(gfx.w - 105, btnY, 85, 30, "Separate", true) then
+        -- Check at least one stem selected
+        local anySelected = false
+        for _, stem in ipairs(STEMS) do
+            if stem.selected then anySelected = true; break end
+        end
+        if anySelected then
+            GUI.result = true
+        else
+            reaper.MB("Please select at least one stem to extract.", SCRIPT_NAME, 0)
+        end
+    end
+
+    -- Track mouse state for click detection
+    GUI.wasMouseDown = (gfx.mouse_cap & 1 == 1)
+
+    -- Handle ESC key
+    local char = gfx.getchar()
+    if char == 27 then  -- ESC
+        GUI.result = false
+    elseif char == 13 then  -- Enter
+        local anySelected = false
+        for _, stem in ipairs(STEMS) do
+            if stem.selected then anySelected = true; break end
+        end
+        if anySelected then
+            GUI.result = true
+        end
+    end
+
+    gfx.update()
+
+    -- Continue loop or exit
+    if GUI.result == nil and char ~= -1 then
+        reaper.defer(dialogLoop)
+    else
+        gfx.quit()
+        if GUI.result then
+            -- Proceed with separation
+            reaper.defer(runSeparationWorkflow)
+        end
+    end
+end
+
+-- Show stem selection dialog with proper checkboxes
+local function showStemSelectionDialog()
+    GUI.result = nil
+    GUI.wasMouseDown = false
+
+    -- Get screen dimensions and center the dialog
+    local screenW, screenH = reaper.GetAppVersion():match("OSX") and 1920 or 1920, 1080
+
+    -- Try to get actual screen size using JS extension if available
+    if reaper.JS_Window_GetClientRect then
+        local hwnd = reaper.GetMainHwnd()
+        if hwnd then
+            local _, left, top, right, bottom = reaper.JS_Window_GetClientRect(hwnd)
+            screenW = right - left
+            screenH = bottom - top
+        end
+    end
+
+    -- Dialog size
+    local dialogW, dialogH = 380, 290
+
+    -- Try to position under mouse, fallback to center
+    local mouseX, mouseY = reaper.GetMousePosition()
+    local posX = mouseX - dialogW / 2
+    local posY = mouseY - 20  -- Slightly above mouse
+
+    -- Clamp to screen bounds
+    if posX < 50 then posX = 50 end
+    if posY < 50 then posY = 50 end
+    if posX + dialogW > screenW - 50 then posX = screenW - dialogW - 50 end
+    if posY + dialogH > screenH - 50 then posY = screenH - dialogH - 50 end
+
+    -- Initialize graphics window at calculated position
+    gfx.init(SCRIPT_NAME, dialogW, dialogH, 0, posX, posY)
+    gfx.setfont(1, "Arial", 14)
+
+    -- Start dialog loop
+    dialogLoop()
+end
+
+-- Render selected item to a temporary WAV file
+local function renderItemToWav(item, outputPath)
+    local take = reaper.GetActiveTake(item)
+    if not take then
+        return nil, "No active take"
+    end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    if not source then
+        return nil, "No source"
+    end
+
+    local sourceFile = reaper.GetMediaSourceFileName(source, "")
+    if not sourceFile or sourceFile == "" then
+        return nil, "No source file"
+    end
+
+    -- Get item properties
+    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+
+    -- Get take offset (where in the source file the item starts)
+    local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+    local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+
+    -- Calculate source start/end times
+    local srcStart = takeOffset
+    local duration = itemLen * playrate
+
+    -- Use ffmpeg to extract just the portion we need
+    local ffmpegCmd = string.format(
+        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s" 2>/dev/null',
+        sourceFile, srcStart, duration, outputPath
+    )
+
+    local handle = io.popen(ffmpegCmd)
+    local result = handle:read("*a")
+    handle:close()
+
+    -- Check if output was created
+    local f = io.open(outputPath, "r")
+    if f then
+        f:close()
+        return outputPath
+    else
+        return nil, "Failed to extract audio"
+    end
+end
+
+-- Run AI separation
+local function runSeparation(inputFile, outputDir, model)
+    local cmd = string.format(
+        '"%s" -u "%s" "%s" "%s" --model %s 2>/dev/null',
+        PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model
+    )
+
+    local handle = io.popen(cmd)
+    if not handle then
+        return nil, "Failed to start separation process"
+    end
+
+    -- Just wait for completion (output suppressed)
+    handle:read("*a")
+    handle:close()
+
+    -- Check if stems were created (only check selected ones)
+    local stems = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = outputDir .. "/" .. stem.file
+            local f = io.open(stemPath, "r")
+            if f then
+                f:close()
+                stems[stem.name:lower()] = stemPath
+            end
+        end
+    end
+
+    if next(stems) == nil then
+        return nil, "Separation failed - no stems created"
+    end
+
+    return stems
+end
+
+-- Replace item in-place with stems as takes
+local function replaceInPlace(item, stemPaths, itemPos, itemLen)
+    local track = reaper.GetMediaItem_Track(item)
+
+    reaper.Undo_BeginBlock()
+
+    -- Delete original item
+    reaper.DeleteTrackMediaItem(track, item)
+
+    -- Create items for each selected stem
+    local items = {}
+    local firstItem = true
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                local newItem = reaper.AddMediaItemToTrack(track)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+
+                local take = reaper.AddTakeToMediaItem(newItem)
+                local source = reaper.PCM_Source_CreateFromFile(stemPath)
+                reaper.SetMediaItemTake_Source(take, source)
+                reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
+
+                local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+
+                if firstItem then
+                    reaper.SetMediaItemInfo_Value(newItem, "B_UISEL", 1)
+                    firstItem = false
+                end
+
+                items[#items + 1] = newItem
+            end
+        end
+    end
+
+    -- Merge all items into one with multiple takes
+    if #items > 1 then
+        local mainItem = items[1]
+        for i = 2, #items do
+            local srcItem = items[i]
+            local srcTake = reaper.GetActiveTake(srcItem)
+            if srcTake then
+                local newTake = reaper.AddTakeToMediaItem(mainItem)
+                local srcSource = reaper.GetMediaItemTake_Source(srcTake)
+                reaper.SetMediaItemTake_Source(newTake, srcSource)
+                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(srcTake, "P_NAME", "", false)
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
+            end
+            reaper.DeleteTrackMediaItem(track, srcItem)
+        end
+        -- Multiple stems added as takes - user will be notified via message box
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Replace in-place", -1)
+    return #items
+end
+
+-- Create new tracks for each selected stem
+local function createStemTracks(item, stemPaths, itemPos, itemLen)
+    local track = reaper.GetMediaItem_Track(item)
+    local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+    local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+    if trackName == "" then trackName = "Item" end
+
+    local take = reaper.GetActiveTake(item)
+    local sourceName = trackName
+    if take then
+        local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+        if takeName and takeName ~= "" then
+            sourceName = takeName:match("([^/\\]+)%.[^.]*$") or takeName
+        end
+    end
+
+    reaper.Undo_BeginBlock()
+
+    -- Count selected stems and find the single stem if only one
+    local selectedCount = 0
+    local singleStem = nil
+    for _, stem in ipairs(STEMS) do
+        if stem.selected and stemPaths[stem.name:lower()] then
+            selectedCount = selectedCount + 1
+            singleStem = stem
+        end
+    end
+
+    -- Create folder track (only if more than 1 stem AND folder option enabled)
+    local folderTrack = nil
+    if selectedCount > 1 and SETTINGS.createFolder then
+        reaper.InsertTrackAtIndex(trackIdx, true)
+        folderTrack = reaper.GetTrack(0, trackIdx)
+        reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceName .. " - Stems", true)
+        reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+        -- Color folder track with a blend (purple-ish to match the theme)
+        local folderColor = rgbToReaperColor(180, 140, 200)
+        reaper.SetMediaTrackInfo_Value(folderTrack, "I_CUSTOMCOLOR", folderColor)
+        trackIdx = trackIdx + 1
+    end
+
+    -- Create stem tracks
+    local importedCount = 0
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then
+            local stemPath = stemPaths[stem.name:lower()]
+            if stemPath then
+                reaper.InsertTrackAtIndex(trackIdx + importedCount, true)
+                local newTrack = reaper.GetTrack(0, trackIdx + importedCount)
+
+                -- For single stem: use "Stem Name - Item Name" format
+                -- For multiple stems: use "Item Name - Stem Name" format
+                local newTrackName
+                if selectedCount == 1 then
+                    newTrackName = stem.name .. " - " .. sourceName
+                else
+                    newTrackName = sourceName .. " - " .. stem.name
+                end
+                reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", newTrackName, true)
+
+                local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+                reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+
+                local newItem = reaper.AddMediaItemToTrack(newTrack)
+                reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+                reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+
+                local newTake = reaper.AddTakeToMediaItem(newItem)
+                local source = reaper.PCM_Source_CreateFromFile(stemPath)
+                reaper.SetMediaItemTake_Source(newTake, source)
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", stem.name, true)
+
+                reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+
+                importedCount = importedCount + 1
+            end
+        end
+    end
+
+    -- Close folder
+    if folderTrack and importedCount > 0 then
+        local lastTrack = reaper.GetTrack(0, trackIdx + importedCount - 1)
+        reaper.SetMediaTrackInfo_Value(lastTrack, "I_FOLDERDEPTH", -1)
+    end
+
+    -- Mute original item
+    reaper.SetMediaItemInfo_Value(item, "B_MUTE", 1)
+
+    reaper.Undo_EndBlock("Stemperator: Create stem tracks", -1)
+    return importedCount
+end
+
+-- Store item reference for async workflow
+local selectedItem = nil
+local itemPos = 0
+local itemLen = 0
+
+-- Progress window functions
+local PROGRESS = {
+    active = false,
+    message = "",
+    subMessage = "",
+}
+
+local function showProgress(msg, subMsg)
+    PROGRESS.message = msg or "Processing..."
+    PROGRESS.subMessage = subMsg or ""
+    PROGRESS.active = true
+
+    -- Get mouse position for centering
+    local mouseX, mouseY = reaper.GetMousePosition()
+    local w, h = 300, 100
+
+    gfx.init("Stemperator", w, h, 0, mouseX - w/2, mouseY - h/2)
+
+    -- Draw progress window
+    gfx.set(0.18, 0.18, 0.2, 1)
+    gfx.rect(0, 0, w, h, 1)
+
+    -- Draw border
+    gfx.set(0.4, 0.5, 0.7, 1)
+    gfx.rect(0, 0, w, h, 0)
+
+    -- Draw title
+    gfx.setfont(1, "Arial", 16, string.byte('b'))
+    gfx.set(1, 1, 1, 1)
+    local tw = gfx.measurestr(PROGRESS.message)
+    gfx.x = (w - tw) / 2
+    gfx.y = 25
+    gfx.drawstr(PROGRESS.message)
+
+    -- Draw sub-message
+    if PROGRESS.subMessage ~= "" then
+        gfx.setfont(1, "Arial", 12)
+        gfx.set(0.7, 0.7, 0.7, 1)
+        tw = gfx.measurestr(PROGRESS.subMessage)
+        gfx.x = (w - tw) / 2
+        gfx.y = 55
+        gfx.drawstr(PROGRESS.subMessage)
+    end
+
+    -- Draw animated dots
+    local dots = string.rep(".", (math.floor(reaper.time_precise() * 2) % 4))
+    gfx.set(0.6, 0.7, 0.9, 1)
+    gfx.x = w/2 - 10
+    gfx.y = 75
+    gfx.drawstr(dots)
+
+    gfx.update()
+end
+
+local function hideProgress()
+    if PROGRESS.active then
+        gfx.quit()
+        PROGRESS.active = false
+    end
+end
+
+-- Separation workflow (called after dialog closes with OK)
+function runSeparationWorkflow()
+    if not selectedItem then return end
+
+    -- Show progress window
+    showProgress("AI Stem Separation", "Extracting audio...")
+
+    -- Create temp directory
+    local tempDir = "/tmp/stemperator_" .. os.time()
+    os.execute('mkdir -p "' .. tempDir .. '"')
+    local tempInput = tempDir .. "/input.wav"
+
+    -- Extract item audio to temp file
+    local extracted, err = renderItemToWav(selectedItem, tempInput)
+    if not extracted then
+        hideProgress()
+        reaper.MB("Failed to extract audio:\n\n" .. (err or "Unknown error"), SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Update progress
+    showProgress("AI Stem Separation", "Running Demucs AI model...")
+
+    -- Run AI separation
+    local stems, sepErr = runSeparation(tempInput, tempDir, SETTINGS.model)
+    if not stems then
+        hideProgress()
+        reaper.MB("Separation failed:\n\n" .. (sepErr or "Unknown error"), SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Hide progress before showing results
+    hideProgress()
+
+    -- Import stems
+    local count
+    if SETTINGS.createNewTracks then
+        count = createStemTracks(selectedItem, stems, itemPos, itemLen)
+    else
+        count = replaceInPlace(selectedItem, stems, itemPos, itemLen)
+    end
+
+    -- Build result message
+    local selectedNames = {}
+    for _, stem in ipairs(STEMS) do
+        if stem.selected then selectedNames[#selectedNames + 1] = stem.name end
+    end
+
+    -- Build appropriate message based on mode and stem count
+    local resultMsg
+    if SETTINGS.createNewTracks then
+        if count == 1 then
+            resultMsg = "1 stem track created.\nOriginal item muted."
+        else
+            resultMsg = count .. " stem tracks created.\nOriginal item muted."
+        end
+    else
+        if count == 1 then
+            resultMsg = "Stem replaced in-place."
+        else
+            resultMsg = "Stems added as takes.\nPress T to switch between: " .. table.concat(selectedNames, ", ")
+        end
+    end
+
+    reaper.MB(
+        "Stem separation complete!\n\n" ..
+        "Extracted: " .. table.concat(selectedNames, ", ") .. "\n\n" ..
+        resultMsg,
+        SCRIPT_NAME, 0)
+
+    reaper.UpdateArrange()
+end
+
+-- Main function
+local function main()
+    -- Check for selected item
+    selectedItem = reaper.GetSelectedMediaItem(0, 0)
+    if not selectedItem then
+        reaper.MB("Please select a media item to separate.", SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Get item info
+    itemPos = reaper.GetMediaItemInfo_Value(selectedItem, "D_POSITION")
+    itemLen = reaper.GetMediaItemInfo_Value(selectedItem, "D_LENGTH")
+
+    -- Show stem selection dialog (async with GUI)
+    showStemSelectionDialog()
+end
+
+-- Run
+main()

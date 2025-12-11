@@ -1,0 +1,335 @@
+# CLAUDE.md
+
+This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+
+## Project Overview
+
+FlarkViz is a cross-platform MilkDrop-style music visualizer built with JUCE 7.0+ and OpenGL 3.3+. It aims for full compatibility with MilkDrop/MilkDrop3 .milk preset files while being native to Linux and other platforms. Built by flarkAUDIO with signature orange-on-black branding.
+
+## Build Commands
+
+### CMake Build (Recommended)
+```bash
+# Initial build
+mkdir build && cd build
+cmake ..
+make -j$(nproc)
+
+# Run
+./FlarkViz_artefacts/FlarkViz
+
+# Rebuild after changes
+make -j$(nproc)
+```
+
+### Projucer Build
+```bash
+# Open in Projucer to configure module paths
+Projucer FlarkViz.jucer
+
+# Build from generated Makefile
+cd Builds/LinuxMakefile
+make CONFIG=Release -j$(nproc)
+
+# Run
+./build/FlarkViz
+```
+
+### Quick Demos (No JUCE Required)
+```bash
+cd demo
+
+# Build and run verification test
+g++ -std=c++20 -O2 verify_build.cpp -o verify_build
+./verify_build
+
+# Build ASCII visualizer
+g++ -std=c++20 -O2 FlarkVizASCII.cpp -o FlarkVizASCII
+./FlarkVizASCII
+```
+
+### Testing
+```bash
+# Build integration tests
+g++ -std=c++20 -O2 test_integration.cpp -o test_integration \
+    Source/Audio/AudioAnalyzer.cpp \
+    Source/Presets/Preset.cpp \
+    Source/Presets/PresetLoader.cpp
+
+# Build expression tests
+g++ -std=c++20 -O2 test_expressions.cpp -o test_expressions \
+    Source/Expression/MilkdropEval.cpp
+```
+
+## Architecture
+
+### Component Structure
+
+The codebase is organized into distinct subsystems with clear separation of concerns:
+
+**Audio Pipeline** (`Source/Audio/`)
+- `AudioAnalyzer`: FFT processing (1024 samples, 512 bins), MilkDrop-style beat detection, and frequency band extraction (bass 20-250Hz, mid 250-2000Hz, treble 2-16kHz)
+- `AudioCapture`: Stub for system audio routing
+
+**Rendering Pipeline** (`Source/Rendering/`)
+- `PresetRenderer`: Main OpenGL renderer, coordinates waveform/spectrum/preset rendering
+- `ShaderCompiler`: Converts MilkDrop HLSL-style shaders to GLSL 3.3+
+- `TransitionEngine`: Handles preset transitions with 30+ blend patterns
+- `FramebufferManager`: Manages OpenGL framebuffers for multi-pass rendering
+- `RenderState`: Tracks per-frame rendering state (zoom, rotation, warp, etc.)
+
+**Preset System** (`Source/Presets/`)
+- `Preset`: Complete MilkDrop preset data structure (50+ parameters, waves, shapes, code sections)
+- `PresetLoader`: Parses .milk files (INI-style format with embedded equations/shaders)
+- `Milk2Loader`: Handles .milk2 double-preset files
+- `PresetManager`: Library scanning, random selection, history tracking
+
+**Expression Evaluation** (`Source/Expression/`)
+- `MilkdropEval`: Evaluates per-frame and per-pixel math expressions using MilkDrop syntax
+- `ExpressionTypes`: Type definitions for variables, functions, and contexts
+
+**Main Application** (`Source/`)
+- `MainComponent`: JUCE component that owns OpenGL context, audio device manager, and coordinates audio→rendering pipeline. Implements MilkDrop3-compatible keyboard shortcuts.
+- `Main.cpp`: Application entry point
+
+### Data Flow
+
+```
+System Audio → AudioAnalyzer (FFT/Beat Detection)
+                     ↓
+              {bass, mid, treb, beat, fftData}
+                     ↓
+              MainComponent (Timer 60 FPS)
+                     ↓
+              PresetRenderer ← Preset (.milk file)
+                     ↓
+         [Per-frame equations → RenderState]
+                     ↓
+         [Per-pixel shader → Warp/Composite]
+                     ↓
+              OpenGL → Screen
+```
+
+### Preset Loading & Rendering Flow
+
+```
+.milk file → PresetLoader::parse()
+                ↓
+         MilkDropPreset object
+                ↓
+         PresetRenderer::loadPreset()
+                ↓
+         Per frame (60 FPS):
+           1. MilkdropEval::evaluatePerFrame() → Update RenderState
+           2. Render waveform/spectrum
+           3. Execute per-pixel equations
+           4. Apply warp shader
+           5. Apply composite shader
+           6. Swap buffers
+```
+
+## Key Implementation Details
+
+### MilkDrop Preset Compatibility
+
+FlarkViz aims for pixel-perfect compatibility with MilkDrop presets:
+- Uses identical parameter names and ranges
+- Supports same expression syntax (custom language, not JavaScript)
+- Implements same shader model (HLSL-style converted to GLSL)
+- Maintains same rendering pipeline order
+
+**Expression Language**: MilkDrop uses a custom expression evaluator, NOT JavaScript. Example:
+```
+// Per-frame code
+zoom = zoom + 0.02*sin(time + bass);
+rot = rot + 0.01*cos(time*0.5);
+wave_r = 0.5 + 0.5*sin(time + bass_att*2);
+
+// Per-pixel code
+zoom = zoom + 0.1*sin(rad*10 + time);
+rot = rot + 0.1*sin(ang*3);
+```
+
+### Audio Analysis
+
+The AudioAnalyzer uses JUCE's FFT with MilkDrop-compatible band extraction:
+- FFT Order: 10 (1024 samples)
+- Bins: 512 frequency bins
+- Smoothing: 0.8 factor for visual stability
+- Beat detection: 8-frame rolling history with threshold-based triggering
+
+### OpenGL Rendering
+
+Uses OpenGL 3.3+ core profile:
+- VAO/VBO for vertex data
+- GLSL 330 shaders
+- Multi-pass rendering with framebuffers
+- Hardware-accelerated effects
+
+### Brand Identity
+
+flarkAUDIO signature colors are defined in MainComponent:
+```cpp
+const juce::Colour flarkOrange {0xFFFF6600};
+const juce::Colour flarkBlack {0xFF000000};
+```
+
+When modifying UI elements, maintain this color scheme.
+
+## Development Guidelines
+
+### Adding a New Component
+
+1. Create header in appropriate `Source/{Category}/` directory
+2. Implement in corresponding `.cpp` file
+3. Add both files to `CMakeLists.txt` SOURCE_FILES list
+4. Include in MainComponent if it needs to be owned/coordinated
+5. Update this CLAUDE.md if the component changes architecture
+
+### MilkDrop Preset Format
+
+.milk files are INI-style text files with sections:
+- `[preset00]` - Main preset parameters
+- `[wave_0]` through `[wave_3]` - Waveform definitions
+- `[shape_0]` through `[shape_3]` - Shape definitions
+- Multiline code sections for per-frame/per-pixel equations
+- HLSL-style shader code
+
+Example preset loading:
+```cpp
+PresetLoader loader;
+auto preset = loader.loadFromFile(File("example.milk"));
+if (preset) {
+    renderer->loadPreset(preset.get());
+}
+```
+
+### Performance Targets
+
+The application is designed for real-time 60 FPS rendering:
+- Audio analysis: <2ms per frame
+- Per-pixel shader: ~2ms (GPU, 1280x720)
+- Total frame budget: ~16ms (60 FPS)
+
+Keep per-frame CPU work minimal; offload to GPU via shaders.
+
+### Testing Audio Without System Audio
+
+For development/testing when system audio routing isn't set up:
+```bash
+# PulseAudio loopback
+pactl load-module module-loopback
+
+# Generate test tone
+play -n synth 10 sine 440
+```
+
+### Keyboard Shortcuts (Already Implemented)
+
+MainComponent implements MilkDrop3-style shortcuts:
+- **Space**: Random preset transition
+- **F2**: Cycle FPS (60/90/120)
+- **F7**: Toggle fullscreen
+- **F9**: Double-preset mode
+- **a**: Random mash-up
+- **A**: Previous preset
+- **c**: Randomize colors
+
+When adding new shortcuts, follow the existing pattern in `MainComponent::keyPressed()`.
+
+## Common Tasks
+
+### Debugging OpenGL Issues
+
+Check for GL errors after each GL call:
+```cpp
+auto error = glGetError();
+if (error != GL_NO_ERROR)
+    DBG("OpenGL error: " << error);
+```
+
+### Verifying Audio Pipeline
+
+Ensure `AudioAnalyzer::processAudioBlock()` is being called:
+```cpp
+DBG("FFT bins: " << analyzer->getFFTData().size());
+DBG("Bass level: " << analyzer->getBass());
+```
+
+### Adding a New Preset Parameter
+
+1. Add to `Preset.h` struct definition
+2. Update `PresetLoader.cpp` parsing logic
+3. Handle in `MilkdropEval.cpp` variable context
+4. Use in `PresetRenderer.cpp` rendering code
+
+## Dependencies
+
+### Required
+- JUCE 7.0+ (auto-downloaded by CMake or installed via package manager)
+- C++20 compiler (GCC 10+, Clang 13+)
+- OpenGL 3.3+ (Mesa, proprietary drivers)
+- CMake 3.15+ (for CMake build)
+
+### Platform-Specific (Linux)
+```bash
+# Arch Linux
+sudo pacman -S base-devel cmake mesa pulseaudio jack2 alsa-lib
+
+# Ubuntu/Debian
+sudo apt install build-essential cmake libgl-dev libasound2-dev pulseaudio
+```
+
+### Optional
+- SDL2 (for demo/FlarkVizDemo.cpp)
+- SOX (for audio testing)
+
+## File Organization
+
+```
+Source/
+├── Main.cpp                    # Application entry point
+├── MainComponent.{h,cpp}       # Main window + OpenGL + timer
+├── Audio/
+│   ├── AudioAnalyzer.*         # FFT + beat detection
+│   └── AudioCapture.*          # System audio interface (stub)
+├── Rendering/
+│   ├── PresetRenderer.*        # Main OpenGL renderer
+│   ├── ShaderCompiler.*        # HLSL→GLSL conversion
+│   ├── TransitionEngine.*      # Preset transitions
+│   ├── FramebufferManager.*    # FBO management
+│   └── RenderState.*           # Per-frame state
+├── Presets/
+│   ├── Preset.*                # MilkDrop preset data structure
+│   ├── PresetLoader.*          # .milk parser
+│   ├── Milk2Loader.*           # .milk2 parser
+│   └── PresetManager.*         # Library management
+└── Expression/
+    ├── MilkdropEval.*          # Expression evaluator
+    └── ExpressionTypes.h       # Type definitions
+
+demo/                           # Standalone demos (no JUCE)
+examples/                       # Example usage code
+```
+
+## Current Development Status
+
+**Implemented:**
+- Audio analysis (FFT, beat detection)
+- OpenGL rendering foundation
+- Preset data structures
+- Basic waveform rendering
+- Keyboard shortcuts
+- Preset loading infrastructure
+
+**In Progress:**
+- MilkDrop expression evaluator integration
+- Shader compilation (HLSL→GLSL)
+- Full preset rendering pipeline
+- Transition effects
+
+**Future:**
+- .milk2 double-preset support
+- All 30+ transition patterns
+- VST3/LV2/CLAP plugin versions
+- Preset browser UI

@@ -1,0 +1,140 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="Stemperator - AI Stem Separation">
+  <category name="AI/Stem Separation">
+    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation (Main Dialog)">
+      <version name="1.5.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.5.0: MilkDrop visuals + FX toggle
+- 100 MilkDrop-inspired patterns (1000 unique styles!)
+- Smooth crossfade transitions with zoom effect (1.5s)
+- FX toggle icon on all pages (below day/night icon)
+- Gallery controls fade out when mouse leaves
+- Multilingual FX tooltips (EN/NL/DE)
+- Fixed "AI STEMperator - Processing..." window title
+
+v1.4.0: Time selection support
+- Can now separate time selections (not just media items)
+- If no item selected, uses time selection instead
+- Stems are placed at the time selection position
+
+v1.3.0: 6-stem model support with Guitar/Piano
+- Guitar and Piano checkboxes appear when 6-stem model selected
+- Keys 5/6 toggle Guitar/Piano stems
+- Presets updated to include Guitar/Piano when using 6-stem model
+
+v1.2.0: Scalable/resizable GUI
+- Window is now resizable (drag edges/corners)
+- All elements scale proportionally with window size
+- Minimum size: 380x340, Maximum: 760x680
+- Window size persists between sessions
+
+v1.1.0: Major update
+- Persist settings between sessions
+- Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_AI_Separate.lua</source>
+        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/audio_separator_process.py</source>
+        <source file="lang/i18n.lua">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/lang/i18n.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Installation.lua" type="script" desc="Stemperator - Installation &amp; Setup (Run First!)">
+      <version name="1.0.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.0.0: Initial release
+- Cross-platform Python/audio-separator installation
+- GPU detection (NVIDIA CUDA, AMD ROCm, Apple MPS)
+- Automatic venv creation and dependency install]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Installation.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Setup_Toolbar.lua" type="script" desc="Stemperator - Setup Toolbar">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - Registers all scripts and creates Stemperator toolbar]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Setup_Toolbar.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Karaoke.lua" type="script" desc="Stemperator - Quick Karaoke (Remove Vocals)">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click karaoke mode]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Karaoke.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_VocalsOnly.lua" type="script" desc="Stemperator - Quick Vocals Only">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click vocal isolation]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_VocalsOnly.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_DrumsOnly.lua" type="script" desc="Stemperator - Quick Drums Only">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click drum extraction]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_DrumsOnly.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_BassOnly.lua" type="script" desc="Stemperator - Quick Bass Only">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click bass extraction]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_BassOnly.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_OtherOnly.lua" type="script" desc="Stemperator - Quick Other Only (Guitars/Synths)">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click other instrument extraction]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_OtherOnly.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_AllStems.lua" type="script" desc="Stemperator - Quick All 4 Stems">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click full 4-stem extraction]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_AllStems.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_6Stem_AllStems.lua" type="script" desc="Stemperator - Quick All 6 Stems (incl. Guitar/Piano)">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click full 6-stem extraction including Guitar and Piano]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_6Stem_AllStems.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_GuitarOnly.lua" type="script" desc="Stemperator - Quick Guitar Only (6-stem model)">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click guitar extraction using 6-stem model]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_GuitarOnly.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_PianoOnly.lua" type="script" desc="Stemperator - Quick Piano Only (6-stem model)">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click piano extraction using 6-stem model]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_PianoOnly.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Instrumental.lua" type="script" desc="Stemperator - Quick Instrumental">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - One-click instrumental extraction]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Instrumental.lua</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Explode_Stems.lua" type="script" desc="Stemperator - Explode Stems to Tracks">
+      <version name="1.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[Initial release - Separates stems to individual REAPER tracks]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/Stemperator_Explode_Stems.lua</source>
+      </version>
+    </reapack>
+  </category>
+  <category name="Toolbar Icons">
+    <reapack name="stemperator_toolbar_icons" type="data" desc="Stemperator Toolbar Icons (90x30 REAPER format)">
+      <version name="2.0.0" author="flarkAUDIO">
+        <changelog><![CDATA[v2.0.0: Updated to REAPER toolbar format (90x30 with 3 states)
+- All icons now match REAPER's native toolbar style
+- Added: settings, 6stem, guitar, piano, other, explode, allstems icons]]></changelog>
+        <source file="toolbar_settings.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_settings.png</source>
+        <source file="toolbar_karaoke.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_karaoke.png</source>
+        <source file="toolbar_vocals.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_vocals.png</source>
+        <source file="toolbar_drums.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_drums.png</source>
+        <source file="toolbar_bass.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_bass.png</source>
+        <source file="toolbar_other.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_other.png</source>
+        <source file="toolbar_allstems.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_allstems.png</source>
+        <source file="toolbar_6stem.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_6stem.png</source>
+        <source file="toolbar_guitar.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_guitar.png</source>
+        <source file="toolbar_piano.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_piano.png</source>
+        <source file="toolbar_explode.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/toolbar/toolbar_explode.png</source>
+      </version>
+    </reapack>
+  </category>
+</index>

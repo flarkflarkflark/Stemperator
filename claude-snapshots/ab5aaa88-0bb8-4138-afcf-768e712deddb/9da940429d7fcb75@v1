@@ -1,0 +1,88 @@
+#pragma once
+
+#include <clap/clap.h>
+#include <clap/ext/gui.h>
+#include <stdint.h>
+#include <stdbool.h>
+#include <stdlib.h>
+#include <string.h>
+#include <pthread.h>
+
+// Cross-platform OpenGL headers
+#ifdef __APPLE__
+#include <OpenGL/gl.h>
+#include <OpenGL/glu.h>
+#else
+#include <GL/gl.h>
+#include <GL/glu.h>
+#endif
+
+// Matrix visual effect configuration
+#define MATRIX_WIDTH 64
+#define MATRIX_HEIGHT 32
+#define MAX_FREQUENCY_BINS 256
+
+// Matrix character set (extended ASCII + numbers)
+static const char MATRIX_CHARS[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789@#$%^&*()_+-=[]{}|;:',.<>?/";
+
+// Matrix column structure
+typedef struct {
+    int x;
+    float y;
+    float speed;
+    char current_char;
+    float brightness;
+    float target_brightness;
+} matrix_column_t;
+
+// Audio spectrum analyzer
+typedef struct {
+    float spectrum[MAX_FREQUENCY_BINS];
+    float peak_values[MAX_FREQUENCY_BINS];
+    uint32_t sample_count;
+} spectrum_analyzer_t;
+
+// GUI context
+typedef struct {
+    // OpenGL context
+    void *gl_context;
+    uint32_t width;
+    uint32_t height;
+    
+    // Matrix visualization
+    matrix_column_t columns[MATRIX_WIDTH];
+    float time_accumulator;
+    
+    // Audio analysis
+    spectrum_analyzer_t spectrum;
+    
+    // Threading
+    pthread_mutex_t mutex;
+    bool running;
+    
+    // Plugin reference
+    const clap_plugin_t *plugin;
+} gui_context_t;
+
+// Function declarations
+bool gui_create(gui_context_t *gui, const clap_plugin_t *plugin, uint32_t width, uint32_t height);
+void gui_destroy(gui_context_t *gui);
+void gui_update(gui_context_t *gui, const float *audio_buffer, uint32_t frames, double sample_rate);
+void gui_render(gui_context_t *gui);
+void gui_handle_audio_data(gui_context_t *gui, const float *audio_data, uint32_t frames);
+
+// Matrix visualization functions
+void matrix_init(gui_context_t *gui);
+void matrix_update(gui_context_t *gui, float delta_time);
+void matrix_render(gui_context_t *gui);
+
+// Audio spectrum analysis
+void spectrum_init(spectrum_analyzer_t *spectrum);
+void spectrum_analyze(spectrum_analyzer_t *spectrum, const float *audio_data, uint32_t frames);
+void spectrum_update_peaks(spectrum_analyzer_t *spectrum);
+
+// OpenGL rendering utilities
+void opengl_init();
+void opengl_setup_projection(uint32_t width, uint32_t height);
+void opengl_draw_character(float x, float y, float size, char c, float brightness);
+void opengl_clear_screen();

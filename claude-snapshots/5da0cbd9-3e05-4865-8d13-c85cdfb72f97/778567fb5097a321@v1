@@ -1,0 +1,87 @@
+#pragma once
+
+#include <JuceHeader.h>
+
+/**
+ * StemChannel - Premium channel strip for individual stem control
+ *
+ * Features:
+ * - Smooth gradient fader with glow effect
+ * - Animated VU meter with peak hold
+ * - Modern mute/solo buttons with active glow
+ * - Clean typography and spacing
+ */
+class StemChannel : public juce::Component,
+                    public juce::Button::Listener,
+                    public juce::SettableTooltipClient
+{
+public:
+    StemChannel (const juce::String& name, juce::Colour colour);
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void buttonClicked (juce::Button* button) override;
+
+    // Parameter attachment
+    void attachToParameters (juce::AudioProcessorValueTreeState& apvts,
+                             const juce::String& gainID,
+                             const juce::String& muteID,
+                             const juce::String& soloID);
+
+    // Level meter
+    void setLevel (float level);
+
+    // Update font sizes from UISettings
+    void updateFontSizes();
+
+    // Set whether this channel needs AI separation (shows "AI" badge when true and no levels)
+    void setNeedsAISeparation (bool needsAI)
+    {
+        needsAISeparation = needsAI;
+        if (needsAI)
+            juce::SettableTooltipClient::setTooltip (stemName + " (6-stem mode only) - requires AI processing to separate");
+        else
+            juce::SettableTooltipClient::setTooltip (stemName + " stem");
+        repaint();
+    }
+    bool getNeedsAISeparation() const { return needsAISeparation; }
+
+    // Callbacks - with modifier keys for Reaper-style behavior
+    // bool state, bool ctrlDown, bool shiftDown
+    std::function<void (bool, bool, bool)> onMuteChanged;
+    std::function<void (bool, bool, bool)> onSoloChanged;
+
+    // Direct access to buttons for external control
+    juce::TextButton& getMuteButton() { return muteButton; }
+    juce::TextButton& getSoloButton() { return soloButton; }
+    juce::Slider& getGainSlider() { return gainSlider; }
+
+private:
+    juce::String stemName;
+    juce::Colour stemColour;
+
+    // Controls
+    juce::Slider gainSlider;
+    juce::TextButton muteButton { "M" };
+    juce::TextButton soloButton { "S" };
+    juce::Label nameLabel;
+
+    // Attachments
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> muteAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> soloAttachment;
+
+    // Metering with peak hold
+    float currentLevel = 0.0f;
+    float displayLevel = 0.0f;
+    float peakLevel = 0.0f;
+    int peakHoldCount = 0;
+    static constexpr int peakHoldTime = 30;  // ~1 second at 30fps
+
+    // Whether this channel needs AI separation (Guitar/Piano channels)
+    bool needsAISeparation = false;
+
+    void updateMeter();
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemChannel)
+};

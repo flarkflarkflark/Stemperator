@@ -1,0 +1,173 @@
+name: Reasonus Build
+
+on:
+  push:
+    tags:
+      - "*"
+env:
+  VS_PATH: "%ProgramFiles%\\Microsoft Visual Studio\\2022\\Enterprise\\VC\\Auxiliary\\Build"
+  MACOSX_DEPLOYMENT_TARGET: 11.0
+
+jobs:
+  build:
+    runs-on: ${{ matrix.os }}
+
+    strategy:
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64;x86_64
+          - os: windows-latest
+            arch: x64
+            win_build_type: RelWithDebInfo
+          - os: windows-latest
+            arch: x86
+            win_build_type: Release
+
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+      - name: Create Build Environment
+        # Some setup steps may vary depending on the operating system
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "ubuntu-latest" ]]; then
+            ARCH=${{ matrix.arch }}
+            sudo sed -i '/arch=/! s/^deb/deb [arch=amd64,i386]/' /etc/apt/sources.list
+
+            install-deps() {
+              # sudo add-apt-repository --remove "deb http://apt.postgresql.org/pub/repos/apt/ bionic-pgdg main"
+              local arch="$1"; shift
+              local native=("$@" php-cli qemu-user-binfmt )
+              local target=()
+
+              sudo dpkg --add-architecture $arch
+              sudo apt-get update -qq
+              sudo apt-get install -qq aptitude > /dev/null
+              sudo aptitude install -yR ${native[@]} ${target[@]/%/:$arch} > /dev/null
+            }
+
+            # sudo update-alternatives --set gcc /usr/bin/gcc-7
+
+            case $ARCH in
+            x86_64)
+              install-deps amd64
+              ;;
+            i686)
+              install-deps i386 g++-multilib
+              export TOOLCHAIN=$(pwd)/cmake/linux-cross.cmake \
+                     TOOLCHAIN_PREFIX=i386-linux-gnu
+              ;;
+            armv7l)
+              install-deps armhf g++-arm-linux-gnueabihf
+              export TOOLCHAIN=$(pwd)/cmake/linux-cross.cmake \
+                     TOOLCHAIN_PREFIX=arm-linux-gnueabihf
+              ;;
+            aarch64)
+              install-deps arm64 g++-aarch64-linux-gnu
+              export TOOLCHAIN=$(pwd)/cmake/linux-cross.cmake \
+                     TOOLCHAIN_PREFIX=aarch64-linux-gnu
+              ;;
+            esac
+          elif [[ "${{ matrix.os }}" == "windows-latest" ]]; then
+            choco install ninja
+            choco install nsis -y
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            brew install make
+            ATH="/opt/homebrew/opt/make/libexec/gnubin:$PATH"
+              :
+          fi
+
+      - name: Windows build
+        if: runner.os == 'Windows'
+        working-directory: ${{ github.workspace }}
+        shell: cmd
+        run: |
+          if "${{matrix.arch}}" == "x64" call "%VS_PATH%\vcvars64.bat"
+          if "${{matrix.arch}}" == "x86" call "%VS_PATH%\vcvars32.bat"
+          cmake -B ${{ github.workspace }} ^
+            -G "Ninja" ^
+            -DCMAKE_BUILD_TYPE=${{ matrix.win_build_type }} ^
+            -S ${{ github.workspace }} ^
+            -DVCPKG_TARGET_TRIPLET=${{matrix.arch}}-windows-static ^
+            -DCMAKE_TOOLCHAIN_FILE=%VCPKG_INSTALLATION_ROOT%\scripts\buildsystems\vcpkg.cmake 
+            
+          cmake --build ${{ github.workspace }} --config ${{ matrix.win_build_type }}
+
+      - name: Unix-like build
+        if: runner.os != 'Windows'
+        run: |
+          cmake -B ${{ github.workspace }} \
+            -DCMAKE_BUILD_TYPE=Release \
+            -S ${{ github.workspace }} \
+            -DCMAKE_OSX_ARCHITECTURES="${{ matrix.arch }}" \
+            -DVCPKG_TARGET_TRIPLET=arch-env -DVCPKG_CHAINLOAD_TOOLCHAIN_FILE=$TOOLCHAIN \
+            -DCMAKE_OSX_DEPLOYMENT_TARGET=$MACOSX_DEPLOYMENT_TARGET \
+            # -DCMAKE_TOOLCHAIN_FILE=$VCPKG_INSTALLATION_ROOT/scripts/buildsystems/vcpkg.cmake
+          cmake --build ${{ github.workspace }} --config Release
+
+      - name: CTest
+        if: runner.os != 'Windows'
+        working-directory: ${{ github.workspace }}
+        run: ctest --build-config Release
+
+      - name: CPack
+        working-directory: ${{ github.workspace }}
+        shell: bash
+        run: |
+          if [[ "${{ matrix.os }}" == "windows-latest" && 
+                "${{ matrix.arch }}" == "x64" ]]; then
+            cpack
+          elif [[ "${{ matrix.os }}" == "macos-latest" ]]; then
+            sudo cpack
+          fi
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reasonus-native-${{ matrix.os }}-${{ matrix.arch }}
+          path: |
+            ./reaper_*.dll
+            ./reaper_*.pdb
+            ./reaper_*.dylib
+            ./reaper_*.so
+            ./*.exe
+            ./*.pkg
+
+  locales:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: reasonus-native-ini
+          path: |
+            ./src/i18n/locales/en-US.ini
+
+  release:
+    needs: [build, locales]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Download artifact
+        uses: actions/download-artifact@v4
+        with:
+          # Might need a version or something here
+          pattern: reasonus-native-*
+          path: ./artifacts
+
+      - name: Create a release an upload the artifacts
+        uses: softprops/action-gh-release@v2
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        with:
+          draft: true
+          token: ${{ secrets.GITHUB_TOKEN }}
+          files: |
+            ./**/*.dll
+            ./**/*.dylib
+            ./**/*.ini

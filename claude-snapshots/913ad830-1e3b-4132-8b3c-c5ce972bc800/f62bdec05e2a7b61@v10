@@ -1,0 +1,217 @@
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_utils/juce_audio_utils.h>
+#include "WaveformDisplay.h"
+#include "CorrectionListView.h"
+#include "../Processors/BatchProcessor.h"
+#include "../Processors/TrackDetector.h"
+#include "../Utils/AudioFileManager.h"
+
+/**
+ * Standalone Window for Audio Restoration Suite
+ *
+ * Full-featured audio editor window with:
+ * - Menu bar (File, Edit, Process, View, Help)
+ * - Toolbar with common actions
+ * - Waveform display with zoom controls
+ * - Correction list view
+ * - Transport controls (play/pause/stop)
+ * - Drag & drop support for audio files
+ * - Session management
+ *
+ * Standalone mode only.
+ */
+class StandaloneWindow : public juce::DocumentWindow,
+                         public juce::FileDragAndDropTarget,
+                         public juce::MenuBarModel,
+                         public juce::Timer,
+                         public juce::ChangeListener
+{
+public:
+    StandaloneWindow();
+    ~StandaloneWindow() override;
+
+    //==============================================================================
+    // DocumentWindow overrides
+    void closeButtonPressed() override;
+
+    //==============================================================================
+    // FileDragAndDropTarget overrides
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
+    //==============================================================================
+    // MenuBarModel overrides
+    juce::StringArray getMenuBarNames() override;
+    juce::PopupMenu getMenuForIndex (int topLevelMenuIndex, const juce::String& menuName) override;
+    void menuItemSelected (int menuItemID, int topLevelMenuIndex) override;
+
+    //==============================================================================
+    // Timer callback for playback position updates
+    void timerCallback() override;
+
+    //==============================================================================
+    // ChangeListener callback for transport state
+    void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+
+private:
+    //==============================================================================
+    // Command IDs
+    enum CommandIDs
+    {
+        fileOpen = 1,
+        fileSave,
+        fileSaveAs,
+        fileExport,
+        fileClose,
+        fileRecentClear,
+        fileExit,
+
+        editUndo,
+        editRedo,
+        editSelectAll,
+        editDeselect,
+
+        processDetectClicks,
+        processRemoveClicks,
+        processNoiseReduction,
+        processCutAndSplice,
+        processGraphicEQ,
+        processNormalise,
+        processChannelBalance,
+        processWowFlutterRemoval,
+        processDropoutRestoration,
+        processSpeedCorrection,
+        processDetectTracks,
+        processSplitTracks,
+        processBatchProcess,
+
+        viewZoomIn,
+        viewZoomOut,
+        viewZoomFit,
+        viewShowCorrectionList,
+
+        transportPlay,
+        transportPause,
+        transportStop,
+
+        optionsAudioSettings,
+
+        helpAbout,
+        helpDocumentation
+    };
+
+    //==============================================================================
+    // UI Components
+    class MainComponent;
+    std::unique_ptr<MainComponent> mainComponent;
+
+    juce::MenuBarComponent menuBar;
+
+    //==============================================================================
+    // Audio file management
+    AudioFileManager fileManager;
+    juce::File currentFile;
+    juce::AudioBuffer<float> audioBuffer;
+    double sampleRate = 44100.0;
+    bool hasUnsavedChanges = false;
+
+    //==============================================================================
+    // Audio playback
+    juce::AudioDeviceManager audioDeviceManager;
+    juce::AudioSourcePlayer audioSourcePlayer;
+    std::unique_ptr<juce::AudioFormatReaderSource> readerSource;
+    juce::AudioTransportSource transportSource;
+    bool isPlaying = false;
+
+    void showAudioSettings();
+
+    //==============================================================================
+    // Recent files
+    juce::RecentlyOpenedFilesList recentFiles;
+
+    //==============================================================================
+    // Helper methods
+    void openFile (const juce::File& file);
+    void closeFile();
+    void saveFile (const juce::File& file);
+    void exportFile();
+    void detectClicks();
+    void removeClicks();
+    void applyNoiseReduction();
+    void detectTracks();
+    void splitTracks();
+    void showBatchProcessor();
+    void showAboutDialog();
+    void updateTitle();
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StandaloneWindow)
+};
+
+//==============================================================================
+/**
+ * Main content component for standalone window
+ * Contains waveform display, correction list, and transport controls
+ */
+class StandaloneWindow::MainComponent : public juce::Component,
+                                        public juce::Button::Listener,
+                                        public juce::Slider::Listener
+{
+public:
+    MainComponent();
+    ~MainComponent() override;
+
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+
+    void buttonClicked (juce::Button* button) override;
+    void sliderValueChanged (juce::Slider* slider) override;
+
+    // Keyboard handling for spacebar play/pause
+    bool keyPressed (const juce::KeyPress& key) override;
+
+    // Access to parent window for transport control
+    void setParentWindow (StandaloneWindow* parent) { parentWindow = parent; }
+
+    // Access to components
+    WaveformDisplay& getWaveformDisplay() { return waveformDisplay; }
+    CorrectionListView& getCorrectionListView() { return correctionListView; }
+
+    void setAudioBuffer (const juce::AudioBuffer<float>* buffer, double sampleRate);
+    void updatePlaybackPosition (double position);
+
+private:
+    StandaloneWindow* parentWindow = nullptr;
+    WaveformDisplay waveformDisplay;
+    CorrectionListView correctionListView;
+
+    // Transport controls (retro cassette deck style)
+    juce::TextButton rewindButton {"<<"};
+    juce::TextButton playButton {"Play"};
+    juce::TextButton pauseButton {"Pause"};
+    juce::TextButton stopButton {"Stop"};
+    juce::TextButton forwardButton {">>"};
+    juce::Slider positionSlider;
+    juce::Label timeLabel;
+
+    // Volume control
+    juce::Slider volumeSlider;
+    juce::Label volumeLabel;
+
+    // Zoom controls
+    juce::TextButton zoomInButton {"+"};
+    juce::TextButton zoomOutButton {"-"};
+    juce::TextButton zoomFitButton {"Fit"};
+
+    // Status
+    juce::Label statusLabel;
+
+    // Logo
+    juce::Image logoImage;
+
+    const juce::AudioBuffer<float>* currentBuffer = nullptr;
+    double currentSampleRate = 44100.0;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (MainComponent)
+};

@@ -1,0 +1,295 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+StemperatorEditor::StemperatorEditor (StemperatorProcessor& p)
+    : AudioProcessorEditor (&p), processor (p)
+{
+    // Apply premium look and feel
+    setLookAndFeel (&premiumLookAndFeel);
+
+    // Create stem channels with premium colors
+    const char* names[] = { "VOCALS", "DRUMS", "BASS", "OTHER" };
+    const char* gainIDs[] = { "vocalsGain", "drumsGain", "bassGain", "otherGain" };
+    const char* muteIDs[] = { "vocalsMute", "drumsMute", "bassMute", "otherMute" };
+    const char* soloIDs[] = { "vocalsSolo", "drumsSolo", "bassSolo", "otherSolo" };
+
+    for (int i = 0; i < 4; ++i)
+    {
+        stemChannels[i] = std::make_unique<StemChannel> (names[i], stemColours[static_cast<size_t> (i)]);
+        stemChannels[i]->attachToParameters (processor.getParameters(), gainIDs[i], muteIDs[i], soloIDs[i]);
+        addAndMakeVisible (*stemChannels[i]);
+    }
+
+    // Visualizer
+    addAndMakeVisible (visualizer);
+
+    // Master slider - vertical fader style
+    setupSlider (masterSlider, PremiumLookAndFeel::Colours::accent);
+    masterSlider.setSliderStyle (juce::Slider::LinearVertical);
+    masterSlider.setRange (-60.0, 12.0, 0.1);
+    masterSlider.setTextValueSuffix (" dB");
+
+    masterLabel.setJustificationType (juce::Justification::centred);
+    masterLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+    addAndMakeVisible (masterLabel);
+
+    masterAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "masterGain", masterSlider);
+
+    // Focus controls - rotary knobs
+    setupKnob (vocalsFocusSlider, vocalsFocusLabel, "VOCAL FOCUS", stemColours[0]);
+    setupKnob (bassCutoffSlider, bassCutoffLabel, "BASS CUTOFF", stemColours[2]);
+    setupKnob (drumSensSlider, drumSensLabel, "DRUM SENS", stemColours[1]);
+
+    vocalsFocusAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "vocalsFocus", vocalsFocusSlider);
+    bassCutoffAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "bassCutoff", bassCutoffSlider);
+    drumSensAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        processor.getParameters(), "drumSensitivity", drumSensSlider);
+
+    // Quality selector
+    qualityBox.addItem ("Fast", 1);
+    qualityBox.addItem ("Balanced", 2);
+    qualityBox.addItem ("Best", 3);
+    addAndMakeVisible (qualityBox);
+
+    qualityLabel.setJustificationType (juce::Justification::centred);
+    qualityLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+    addAndMakeVisible (qualityLabel);
+
+    qualityAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ComboBoxAttachment> (
+        processor.getParameters(), "quality", qualityBox);
+
+    // Title - large and prominent
+    titleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+    titleLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (titleLabel);
+
+    // Subtitle - show GPU and AI status
+    juce::String subtitle = "AI-POWERED STEM SEPARATION";
+    if (processor.isUsingGPU())
+        subtitle += " | GPU: " + processor.getGPUInfo();
+    else
+        subtitle += " | CPU";
+
+    // Add Demucs status
+    if (processor.isDemucsAvailable())
+        subtitle += " | Demucs: Ready";
+
+    subtitleLabel.setText (subtitle, juce::dontSendNotification);
+    subtitleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+    subtitleLabel.setJustificationType (juce::Justification::centredLeft);
+    addAndMakeVisible (subtitleLabel);
+
+    // Brand label (right-aligned)
+    brandLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::accent);
+    brandLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (brandLabel);
+
+    // Start timer for level updates
+    startTimerHz (30);
+
+    // Resizable with wide range for small laptops to large monitors
+    setResizable (true, true);
+    setResizeLimits (600, 400, 1600, 1000);
+    setSize (850, 550);
+}
+
+StemperatorEditor::~StemperatorEditor()
+{
+    setLookAndFeel (nullptr);
+    stopTimer();
+}
+
+void StemperatorEditor::setupSlider (juce::Slider& slider, juce::Colour colour)
+{
+    slider.setColour (juce::Slider::thumbColourId, colour);
+    slider.setColour (juce::Slider::trackColourId, colour.darker (0.3f));
+    slider.setColour (juce::Slider::textBoxTextColourId, PremiumLookAndFeel::Colours::textBright);
+    slider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    slider.setColour (juce::Slider::textBoxBackgroundColourId, PremiumLookAndFeel::Colours::bgPanel);
+    addAndMakeVisible (slider);
+}
+
+void StemperatorEditor::setupKnob (juce::Slider& slider, juce::Label& label, const juce::String& text, juce::Colour colour)
+{
+    slider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    setupSlider (slider, colour);
+
+    label.setText (text, juce::dontSendNotification);
+    label.setJustificationType (juce::Justification::centred);
+    label.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textMid);
+    addAndMakeVisible (label);
+}
+
+void StemperatorEditor::updateFontSizes()
+{
+    float scale = getScaleFactor();
+
+    // Title fonts scale with window
+    titleLabel.setFont (juce::FontOptions (32.0f * scale).withStyle ("Bold"));
+    subtitleLabel.setFont (juce::FontOptions (11.0f * scale));
+    brandLabel.setFont (juce::FontOptions (14.0f * scale).withStyle ("Bold"));
+    masterLabel.setFont (juce::FontOptions (13.0f * scale).withStyle ("Bold"));
+
+    // Control labels
+    float labelSize = 10.0f * scale;
+    vocalsFocusLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
+    bassCutoffLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
+    drumSensLabel.setFont (juce::FontOptions (labelSize).withStyle ("Bold"));
+    qualityLabel.setFont (juce::FontOptions (11.0f * scale).withStyle ("Bold"));
+
+    // Slider text boxes scale
+    int textBoxWidth = scaled (60);
+    int textBoxHeight = scaled (20);
+    masterSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, textBoxHeight);
+
+    int knobTextHeight = scaled (16);
+    vocalsFocusSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+    bassCutoffSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+    drumSensSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, textBoxWidth, knobTextHeight);
+}
+
+void StemperatorEditor::paint (juce::Graphics& g)
+{
+    float scale = getScaleFactor();
+    int headerHeight = scaled (65);
+    int footerHeight = scaled (95);
+
+    // Premium gradient background
+    juce::ColourGradient bgGradient (
+        PremiumLookAndFeel::Colours::bgDark, 0, 0,
+        PremiumLookAndFeel::Colours::bgMid, 0, (float) getHeight(), false);
+    bgGradient.addColour (0.5, PremiumLookAndFeel::Colours::bgLight.interpolatedWith (
+        PremiumLookAndFeel::Colours::bgDark, 0.7f));
+    g.setGradientFill (bgGradient);
+    g.fillAll();
+
+    // Subtle grid pattern for depth (scales with size)
+    int gridSpacing = juce::jmax (2, scaled (3));
+    g.setColour (PremiumLookAndFeel::Colours::textDim.withAlpha (0.03f));
+    for (int y = 0; y < getHeight(); y += gridSpacing)
+        g.drawHorizontalLine (y, 0, (float) getWidth());
+
+    // Header separator with accent glow
+    juce::ColourGradient separatorGradient (
+        PremiumLookAndFeel::Colours::accent.withAlpha (0.0f), 0, (float) headerHeight,
+        PremiumLookAndFeel::Colours::accent.withAlpha (0.5f), getWidth() * 0.5f, (float) headerHeight, false);
+    separatorGradient.addColour (1.0, PremiumLookAndFeel::Colours::accent.withAlpha (0.0f));
+    g.setGradientFill (separatorGradient);
+    g.fillRect (0, headerHeight, getWidth(), juce::jmax (1, scaled (2)));
+
+    // Footer separator
+    int footerTop = getHeight() - footerHeight;
+    g.setGradientFill (separatorGradient);
+    g.fillRect (0, footerTop, getWidth(), 1);
+
+    // Panel backgrounds for stem channels area
+    int margin = scaled (15);
+    int channelWidth = scaled (95);
+    auto channelsPanelArea = juce::Rectangle<int> (margin, headerHeight + scaled (8),
+                                                   channelWidth * 4 + scaled (20),
+                                                   getHeight() - headerHeight - footerHeight - scaled (16));
+    g.setColour (PremiumLookAndFeel::Colours::bgPanel.withAlpha (0.3f));
+    g.fillRoundedRectangle (channelsPanelArea.toFloat(), scaled (8.0f));
+}
+
+void StemperatorEditor::resized()
+{
+    // Update font sizes for current scale
+    updateFontSizes();
+
+    float scale = getScaleFactor();
+    auto bounds = getLocalBounds();
+
+    // Scaled dimensions
+    int headerHeight = scaled (65);
+    int footerHeight = scaled (95);
+    int margin = scaled (15);
+    int spacing = scaled (10);
+
+    // Header area
+    auto header = bounds.removeFromTop (headerHeight);
+    auto headerLeft = header.removeFromLeft (header.getWidth() / 2).reduced (scaled (20), scaled (12));
+    titleLabel.setBounds (headerLeft.removeFromTop (scaled (32)));
+    subtitleLabel.setBounds (headerLeft);
+
+    auto headerRight = header.reduced (scaled (20), scaled (20));
+    brandLabel.setBounds (headerRight);
+
+    // Footer with focus controls
+    auto footer = bounds.removeFromBottom (footerHeight);
+    auto controlsArea = footer.reduced (scaled (20), scaled (10));
+
+    int knobWidth = scaled (80);
+
+    // Focus knobs on the left
+    auto knobArea = controlsArea.removeFromLeft (knobWidth * 3 + scaled (30));
+
+    auto vocalKnob = knobArea.removeFromLeft (knobWidth);
+    vocalsFocusLabel.setBounds (vocalKnob.removeFromTop (scaled (14)));
+    vocalsFocusSlider.setBounds (vocalKnob.reduced (scaled (4), 0));
+
+    knobArea.removeFromLeft (scaled (5));
+    auto bassKnob = knobArea.removeFromLeft (knobWidth);
+    bassCutoffLabel.setBounds (bassKnob.removeFromTop (scaled (14)));
+    bassCutoffSlider.setBounds (bassKnob.reduced (scaled (4), 0));
+
+    knobArea.removeFromLeft (scaled (5));
+    auto drumKnob = knobArea.removeFromLeft (knobWidth);
+    drumSensLabel.setBounds (drumKnob.removeFromTop (scaled (14)));
+    drumSensSlider.setBounds (drumKnob.reduced (scaled (4), 0));
+
+    // Quality selector
+    auto qualityArea = controlsArea.removeFromLeft (scaled (100)).reduced (scaled (10), scaled (12));
+    qualityLabel.setBounds (qualityArea.removeFromTop (scaled (14)));
+    qualityArea.removeFromTop (scaled (4));
+    qualityBox.setBounds (qualityArea.removeFromTop (scaled (28)));
+
+    // Main content area
+    bounds.reduce (margin, scaled (8));
+
+    // Stem channels (left section) - proportional width
+    int channelWidth = scaled (95);
+    auto channelsArea = bounds.removeFromLeft (channelWidth * 4 + scaled (20));
+    channelsArea.removeFromTop (scaled (5));
+
+    for (size_t i = 0; i < 4; ++i)
+    {
+        stemChannels[i]->setBounds (channelsArea.removeFromLeft (channelWidth).reduced (scaled (2), 0));
+    }
+
+    // Master fader
+    bounds.removeFromLeft (spacing);
+    int masterWidth = scaled (75);
+    auto masterArea = bounds.removeFromLeft (masterWidth).reduced (0, scaled (5));
+    masterLabel.setBounds (masterArea.removeFromTop (scaled (22)));
+    masterSlider.setBounds (masterArea);
+
+    // Visualizer (remaining space - flexible)
+    bounds.removeFromLeft (margin);
+    visualizer.setBounds (bounds.reduced (0, scaled (5)));
+
+    // Notify stem channels to update their internal scaling
+    for (auto& channel : stemChannels)
+        channel->repaint();
+}
+
+void StemperatorEditor::timerCallback()
+{
+    // Update stem levels from processor
+    for (size_t i = 0; i < 4; ++i)
+    {
+        float level = processor.getStemLevel (static_cast<StemperatorProcessor::Stem> (i));
+        stemChannels[i]->setLevel (level);
+    }
+
+    // Update visualizer
+    visualizer.setStemLevels (
+        processor.getStemLevel (StemperatorProcessor::Vocals),
+        processor.getStemLevel (StemperatorProcessor::Drums),
+        processor.getStemLevel (StemperatorProcessor::Bass),
+        processor.getStemLevel (StemperatorProcessor::Other));
+    visualizer.setInputLevel (processor.getInputLevel());
+}

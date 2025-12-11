@@ -1,0 +1,272 @@
+#include "StemChannel.h"
+#include "PremiumLookAndFeel.h"
+#include <cmath>
+
+StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
+    : stemName (name), stemColour (colour)
+{
+    // Optimize rendering - cache to reduce GPU load when idle
+    setBufferedToImage (true);
+    setOpaque (false);  // StemChannels have rounded corners and transparency
+
+    // Gain slider (vertical fader)
+    // Note: Don't set range/value here - the attachment will do it from the parameter
+    // Note: Don't set suffix - the parameter's stringFromValue already adds " dB"
+    gainSlider.setSliderStyle (juce::Slider::LinearVertical);
+    gainSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 65, 18);
+    gainSlider.setColour (juce::Slider::thumbColourId, stemColour);
+    gainSlider.setColour (juce::Slider::trackColourId, stemColour.darker (0.3f));
+    gainSlider.setColour (juce::Slider::textBoxTextColourId, PremiumLookAndFeel::Colours::textBright);
+    gainSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    gainSlider.setColour (juce::Slider::textBoxBackgroundColourId, PremiumLookAndFeel::Colours::bgPanel);
+    gainSlider.setTooltip (stemName + " stem volume (double-click to reset to 0 dB)");
+    gainSlider.setDoubleClickReturnValue (true, 0.0);  // Double-click resets to 0 dB
+    addAndMakeVisible (gainSlider);
+
+    // Mute button
+    muteButton.setClickingTogglesState (true);
+    muteButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    muteButton.setColour (juce::TextButton::buttonOnColourId, PremiumLookAndFeel::Colours::mute);
+    muteButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    muteButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    muteButton.setTooltip ("Mute " + stemName.toLowerCase() + " stem | Ctrl+Click: mute/unmute ALL stems");
+    muteButton.addListener (this);
+    addAndMakeVisible (muteButton);
+
+    // Solo button
+    soloButton.setClickingTogglesState (true);
+    soloButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    soloButton.setColour (juce::TextButton::buttonOnColourId, PremiumLookAndFeel::Colours::solo);
+    soloButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    soloButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    soloButton.setTooltip ("Solo " + stemName.toLowerCase() + " stem | Shift+Click: exclusive solo (unsolo others)");
+    soloButton.addListener (this);
+    addAndMakeVisible (soloButton);
+
+    // Name label - BIGGER font for better visibility
+    nameLabel.setText (stemName, juce::dontSendNotification);
+    nameLabel.setJustificationType (juce::Justification::centred);
+    nameLabel.setColour (juce::Label::textColourId, stemColour);
+    nameLabel.setFont (juce::FontOptions (22.0f).withStyle ("Bold"));
+    addAndMakeVisible (nameLabel);
+
+    // Note: No timer needed - the parent editor updates levels via setLevel() which triggers repaint
+}
+
+void StemChannel::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+
+    // Background with subtle gradient
+    juce::ColourGradient bgGradient (
+        PremiumLookAndFeel::Colours::bgLight.withAlpha (0.6f), bounds.getX(), bounds.getY(),
+        PremiumLookAndFeel::Colours::bgDark.withAlpha (0.8f), bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill (bgGradient);
+    g.fillRoundedRectangle (bounds, 8.0f);
+
+    // Border with stem color accent at top
+    g.setColour (stemColour.withAlpha (0.4f));
+    g.drawRoundedRectangle (bounds.reduced (1.0f), 8.0f, 1.5f);
+
+    // Top accent line (stem color)
+    g.setColour (stemColour);
+    g.fillRoundedRectangle (bounds.getX() + 10, bounds.getY() + 2, bounds.getWidth() - 20, 3.0f, 1.5f);
+
+    // Level meter (right side) - OLDSKOOL LED STYLE
+    auto meterWidth = 14.0f;  // Wider meter
+    auto meterX = bounds.getRight() - meterWidth - 8.0f;
+    auto meterTop = bounds.getY() + 40.0f;
+    auto meterBottom = bounds.getBottom() - 85.0f;
+    auto meterHeight = meterBottom - meterTop;
+
+    // LED segment parameters
+    int numSegments = 24;  // Number of LED segments
+    float segmentHeight = meterHeight / numSegments;
+    float segmentGap = 2.0f;  // Gap between LEDs
+    float ledHeight = segmentHeight - segmentGap;
+
+    // Meter background/housing
+    g.setColour (PremiumLookAndFeel::Colours::bgDark.darker (0.3f));
+    g.fillRoundedRectangle (meterX - 2, meterTop - 2, meterWidth + 4, meterHeight + 4, 4.0f);
+
+    // Draw LED segments from bottom to top
+    int litSegments = (int) (displayLevel * numSegments);
+    int peakSegment = (int) (peakLevel * numSegments);
+
+    for (int i = 0; i < numSegments; ++i)
+    {
+        float segmentY = meterBottom - (i + 1) * segmentHeight + segmentGap / 2;
+        auto segmentRect = juce::Rectangle<float> (meterX, segmentY, meterWidth, ledHeight);
+
+        // Determine LED color based on position (bottom = stem color, top = red)
+        juce::Colour ledColour;
+        float segmentRatio = (float) i / numSegments;
+
+        if (segmentRatio > 0.9f)
+            ledColour = PremiumLookAndFeel::Colours::mute;  // Top 10% = red (clip)
+        else if (segmentRatio > 0.75f)
+            ledColour = juce::Colour (0xffffcc00);  // 75-90% = yellow (warning)
+        else
+            ledColour = stemColour;  // Rest = stem color
+
+        bool isLit = (i < litSegments);
+        bool isPeak = (i == peakSegment - 1) && (peakLevel > 0.01f);
+
+        if (isLit || isPeak)
+        {
+            // Lit LED with glow effect
+            g.setColour (ledColour.withAlpha (0.4f));
+            g.fillRoundedRectangle (segmentRect.expanded (2.0f, 1.0f), 3.0f);
+
+            // Main LED body - bright
+            g.setColour (ledColour);
+            g.fillRoundedRectangle (segmentRect, 2.0f);
+
+            // LED highlight (top reflection)
+            g.setColour (juce::Colours::white.withAlpha (0.3f));
+            g.fillRoundedRectangle (segmentRect.getX() + 1, segmentRect.getY(),
+                                    segmentRect.getWidth() - 2, ledHeight * 0.3f, 1.0f);
+        }
+        else
+        {
+            // Unlit LED - dark with subtle color hint
+            g.setColour (ledColour.withAlpha (0.15f));
+            g.fillRoundedRectangle (segmentRect, 2.0f);
+
+            // Subtle inset shadow
+            g.setColour (juce::Colours::black.withAlpha (0.3f));
+            g.drawRoundedRectangle (segmentRect.reduced (0.5f), 2.0f, 0.5f);
+        }
+    }
+
+    // dB markings (adjusted position for wider meter)
+    g.setColour (PremiumLookAndFeel::Colours::textDim);
+    g.setFont (juce::FontOptions (8.0f));
+
+    const float dbMarks[] = { 0.0f, -6.0f, -12.0f, -24.0f, -48.0f };
+    for (float db : dbMarks)
+    {
+        float normalizedDb = (db + 60.0f) / 72.0f;  // -60 to +12 dB range
+        float y = meterBottom - (normalizedDb * meterHeight);
+        g.drawText (juce::String ((int) db), (int) (meterX - 26), (int) (y - 6), 22, 12,
+                    juce::Justification::centredRight, false);
+    }
+
+    // Show "AI" badge if this channel needs AI separation and has no levels
+    if (needsAISeparation && displayLevel < 0.01f)
+    {
+        // Draw "AI" badge in the meter area
+        auto badgeBounds = juce::Rectangle<float> (meterX - 5, meterTop + meterHeight * 0.3f, 18.0f, 24.0f);
+
+        // Badge background with glow
+        g.setColour (stemColour.withAlpha (0.15f));
+        g.fillRoundedRectangle (badgeBounds.expanded (4.0f), 6.0f);
+
+        g.setColour (stemColour.withAlpha (0.5f));
+        g.drawRoundedRectangle (badgeBounds.expanded (2.0f), 5.0f, 1.0f);
+
+        // "AI" text
+        g.setColour (stemColour);
+        g.setFont (juce::FontOptions (10.0f).withStyle ("Bold"));
+        g.drawText ("AI", badgeBounds, juce::Justification::centred);
+    }
+}
+
+void StemChannel::resized()
+{
+    auto bounds = getLocalBounds().reduced (6);
+
+    // Name at top - larger height for bigger font
+    nameLabel.setBounds (bounds.removeFromTop (28));
+    bounds.removeFromTop (3);
+
+    // Reserve space for wider LED meter on right side
+    bounds.removeFromRight (28);
+
+    // Bottom area: M/S buttons positioned ABSOLUTELY at bottom
+    // This ensures alignment across all stem channels
+    int buttonHeight = 24;
+    int buttonSpacing = 4;
+    int bottomMargin = 6;  // Space from bottom edge
+    int buttonWidth = juce::jmin (bounds.getWidth() - 24, 50);
+    int centerX = bounds.getX() + (bounds.getWidth() - buttonWidth) / 2;
+
+    // Solo button at very bottom
+    int soloY = getHeight() - bottomMargin - buttonHeight - 6;  // -6 for reduced(6)
+    soloButton.setBounds (centerX, soloY, buttonWidth, buttonHeight);
+
+    // Mute button above solo
+    int muteY = soloY - buttonSpacing - buttonHeight;
+    muteButton.setBounds (centerX, muteY, buttonWidth, buttonHeight);
+
+    // Reserve space for buttons + dB text in bounds calculation
+    int buttonAreaHeight = (buttonHeight * 2) + buttonSpacing + 22;  // +22 for dB text
+    bounds.removeFromBottom (buttonAreaHeight);
+
+    // Fader takes remaining space
+    bounds.removeFromBottom (3);
+    gainSlider.setBounds (bounds);
+}
+
+void StemChannel::buttonClicked (juce::Button* button)
+{
+    // Get current modifier keys for Reaper-style behavior
+    auto mods = juce::ModifierKeys::currentModifiers;
+    bool ctrlDown = mods.isCtrlDown() || mods.isCommandDown();  // Ctrl on Windows/Linux, Cmd on Mac
+    bool shiftDown = mods.isShiftDown();
+
+    if (button == &muteButton && onMuteChanged)
+        onMuteChanged (muteButton.getToggleState(), ctrlDown, shiftDown);
+    else if (button == &soloButton && onSoloChanged)
+        onSoloChanged (soloButton.getToggleState(), ctrlDown, shiftDown);
+}
+
+void StemChannel::attachToParameters (juce::AudioProcessorValueTreeState& apvts,
+                                       const juce::String& gainID,
+                                       const juce::String& muteID,
+                                       const juce::String& soloID)
+{
+    gainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        apvts, gainID, gainSlider);
+    muteAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        apvts, muteID, muteButton);
+    soloAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        apvts, soloID, soloButton);
+}
+
+void StemChannel::setLevel (float level)
+{
+    // Only update if level changed significantly
+    constexpr float threshold = 0.001f;
+    if (std::abs (level - currentLevel) < threshold &&
+        std::abs (displayLevel - currentLevel) < threshold)
+        return;  // No significant change, skip repaint
+
+    currentLevel = level;
+    updateMeter();
+    repaint();
+}
+
+void StemChannel::updateMeter()
+{
+    // Smooth level display with faster attack, slower release
+    if (currentLevel > displayLevel)
+        displayLevel = currentLevel;  // Fast attack
+    else
+        displayLevel = displayLevel * 0.92f + currentLevel * 0.08f;  // Slow release
+
+    // Peak hold
+    if (currentLevel >= peakLevel)
+    {
+        peakLevel = currentLevel;
+        peakHoldCount = 0;
+    }
+    else
+    {
+        peakHoldCount++;
+        if (peakHoldCount > peakHoldTime)
+        {
+            peakLevel *= 0.95f;  // Decay peak
+        }
+    }
+}

@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Stemperator
+Comment=AI-powered stem separation plugin
+Exec=/home/flark/GIT/Stemperator/build/Stemperator_artefacts/Standalone/Stemperator
+Icon=stemperator
+Categories=AudioVideo;Audio;
+Terminal=false
+StartupNotify=true
+StartupWMClass=Stemperator

@@ -1,0 +1,35 @@
+#pragma once
+
+// Stemperator Version Information
+// Update these values when releasing new versions
+
+#define STEMPERATOR_VERSION_MAJOR 1
+#define STEMPERATOR_VERSION_MINOR 3
+#define STEMPERATOR_VERSION_PATCH 0
+
+#define STEMPERATOR_VERSION_STRING "1.3.0-AI"
+
+// Build info - auto-generated during build
+#ifndef STEMPERATOR_BUILD_DATE
+#define STEMPERATOR_BUILD_DATE __DATE__
+#endif
+
+// Feature flags
+#if USE_HIP
+#define STEMPERATOR_GPU_BACKEND "HIP/ROCm"
+#elif USE_OPENCL
+#define STEMPERATOR_GPU_BACKEND "OpenCL"
+#else
+#define STEMPERATOR_GPU_BACKEND "CPU"
+#endif
+
+namespace Stemperator
+{
+    inline const char* getVersionString() { return STEMPERATOR_VERSION_STRING; }
+    inline const char* getBuildDate() { return STEMPERATOR_BUILD_DATE; }
+    inline const char* getGPUBackend() { return STEMPERATOR_GPU_BACKEND; }
+
+    inline int getVersionMajor() { return STEMPERATOR_VERSION_MAJOR; }
+    inline int getVersionMinor() { return STEMPERATOR_VERSION_MINOR; }
+    inline int getVersionPatch() { return STEMPERATOR_VERSION_PATCH; }
+}

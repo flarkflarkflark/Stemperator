@@ -1,0 +1,109 @@
+# Stemperator Code Audit - December 2025
+
+## Fixes Applied This Session
+
+1. **demucs_process.py** - Fixed `--check` flag (was requiring input/output_dir)
+2. **About Dialog** - Now checks audio-separator instead of old DemucsProcessor
+3. **Subtitle Label** - Same fix for Demucs status display
+4. **isExporting guards** - Added to `loadProject()` and `loadAudioFile()` to prevent crash
+5. **UISettingsDialog Save & Quit** - Now checks save success and uses proper quit flow
+
+---
+
+## CRITICAL: Hardcoded Paths
+
+6 instances of `/home/flark/GIT/Stemperator` that break deployment:
+
+| File | Line | Fix Priority |
+|------|------|-------------|
+| PluginEditor.cpp | 321 | HIGH |
+| PluginEditor.cpp | 994 | HIGH |
+| PluginEditor.cpp | 2369 | HIGH |
+| PluginEditor.cpp | 2986 | HIGH |
+| PluginEditor.cpp | 4409 | HIGH |
+| PluginEditor.cpp | 4925 | HIGH |
+| DemucsProcessor.cpp | 51 | MEDIUM |
+
+**Recommended:** Create `findProjectRoot()` utility that searches relative to executable first, then falls back to env var `STEMPERATOR_ROOT`.
+
+---
+
+## Dead/Unused Code (Safe to Remove)
+
+| File | Status | Notes |
+|------|--------|-------|
+| DemucsProcessor.cpp/h | UNUSED | Only `isAvailable()` was checked, actual AI uses audio_separator_process.py |
+| UVRProcessor.cpp/h | UNUSED | Never instantiated in plugin code |
+| SeparationWorkflow.cpp/h | UNUSED | Complete implementation but never used |
+| demucs_process.py | LEGACY | Kept for reference, but audio_separator_process.py is the active script |
+
+---
+
+## Code Duplication to Consolidate
+
+1. **Project Root Finding** - Used 4+ times identically:
+   - Lines 2356-2372, 2974-2989, 4408-4411, 4925-4927
+   - Extract to `findPythonEnvironment()` method
+
+2. **Model Selection Logic** - 3 different patterns:
+   - Lines 2330-2335, 2941-2946, 4391
+   - Extract to `getModelForQuality(int qualityIndex)` method
+
+3. **Export Session Init** - Repeated atomic flag setup:
+   - Lines 2340, 2965, 4401, 4922
+   - Extract to `startExportSession()` method
+
+---
+
+## Thread Safety Concerns
+
+- `isExporting`, `cancelExport`, `exportProgress` atomics used without mutex
+- Risk of race conditions during state transitions
+- **Recommended:** Add `juce::CriticalSection exportStateLock` for grouped operations
+
+---
+
+## Missing Error Handling
+
+1. No validation of stem files after Python subprocess completes
+2. Process exit codes not always checked before loading results
+3. Missing checks if command execution succeeded
+
+---
+
+## Architecture Notes
+
+- **PluginEditor.cpp is 6,133 lines** - Consider splitting:
+  - UI code → StemperatorEditor.cpp
+  - File handling → AudioFileHandler.cpp
+  - AI coordination → AICoordinator.cpp
+  - Export logic → ExportManager.cpp
+
+- **Two Python scripts exist:**
+  - `demucs_process.py` - Legacy, for direct Demucs API
+  - `audio_separator_process.py` - Active, uses audio-separator library (which wraps Demucs)
+
+---
+
+## Quick Reference: AI Backend
+
+The actual AI separation uses:
+```
+.venv/bin/python Source/AI/audio_separator_process.py
+```
+
+This script:
+- Uses `audio-separator` library (pip package)
+- Wraps Demucs models: htdemucs, htdemucs_ft, htdemucs_6s
+- Supports GPU via PyTorch/ROCm
+
+**NOT used:** DemucsProcessor class (was for direct PyTorch integration, abandoned)
+
+---
+
+## Next Session Priorities
+
+1. Fix hardcoded paths (blocks deployment)
+2. Remove dead code (DemucsProcessor, UVRProcessor, SeparationWorkflow)
+3. Consolidate duplicate code patterns
+4. Add proper error handling for subprocess calls

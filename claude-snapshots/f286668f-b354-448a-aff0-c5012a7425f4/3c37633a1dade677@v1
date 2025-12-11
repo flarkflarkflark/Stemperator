@@ -1,0 +1,115 @@
+# AI Image Prompts voor Stemperator Screenshots
+
+Gebruik deze prompts om promotional/conceptuele afbeeldingen te genereren voor de Stemperator README.
+
+## Kleurenpalet (uit de code)
+
+| Stem   | RGB             | Hex       |
+|--------|-----------------|-----------|
+| Vocals | 255, 100, 100   | #FF6464   |
+| Drums  | 100, 200, 255   | #64C8FF   |
+| Bass   | 150, 100, 255   | #9664FF   |
+| Other  | 100, 255, 150   | #64FF96   |
+| Guitar | 255, 180, 80    | #FFB450   |
+| Piano  | 255, 120, 200   | #FF78C8   |
+
+---
+
+## 1. Midjourney
+
+**Website:** https://www.midjourney.com/
+
+### Prompt 1: Hero Image - Stem Separation Concept
+
+```
+Professional screenshot of a digital audio workstation interface showing AI stem separation. Dark theme UI with a waveform being split into 4 colored layers: red vocals, blue drums, purple bass, green other instruments. Modern flat design, subtle glow effects, clean typography showing "Stemperator". Technical but approachable aesthetic, 16:9 aspect ratio --ar 16:9 --v 6
+```
+
+### Prompt 2: Workflow Visualization
+
+```
+Infographic style image showing audio production workflow. Left side: single mixed audio waveform in white. Center: glowing AI processing node with neural network pattern. Right side: 4 separated stem tracks in red, blue, purple, and green. Dark background, modern UI aesthetic, music production software style, clean and professional --ar 16:9 --v 6
+```
+
+### Prompt 3: REAPER-style Interface
+
+```
+Digital audio workstation interface mockup, dark grey theme similar to REAPER. Timeline showing 5 horizontal tracks with colorful waveforms: original track muted in grey, vocals track in coral red, drums in sky blue, bass in purple, other in mint green. Track names visible on left panel. Photorealistic software screenshot style, 4K resolution --ar 16:9 --v 6
+```
+
+---
+
+## 2. DALL-E 3 (ChatGPT Plus / Bing Image Creator)
+
+**Website:** https://chat.openai.com/ of https://www.bing.com/images/create
+
+### Prompt 1: Hero Image - Stem Separation Concept
+
+```
+Create a professional software interface screenshot showing an AI-powered audio stem separation tool. The image should show a dark-themed audio editor with a single waveform on the left being processed and split into 4 separate colored waveform tracks on the right: red (vocals), blue (drums), purple (bass), and green (other instruments). Include subtle AI/neural network visual elements. Modern, clean design with the text "Stemperator" visible. Aspect ratio 16:9.
+```
+
+### Prompt 2: Before/After Comparison
+
+```
+Create a split-screen comparison image for audio software. Left side labeled "BEFORE" shows a single complex audio waveform in white/grey. Right side labeled "AFTER" shows the same audio separated into 4 clean individual tracks with distinct colors: coral red for vocals, sky blue for drums, violet for bass, mint green for other. Dark background, professional music production aesthetic. Include small icons next to each track (microphone, drum, bass guitar, keyboard). 16:9 aspect ratio.
+```
+
+### Prompt 3: Creative Workflow Scene
+
+```
+Digital illustration of a music producer's perspective looking at a computer monitor. The screen shows a DAW (digital audio workstation) with the Stemperator plugin open. Visible are 4 separated audio tracks with colored waveforms (red, blue, purple, green) and a floating dialog box with checkboxes for "Vocals, Drums, Bass, Other". Atmospheric lighting, professional studio environment suggested in the background blur. Modern and sleek aesthetic.
+```
+
+---
+
+## 3. Ideogram
+
+**Website:** https://ideogram.ai/
+
+Ideogram is bijzonder goed in tekst rendering, ideaal voor UI mockups.
+
+### Prompt 1: Software Dialog Mockup
+
+```
+Software interface mockup, dark theme. A dialog window titled "Stemperator - AI Stem Separation" with checkboxes labeled "Vocals", "Drums", "Bass", "Other" each with a colored indicator (red, blue, purple, green). Dropdown menu showing "htdemucs". Two buttons at bottom: "Cancel" and "Separate". Clean modern UI design, slight drop shadow, professional audio software aesthetic. Photorealistic screenshot style.
+```
+
+### Prompt 2: Feature Highlight Image
+
+```
+Professional software marketing image. Dark background with text "STEMPERATOR" in modern sans-serif font at top. Below, 4 horizontal audio waveforms stacked vertically, each in different color: coral red labeled "VOCALS", cyan blue labeled "DRUMS", purple labeled "BASS", mint green labeled "OTHER". Subtle glow effect on waveforms. Text at bottom: "AI-Powered Stem Separation". Clean, minimal design. 16:9 aspect ratio.
+```
+
+### Prompt 3: Workflow Diagram
+
+```
+Technical infographic showing audio stem separation process. Left: icon of audio file with musical notes. Center: box labeled "Stemperator AI" with circuit/neural pattern. Right: 4 branching arrows leading to 4 icons - microphone (red), drums (blue), bass guitar (purple), piano keyboard (green). Dark theme, modern flat design, professional music technology aesthetic. Text labels clearly readable. Horizontal layout, 16:9.
+```
+
+---
+
+## Tips voor beste resultaten
+
+1. **Genereer meerdere variaties** - Maak 4-8 versies en kies de beste
+2. **Upscale** - Gebruik de upscale functie voor hogere resolutie
+3. **Edit/Inpaint** - Corrigeer kleine fouten met inpainting tools
+4. **Consistentie** - Gebruik dezelfde seed/style voor een coherente set
+
+## Aanbevolen afbeeldingsformaten voor README
+
+| Gebruik | Formaat | Resolutie |
+|---------|---------|-----------|
+| Hero/banner | 16:9 | 1920x1080 of 1280x720 |
+| Inline screenshot | 16:9 | 800x450 |
+| Logo/icon | 1:1 | 256x256 of 512x512 |
+
+## Na generatie
+
+Upload de afbeeldingen naar `/home/flark/GIT/Stemperator/docs/images/` en voeg ze toe aan de README met:
+
+```markdown
+![Stemperator Hero](docs/images/hero.png)
+
+![Stem Separation Workflow](docs/images/workflow.png)
+```

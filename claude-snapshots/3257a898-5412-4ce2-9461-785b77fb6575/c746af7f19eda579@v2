@@ -1,0 +1,115 @@
+#include "StemChannel.h"
+
+StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
+    : stemName (name), stemColour (colour)
+{
+    // Gain slider (vertical fader)
+    gainSlider.setSliderStyle (juce::Slider::LinearVertical);
+    gainSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
+    gainSlider.setRange (-60.0, 12.0, 0.1);
+    gainSlider.setValue (0.0);
+    gainSlider.setColour (juce::Slider::thumbColourId, stemColour);
+    gainSlider.setColour (juce::Slider::trackColourId, stemColour.darker (0.3f));
+    addAndMakeVisible (gainSlider);
+
+    // Mute button
+    muteButton.setClickingTogglesState (true);
+    muteButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::red);
+    muteButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    muteButton.addListener (this);
+    addAndMakeVisible (muteButton);
+
+    // Solo button
+    soloButton.setClickingTogglesState (true);
+    soloButton.setColour (juce::TextButton::buttonOnColourId, juce::Colours::yellow);
+    soloButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    soloButton.addListener (this);
+    addAndMakeVisible (soloButton);
+
+    // Name label
+    nameLabel.setText (stemName, juce::dontSendNotification);
+    nameLabel.setJustificationType (juce::Justification::centred);
+    nameLabel.setColour (juce::Label::textColourId, stemColour);
+    nameLabel.setFont (juce::Font (14.0f, juce::Font::bold));
+    addAndMakeVisible (nameLabel);
+}
+
+void StemChannel::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+
+    // Background
+    g.setColour (juce::Colour (0xff1a1a2e));
+    g.fillRoundedRectangle (bounds, 6.0f);
+
+    // Border
+    g.setColour (stemColour.withAlpha (0.5f));
+    g.drawRoundedRectangle (bounds.reduced (1.0f), 6.0f, 2.0f);
+
+    // Level meter (right side)
+    auto meterBounds = bounds.removeFromRight (12.0f).reduced (4.0f, 40.0f);
+
+    // Meter background
+    g.setColour (juce::Colours::black);
+    g.fillRoundedRectangle (meterBounds, 3.0f);
+
+    // Meter level
+    float meterHeight = meterBounds.getHeight() * juce::jlimit (0.0f, 1.0f, currentLevel);
+    auto levelBounds = meterBounds.removeFromBottom (meterHeight);
+
+    // Gradient from green to yellow to red
+    juce::Colour meterColour = juce::Colours::green;
+    if (currentLevel > 0.7f)
+        meterColour = juce::Colours::yellow;
+    if (currentLevel > 0.9f)
+        meterColour = juce::Colours::red;
+
+    g.setColour (meterColour);
+    g.fillRoundedRectangle (levelBounds, 3.0f);
+}
+
+void StemChannel::resized()
+{
+    auto bounds = getLocalBounds().reduced (8);
+
+    nameLabel.setBounds (bounds.removeFromTop (25));
+    bounds.removeFromTop (5);
+
+    auto buttonArea = bounds.removeFromBottom (60);
+    auto buttonRow1 = buttonArea.removeFromTop (28);
+    auto buttonRow2 = buttonArea.removeFromTop (28);
+
+    muteButton.setBounds (buttonRow1.reduced (2));
+    soloButton.setBounds (buttonRow2.reduced (2));
+
+    bounds.removeFromRight (16);  // Space for meter
+    bounds.removeFromBottom (5);
+    gainSlider.setBounds (bounds);
+}
+
+void StemChannel::buttonClicked (juce::Button* button)
+{
+    if (button == &muteButton && onMuteChanged)
+        onMuteChanged (muteButton.getToggleState());
+    else if (button == &soloButton && onSoloChanged)
+        onSoloChanged (soloButton.getToggleState());
+}
+
+void StemChannel::attachToParameters (juce::AudioProcessorValueTreeState& apvts,
+                                       const juce::String& gainID,
+                                       const juce::String& muteID,
+                                       const juce::String& soloID)
+{
+    gainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        apvts, gainID, gainSlider);
+    muteAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        apvts, muteID, muteButton);
+    soloAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        apvts, soloID, soloButton);
+}
+
+void StemChannel::setLevel (float level)
+{
+    currentLevel = level;
+    repaint();
+}

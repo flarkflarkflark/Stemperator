@@ -1,0 +1,375 @@
+#include "plugin.h"
+#include "gui.h"
+#include <clap/ext/gui.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+#include <unistd.h>
+#include <time.h>
+#include <math.h>
+
+// External reference to GUI extension (defined at the end of this file)
+extern clap_plugin_gui_t s_plugin_gui;
+
+// GUI context for the plugin
+static gui_context_t *s_gui_context = NULL;
+
+// Render thread function
+static void *render_thread_func(void *arg) {
+    gui_context_t *gui = (gui_context_t *)arg;
+
+    #ifndef __APPLE__
+    // Make the OpenGL context current for this thread
+    if (!gui->display || !gui->glx_context) {
+        printf("Render thread: No display or context\n");
+        return NULL;
+    }
+
+    if (!glXMakeCurrent(gui->display, gui->window, gui->glx_context)) {
+        printf("Render thread: Failed to make context current\n");
+        return NULL;
+    }
+
+    printf("Render thread: OpenGL context bound successfully\n");
+
+    // Initialize OpenGL now that context is current in this thread
+    opengl_init();
+    opengl_setup_projection(gui->width, gui->height);
+    printf("Render thread: OpenGL initialized\n");
+    #endif
+
+    struct timespec last_time, current_time;
+    clock_gettime(CLOCK_MONOTONIC, &last_time);
+
+    while (gui->running) {
+        clock_gettime(CLOCK_MONOTONIC, &current_time);
+        float delta = (current_time.tv_sec - last_time.tv_sec) +
+                     (current_time.tv_nsec - last_time.tv_nsec) / 1000000000.0f;
+        last_time = current_time;
+
+        #ifndef __APPLE__
+        // Process X11 events
+        while (XPending(gui->display) > 0) {
+            XEvent event;
+            XNextEvent(gui->display, &event);
+
+            if (event.type == ButtonPress && event.xbutton.button == Button1) {
+                // Left mouse button pressed
+                float mouse_x = event.xbutton.x;
+                float mouse_y = gui->height - event.xbutton.y; // Flip Y coordinate
+
+                // Check if clicking on a knob
+                float dx_cutoff = mouse_x - gui->cutoff_knob.x;
+                float dy_cutoff = mouse_y - gui->cutoff_knob.y;
+                if (sqrtf(dx_cutoff * dx_cutoff + dy_cutoff * dy_cutoff) < gui->cutoff_knob.radius) {
+                    gui->cutoff_knob.dragging = true;
+                }
+
+                float dx_res = mouse_x - gui->resonance_knob.x;
+                float dy_res = mouse_y - gui->resonance_knob.y;
+                if (sqrtf(dx_res * dx_res + dy_res * dy_res) < gui->resonance_knob.radius) {
+                    gui->resonance_knob.dragging = true;
+                }
+
+                float dx_gain = mouse_x - gui->gain_knob.x;
+                float dy_gain = mouse_y - gui->gain_knob.y;
+                if (sqrtf(dx_gain * dx_gain + dy_gain * dy_gain) < gui->gain_knob.radius) {
+                    gui->gain_knob.dragging = true;
+                }
+            } else if (event.type == ButtonRelease && event.xbutton.button == Button1) {
+                // Release all knobs
+                gui->cutoff_knob.dragging = false;
+                gui->resonance_knob.dragging = false;
+                gui->gain_knob.dragging = false;
+            } else if (event.type == MotionNotify) {
+                // Mouse dragging - adjust knob values
+                static int last_y = 0;
+                int delta_y = last_y - event.xmotion.y;
+                last_y = event.xmotion.y;
+
+                if (gui->cutoff_knob.dragging) {
+                    gui->cutoff_knob.value += delta_y * 0.005f;
+                    if (gui->cutoff_knob.value < 0.0f) gui->cutoff_knob.value = 0.0f;
+                    if (gui->cutoff_knob.value > 1.0f) gui->cutoff_knob.value = 1.0f;
+                    printf("Cutoff: %.2f\n", gui->cutoff_knob.value);
+                }
+
+                if (gui->resonance_knob.dragging) {
+                    gui->resonance_knob.value += delta_y * 0.005f;
+                    if (gui->resonance_knob.value < 0.0f) gui->resonance_knob.value = 0.0f;
+                    if (gui->resonance_knob.value > 1.0f) gui->resonance_knob.value = 1.0f;
+                    printf("Resonance: %.2f\n", gui->resonance_knob.value);
+                }
+
+                if (gui->gain_knob.dragging) {
+                    gui->gain_knob.value += delta_y * 0.005f;
+                    if (gui->gain_knob.value < 0.0f) gui->gain_knob.value = 0.0f;
+                    if (gui->gain_knob.value > 1.0f) gui->gain_knob.value = 1.0f;
+                    printf("Gain: %.2f\n", gui->gain_knob.value);
+                }
+            }
+        }
+
+        // Ensure window is valid and mapped
+        XWindowAttributes attrs;
+        if (XGetWindowAttributes(gui->display, gui->window, &attrs)) {
+            if (attrs.map_state == IsViewable) {
+                // Update and render
+                matrix_update(gui, delta);
+                gui_render(gui);
+
+                // Swap buffers
+                glXSwapBuffers(gui->display, gui->window);
+                glFlush();
+            }
+        }
+        #endif
+
+        // 60 FPS
+        usleep(16666);
+    }
+
+    #ifndef __APPLE__
+    // Release context
+    glXMakeCurrent(gui->display, None, NULL);
+    #endif
+
+    printf("Render thread exiting\n");
+    return NULL;
+}
+
+// Setup OpenGL context for X11 window
+static bool setup_opengl_context(gui_context_t *gui, Window parent_window) {
+    #ifndef __APPLE__
+    gui->display = XOpenDisplay(NULL);
+    if (!gui->display) {
+        printf("Failed to open X display\n");
+        return false;
+    }
+
+    // Choose visual
+    static int visual_attribs[] = {
+        GLX_RGBA,
+        GLX_DEPTH_SIZE, 24,
+        GLX_DOUBLEBUFFER,
+        None
+    };
+
+    gui->visual_info = glXChooseVisual(gui->display, DefaultScreen(gui->display), visual_attribs);
+    if (!gui->visual_info) {
+        printf("Failed to choose visual\n");
+        XCloseDisplay(gui->display);
+        return false;
+    }
+
+    // Create colormap
+    Colormap cmap = XCreateColormap(gui->display, parent_window, gui->visual_info->visual, AllocNone);
+
+    // Create child window with mouse event support
+    XSetWindowAttributes swa;
+    swa.colormap = cmap;
+    swa.event_mask = ExposureMask | KeyPressMask | ButtonPressMask | ButtonReleaseMask | PointerMotionMask;
+
+    gui->window = XCreateWindow(gui->display, parent_window,
+                                 0, 0, gui->width, gui->height,
+                                 0, gui->visual_info->depth, InputOutput,
+                                 gui->visual_info->visual,
+                                 CWColormap | CWEventMask, &swa);
+
+    XMapWindow(gui->display, gui->window);
+
+    // Create GLX context
+    gui->glx_context = glXCreateContext(gui->display, gui->visual_info, NULL, GL_TRUE);
+    if (!gui->glx_context) {
+        printf("Failed to create GLX context\n");
+        XDestroyWindow(gui->display, gui->window);
+        XCloseDisplay(gui->display);
+        return false;
+    }
+
+    // Don't make context current here - let the render thread do it
+    // This is important because a context can only be current in one thread at a time
+
+    printf("OpenGL context created successfully\n");
+    return true;
+    #else
+    return false;
+    #endif
+}
+
+// GUI extension methods
+static bool gui_is_api_supported(const clap_plugin_t *plugin, const char *api, bool is_floating) {
+    printf("Host requesting window API: %s (floating: %d)\n", api, is_floating);
+
+    if (strcmp(api, CLAP_WINDOW_API_WIN32) == 0) {
+        return true; // Windows GUI supported
+    }
+    if (strcmp(api, CLAP_WINDOW_API_COCOA) == 0) {
+        return true; // macOS GUI supported
+    }
+    if (strcmp(api, CLAP_WINDOW_API_X11) == 0) {
+        return true; // Linux X11 GUI supported
+    }
+    if (strcmp(api, CLAP_WINDOW_API_WAYLAND) == 0) {
+        printf("Wayland API requested but not fully implemented yet\n");
+        return false; // Wayland not yet implemented
+    }
+    return false;
+}
+
+static bool clap_gui_create(const clap_plugin_t *plugin, const char *api, bool is_floating) {
+    if (s_gui_context) {
+        return false; // GUI already exists
+    }
+
+    s_gui_context = (gui_context_t *)malloc(sizeof(gui_context_t));
+    if (!s_gui_context) {
+        return false;
+    }
+
+    // Use default GUI size from constants
+    if (!gui_create(s_gui_context, plugin, GUI_WIDTH, GUI_HEIGHT)) {
+        free(s_gui_context);
+        s_gui_context = NULL;
+        return false;
+    }
+
+    printf("CLAP GUI created successfully (%dx%d)\n", GUI_WIDTH, GUI_HEIGHT);
+    return true;
+}
+
+static void clap_gui_destroy(const clap_plugin_t *plugin) {
+    if (s_gui_context) {
+        // Stop render thread
+        s_gui_context->running = false;
+        pthread_join(s_gui_context->render_thread, NULL);
+
+        #ifndef __APPLE__
+        // Cleanup OpenGL context
+        if (s_gui_context->glx_context) {
+            glXMakeCurrent(s_gui_context->display, None, NULL);
+            glXDestroyContext(s_gui_context->display, s_gui_context->glx_context);
+        }
+
+        if (s_gui_context->window) {
+            XDestroyWindow(s_gui_context->display, s_gui_context->window);
+        }
+
+        if (s_gui_context->display) {
+            XCloseDisplay(s_gui_context->display);
+        }
+        #endif
+
+        // Destroy GUI context
+        gui_destroy(s_gui_context);
+        free(s_gui_context);
+        s_gui_context = NULL;
+
+        printf("GUI destroyed\n");
+    }
+}
+
+static bool gui_set_scale(const clap_plugin_t *plugin, double scale) {
+    // Handle DPI scaling if needed
+    printf("GUI scale set to: %.2f\n", scale);
+    return true;
+}
+
+static bool gui_get_size(const clap_plugin_t *plugin, uint32_t *width, uint32_t *height) {
+    if (!s_gui_context) return false;
+    
+    *width = s_gui_context->width;
+    *height = s_gui_context->height;
+    return true;
+}
+
+static bool gui_can_resize(const clap_plugin_t *plugin) {
+    return true;
+}
+
+static bool gui_set_size(const clap_plugin_t *plugin, uint32_t width, uint32_t height) {
+    if (!s_gui_context) return false;
+    
+    s_gui_context->width = width;
+    s_gui_context->height = height;
+    printf("GUI resized to: %dx%d\n", width, height);
+    return true;
+}
+
+static bool gui_set_parent(const clap_plugin_t *plugin, const clap_window_t *window) {
+    if (!s_gui_context || !window) {
+        printf("gui_set_parent: NULL context or window\n");
+        return false;
+    }
+
+    printf("GUI parent set - API: %s\n", window->api);
+    printf("Window handle - x11: %lu, ptr: %p\n", (unsigned long)window->x11, window->ptr);
+
+    #ifndef __APPLE__
+    // Get X11 window handle (works with XWayland too)
+    Window parent_window = (Window)(uintptr_t)window->x11;
+
+    if (!parent_window) {
+        printf("No X11 window handle provided\n");
+        return false;
+    }
+
+    printf("Setting up OpenGL context for X11 window %lu\n", parent_window);
+
+    if (!setup_opengl_context(s_gui_context, parent_window)) {
+        printf("Failed to setup OpenGL context\n");
+        return false;
+    }
+
+    // Start render thread
+    if (pthread_create(&s_gui_context->render_thread, NULL, render_thread_func, s_gui_context) != 0) {
+        printf("Failed to create render thread\n");
+        return false;
+    }
+
+    printf("Render thread started\n");
+    return true;
+    #else
+    return false;
+    #endif
+}
+
+static bool gui_set_transient(const clap_plugin_t *plugin, const clap_window_t *window) {
+    printf("GUI transient window set\n");
+    return true;
+}
+
+static void gui_suggest_title(const clap_plugin_t *plugin, const char *title) {
+    printf("GUI title: %s\n", title);
+}
+
+static bool gui_show(const clap_plugin_t *plugin) {
+    printf("GUI shown\n");
+    return true;
+}
+
+static bool gui_hide(const clap_plugin_t *plugin) {
+    printf("GUI hidden\n");
+    return true;
+}
+
+// Note: GUI update with audio data happens in the process function
+// This stub function is no longer needed
+
+clap_plugin_gui_t s_plugin_gui = {
+    .is_api_supported = gui_is_api_supported,
+    .get_preferred_api = NULL,  // No preference
+    .create = clap_gui_create,
+    .destroy = clap_gui_destroy,
+    .set_scale = gui_set_scale,
+    .get_size = gui_get_size,
+    .can_resize = gui_can_resize,
+    .get_resize_hints = NULL,  // No resize hints
+    .adjust_size = NULL,  // No size adjustment
+    .set_size = gui_set_size,
+    .set_parent = gui_set_parent,
+    .set_transient = gui_set_transient,
+    .suggest_title = gui_suggest_title,
+    .show = gui_show,
+    .hide = gui_hide,
+};

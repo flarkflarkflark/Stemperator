@@ -1,0 +1,542 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "PremiumLookAndFeel.h"
+
+/**
+ * BatchEditorWindow - Reaper-style batch stem processor
+ *
+ * Uses raw pointers for child components - they are owned by the content component
+ * which is owned by DocumentWindow. This avoids destructor ordering issues.
+ */
+class BatchEditorWindow : public juce::DocumentWindow,
+                          public juce::FileDragAndDropTarget,
+                          public juce::ListBoxModel
+{
+public:
+    // Callbacks
+    std::function<void (const juce::Array<juce::File>& files, const juce::String& modelName,
+                        const juce::File& outputFolder)> onStartBatch;
+    std::function<void()> onClose;
+
+    // Content component that owns all children
+    class ContentComponent : public juce::Component
+    {
+    public:
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (PremiumLookAndFeel::Colours::bgMid);
+        }
+    };
+
+    BatchEditorWindow (const juce::String& modelName)
+        : juce::DocumentWindow ("Batch Process",
+                                PremiumLookAndFeel::Colours::bgDark,
+                                juce::DocumentWindow::minimiseButton),  // Only minimize, no close
+          currentModel (modelName)
+    {
+        setUsingNativeTitleBar (false);
+        setTitleBarHeight (32);
+        setResizable (true, true);
+        setSize (550, 480);
+        centreWithSize (getWidth(), getHeight());
+
+        // Create content - DocumentWindow will own and delete it
+        content = new ContentComponent();
+        setContentOwned (content, true);
+
+        // All UI components are created with new and added to content
+        // Content will delete them when it is destroyed
+
+        // File list
+        fileList = new juce::ListBox ("Files", this);
+        fileList->setColour (juce::ListBox::backgroundColourId, PremiumLookAndFeel::Colours::bgPanel);
+        fileList->setColour (juce::ListBox::outlineColourId, PremiumLookAndFeel::Colours::accent.withAlpha (0.3f));
+        fileList->setOutlineThickness (1);
+        fileList->setRowHeight (24);
+        fileList->setMultipleSelectionEnabled (true);
+        content->addAndMakeVisible (fileList);
+
+        // Input section label
+        inputLabel = new juce::Label ("", "Input Files:");
+        inputLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+        inputLabel->setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
+        content->addAndMakeVisible (inputLabel);
+
+        // Button row
+        addButton = new juce::TextButton ("Add Files...");
+        addButton->onClick = [this] { addFiles(); };
+        content->addAndMakeVisible (addButton);
+
+        addFolderButton = new juce::TextButton ("Add Folder...");
+        addFolderButton->onClick = [this] { addFolder(); };
+        content->addAndMakeVisible (addFolderButton);
+
+        clearButton = new juce::TextButton ("Clear");
+        clearButton->onClick = [this] { files.clear(); updateUI(); };
+        content->addAndMakeVisible (clearButton);
+
+        removeButton = new juce::TextButton ("Remove");
+        removeButton->onClick = [this] { removeSelected(); };
+        content->addAndMakeVisible (removeButton);
+
+        // Output section
+        outputLabel = new juce::Label ("", "Output:");
+        outputLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+        outputLabel->setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
+        content->addAndMakeVisible (outputLabel);
+
+        outputModeCombo = new juce::ComboBox();
+        outputModeCombo->addItem ("Next to source files", 1);
+        outputModeCombo->addItem ("Custom folder...", 2);
+        outputModeCombo->setSelectedId (1);
+        outputModeCombo->onChange = [this] { onOutputModeChanged(); };
+        content->addAndMakeVisible (outputModeCombo);
+
+        outputFolderLabel = new juce::Label ("", "");
+        outputFolderLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+        outputFolderLabel->setFont (juce::FontOptions (11.0f));
+        content->addAndMakeVisible (outputFolderLabel);
+
+        // Model selection
+        modelLabel = new juce::Label ("", "Model:");
+        modelLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+        modelLabel->setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
+        content->addAndMakeVisible (modelLabel);
+
+        modelCombo = new juce::ComboBox();
+        modelCombo->addItem ("htdemucs (4 stems)", 1);
+        modelCombo->addItem ("htdemucs_6s (6 stems)", 2);
+        modelCombo->setSelectedId (modelName == "htdemucs_6s" ? 2 : 1);
+        modelCombo->onChange = [this] { currentModel = (modelCombo->getSelectedId() == 2) ? "htdemucs_6s" : "htdemucs"; };
+        content->addAndMakeVisible (modelCombo);
+
+        // Status / Progress
+        statusLabel = new juce::Label ("", "Drop audio files here or click 'Add Files'");
+        statusLabel->setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+        statusLabel->setFont (juce::FontOptions (12.0f));
+        statusLabel->setJustificationType (juce::Justification::centred);
+        content->addAndMakeVisible (statusLabel);
+
+        progressBar = new juce::ProgressBar (progress);
+        progressBar->setColour (juce::ProgressBar::backgroundColourId, PremiumLookAndFeel::Colours::bgPanel);
+        progressBar->setColour (juce::ProgressBar::foregroundColourId, PremiumLookAndFeel::Colours::active);
+        progressBar->setVisible (false);
+        content->addAndMakeVisible (progressBar);
+
+        // Process button
+        processButton = new juce::TextButton ("Process All");
+        processButton->setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::active.darker (0.2f));
+        processButton->onClick = [this] { startProcessing(); };
+        processButton->setEnabled (false);
+        content->addAndMakeVisible (processButton);
+
+        // Cancel button (hidden initially)
+        cancelButton = new juce::TextButton ("Cancel");
+        cancelButton->setColour (juce::TextButton::buttonColourId, juce::Colours::darkred);
+        cancelButton->onClick = [this] { requestCancel(); };
+        cancelButton->setVisible (false);
+        content->addAndMakeVisible (cancelButton);
+
+        setVisible (true);
+    }
+
+    ~BatchEditorWindow() override
+    {
+        // Clear the ListBox model before content is deleted to avoid dangling reference
+        if (fileList != nullptr)
+            fileList->setModel (nullptr);
+    }
+
+    void closeButtonPressed() override
+    {
+        if (isProcessing)
+        {
+            requestCancel();
+            return;
+        }
+        // Just hide the window - don't delete it
+        setVisible (false);
+    }
+
+    void resized() override
+    {
+        juce::DocumentWindow::resized();
+        if (content == nullptr) return;
+
+        auto b = content->getLocalBounds().reduced (12);
+
+        // Bottom: Buttons row
+        auto bottomRow = b.removeFromBottom (34);
+        cancelButton->setBounds (bottomRow.removeFromRight (80));
+        bottomRow.removeFromRight (8);
+        processButton->setBounds (bottomRow.removeFromRight (100));
+
+        b.removeFromBottom (10);
+
+        // Progress bar
+        progressBar->setBounds (b.removeFromBottom (18));
+        b.removeFromBottom (6);
+
+        // Status line
+        statusLabel->setBounds (b.removeFromBottom (20));
+        b.removeFromBottom (10);
+
+        // Model selection row
+        auto modelRow = b.removeFromBottom (26);
+        modelLabel->setBounds (modelRow.removeFromLeft (50));
+        modelCombo->setBounds (modelRow.removeFromLeft (160));
+        b.removeFromBottom (8);
+
+        // Output section
+        auto outputRow = b.removeFromBottom (26);
+        outputLabel->setBounds (outputRow.removeFromLeft (55));
+        outputModeCombo->setBounds (outputRow.removeFromLeft (160));
+        outputRow.removeFromLeft (8);
+        outputFolderLabel->setBounds (outputRow);
+        b.removeFromBottom (10);
+
+        // Input label
+        inputLabel->setBounds (b.removeFromTop (20));
+        b.removeFromTop (4);
+
+        // Button row (below file list label)
+        auto buttonRow = b.removeFromBottom (28);
+        addButton->setBounds (buttonRow.removeFromLeft (80));
+        buttonRow.removeFromLeft (6);
+        addFolderButton->setBounds (buttonRow.removeFromLeft (90));
+        buttonRow.removeFromLeft (6);
+        removeButton->setBounds (buttonRow.removeFromLeft (70));
+        buttonRow.removeFromLeft (6);
+        clearButton->setBounds (buttonRow.removeFromLeft (55));
+        b.removeFromBottom (6);
+
+        // File list takes the rest
+        fileList->setBounds (b);
+    }
+
+    // FileDragAndDropTarget
+    bool isInterestedInFileDrag (const juce::StringArray& draggedFiles) override
+    {
+        if (isProcessing) return false;
+        for (const auto& f : draggedFiles)
+        {
+            juce::File file (f);
+            if (file.isDirectory() || isAudioFile (file))
+                return true;
+        }
+        return false;
+    }
+
+    void filesDropped (const juce::StringArray& droppedFiles, int, int) override
+    {
+        if (isProcessing) return;
+        for (const auto& f : droppedFiles)
+        {
+            juce::File file (f);
+            if (file.isDirectory())
+                addAudioFilesFromFolder (file);
+            else if (isAudioFile (file))
+                addFile (file);
+        }
+        updateUI();
+    }
+
+    // ListBoxModel
+    int getNumRows() override { return files.size(); }
+
+    void paintListBoxItem (int row, juce::Graphics& g, int width, int height, bool selected) override
+    {
+        if (row >= files.size()) return;
+
+        if (selected)
+            g.fillAll (PremiumLookAndFeel::Colours::accent.withAlpha (0.3f));
+        else if (row % 2)
+            g.fillAll (PremiumLookAndFeel::Colours::bgDark.withAlpha (0.15f));
+
+        juce::Colour textColour = PremiumLookAndFeel::Colours::textBright;
+        juce::String prefix = "";
+
+        if (row < currentFileIndex)
+        {
+            textColour = PremiumLookAndFeel::Colours::active;
+            prefix = "\u2713 ";
+        }
+        else if (row == currentFileIndex && isProcessing)
+        {
+            textColour = PremiumLookAndFeel::Colours::accent;
+            prefix = "\u25B6 ";
+        }
+
+        g.setColour (textColour);
+        g.setFont (juce::FontOptions (13.0f));
+        g.drawText (prefix + files[row].getFileName(), 8, 0, width - 16, height, juce::Justification::centredLeft);
+    }
+
+    void deleteKeyPressed (int) override
+    {
+        if (!isProcessing) removeSelected();
+    }
+
+    void listBoxItemDoubleClicked (int row, const juce::MouseEvent&) override
+    {
+        if (isProcessing) return;
+        if (row >= 0 && row < files.size())
+        {
+            files.remove (row);
+            updateUI();
+        }
+    }
+
+    // Progress update from external processing
+    void setProgress (int fileIndex, int totalFiles, const juce::String& statusText)
+    {
+        juce::Component::SafePointer<BatchEditorWindow> safeThis (this);
+        juce::MessageManager::callAsync ([safeThis, fileIndex, totalFiles, statusText]()
+        {
+            if (safeThis == nullptr) return;
+            safeThis->currentFileIndex = fileIndex;
+            safeThis->progress = (totalFiles > 0) ? (double) fileIndex / totalFiles : 0.0;
+            safeThis->statusLabel->setText (statusText, juce::dontSendNotification);
+            safeThis->fileList->repaint();
+        });
+    }
+
+    void processingComplete (int successCount, int failCount)
+    {
+        juce::Component::SafePointer<BatchEditorWindow> safeThis (this);
+        juce::MessageManager::callAsync ([safeThis, successCount, failCount]()
+        {
+            if (safeThis == nullptr) return;
+            safeThis->isProcessing = false;
+            safeThis->progress = 0.0;
+            safeThis->currentFileIndex = -1;
+            safeThis->progressBar->setVisible (false);
+            safeThis->processButton->setEnabled (true);
+            safeThis->processButton->setButtonText ("Process All");
+            safeThis->cancelButton->setVisible (false);
+            safeThis->addButton->setEnabled (true);
+            safeThis->addFolderButton->setEnabled (true);
+            safeThis->removeButton->setEnabled (true);
+            safeThis->clearButton->setEnabled (true);
+            safeThis->outputModeCombo->setEnabled (true);
+            safeThis->modelCombo->setEnabled (true);
+
+            juce::String msg;
+            if (failCount == 0)
+                msg = "Completed: " + juce::String (successCount) + " file" + (successCount > 1 ? "s" : "") + " processed";
+            else
+                msg = "Done: " + juce::String (successCount) + " OK, " + juce::String (failCount) + " failed";
+            safeThis->statusLabel->setText (msg, juce::dontSendNotification);
+
+            safeThis->fileList->repaint();
+        });
+    }
+
+    const juce::Array<juce::File>& getFiles() const { return files; }
+    juce::String getModelName() const { return currentModel; }
+
+    juce::File getOutputFolder() const
+    {
+        if (outputModeCombo->getSelectedId() == 2 && customOutputFolder.exists())
+            return customOutputFolder;
+        return juce::File();
+    }
+
+    bool isCancelRequested() const { return cancelRequested; }
+
+private:
+    juce::Array<juce::File> files;
+    juce::String currentModel;
+    juce::File customOutputFolder;
+    double progress = 0.0;
+    bool isProcessing = false;
+    bool cancelRequested = false;
+    int currentFileIndex = -1;
+
+    // Raw pointers - owned by content component
+    ContentComponent* content = nullptr;
+    juce::ListBox* fileList = nullptr;
+    juce::Label* inputLabel = nullptr;
+    juce::Label* outputLabel = nullptr;
+    juce::Label* modelLabel = nullptr;
+    juce::Label* statusLabel = nullptr;
+    juce::Label* outputFolderLabel = nullptr;
+    juce::TextButton* addButton = nullptr;
+    juce::TextButton* addFolderButton = nullptr;
+    juce::TextButton* clearButton = nullptr;
+    juce::TextButton* removeButton = nullptr;
+    juce::TextButton* processButton = nullptr;
+    juce::TextButton* cancelButton = nullptr;
+    juce::ComboBox* outputModeCombo = nullptr;
+    juce::ComboBox* modelCombo = nullptr;
+    juce::ProgressBar* progressBar = nullptr;
+
+    std::unique_ptr<juce::FileChooser> fileChooser;
+
+    bool isAudioFile (const juce::File& file)
+    {
+        auto ext = file.getFileExtension().toLowerCase();
+        return ext == ".wav" || ext == ".mp3" || ext == ".flac" ||
+               ext == ".aiff" || ext == ".aif" || ext == ".ogg" ||
+               ext == ".m4a" || ext == ".wma" || ext == ".opus";
+    }
+
+    void addFile (const juce::File& file)
+    {
+        if (! files.contains (file))
+            files.add (file);
+    }
+
+    void addAudioFilesFromFolder (const juce::File& folder)
+    {
+        for (const auto& entry : juce::RangedDirectoryIterator (folder, true, "*.wav;*.mp3;*.flac;*.aiff;*.aif;*.ogg;*.m4a;*.wma;*.opus"))
+            if (entry.getFile().existsAsFile())
+                addFile (entry.getFile());
+    }
+
+    void updateUI()
+    {
+        fileList->updateContent();
+        if (files.isEmpty())
+        {
+            statusLabel->setText ("Drop audio files here or click 'Add Files'", juce::dontSendNotification);
+            processButton->setEnabled (false);
+        }
+        else
+        {
+            juce::int64 totalSize = 0;
+            for (const auto& f : files)
+                totalSize += f.getSize();
+
+            juce::String info = juce::String (files.size()) + " file" + (files.size() > 1 ? "s" : "");
+            if (totalSize > 1024 * 1024)
+                info += " (" + juce::String::formatted ("%.1f MB", totalSize / (1024.0 * 1024.0)) + ")";
+
+            statusLabel->setText (info + " ready to process", juce::dontSendNotification);
+            processButton->setEnabled (true);
+        }
+    }
+
+    void onOutputModeChanged()
+    {
+        if (outputModeCombo->getSelectedId() == 2)
+        {
+            fileChooser = std::make_unique<juce::FileChooser> (
+                "Select Output Folder",
+                juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+                "", true);
+
+            juce::Component::SafePointer<BatchEditorWindow> safeThis (this);
+            fileChooser->launchAsync (
+                juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+                [safeThis] (const juce::FileChooser& fc)
+                {
+                    if (safeThis == nullptr) return;
+                    auto result = fc.getResult();
+                    if (result.exists() && result.isDirectory())
+                    {
+                        safeThis->customOutputFolder = result;
+                        safeThis->outputFolderLabel->setText (result.getFileName(), juce::dontSendNotification);
+                    }
+                    else
+                    {
+                        safeThis->outputModeCombo->setSelectedId (1);
+                        safeThis->customOutputFolder = juce::File();
+                        safeThis->outputFolderLabel->setText ("", juce::dontSendNotification);
+                    }
+                });
+        }
+        else
+        {
+            customOutputFolder = juce::File();
+            outputFolderLabel->setText ("", juce::dontSendNotification);
+        }
+    }
+
+    void addFiles()
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select Audio Files",
+            juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+            "*.wav;*.mp3;*.flac;*.aiff;*.aif;*.ogg;*.m4a;*.wma;*.opus", true);
+
+        juce::Component::SafePointer<BatchEditorWindow> safeThis (this);
+        fileChooser->launchAsync (
+            juce::FileBrowserComponent::openMode |
+            juce::FileBrowserComponent::canSelectFiles |
+            juce::FileBrowserComponent::canSelectMultipleItems,
+            [safeThis] (const juce::FileChooser& fc)
+            {
+                if (safeThis == nullptr) return;
+                for (const auto& f : fc.getResults())
+                    safeThis->addFile (f);
+                safeThis->updateUI();
+            });
+    }
+
+    void addFolder()
+    {
+        fileChooser = std::make_unique<juce::FileChooser> (
+            "Select Folder with Audio Files",
+            juce::File::getSpecialLocation (juce::File::userMusicDirectory),
+            "", true);
+
+        juce::Component::SafePointer<BatchEditorWindow> safeThis (this);
+        fileChooser->launchAsync (
+            juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectDirectories,
+            [safeThis] (const juce::FileChooser& fc)
+            {
+                if (safeThis == nullptr) return;
+                auto result = fc.getResult();
+                if (result.exists() && result.isDirectory())
+                {
+                    safeThis->addAudioFilesFromFolder (result);
+                    safeThis->updateUI();
+                }
+            });
+    }
+
+    void removeSelected()
+    {
+        auto selected = fileList->getSelectedRows();
+        for (int i = selected.size() - 1; i >= 0; --i)
+            if (selected[i] < files.size())
+                files.remove (selected[i]);
+        updateUI();
+    }
+
+    void startProcessing()
+    {
+        if (files.isEmpty() || onStartBatch == nullptr)
+            return;
+
+        isProcessing = true;
+        cancelRequested = false;
+        currentFileIndex = 0;
+        progress = 0.0;
+
+        processButton->setEnabled (false);
+        processButton->setButtonText ("Processing...");
+        cancelButton->setVisible (true);
+        addButton->setEnabled (false);
+        addFolderButton->setEnabled (false);
+        removeButton->setEnabled (false);
+        clearButton->setEnabled (false);
+        outputModeCombo->setEnabled (false);
+        modelCombo->setEnabled (false);
+        progressBar->setVisible (true);
+
+        statusLabel->setText ("Starting...", juce::dontSendNotification);
+
+        onStartBatch (files, currentModel, getOutputFolder());
+    }
+
+    void requestCancel()
+    {
+        cancelRequested = true;
+        statusLabel->setText ("Cancelling...", juce::dontSendNotification);
+    }
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (BatchEditorWindow)
+};

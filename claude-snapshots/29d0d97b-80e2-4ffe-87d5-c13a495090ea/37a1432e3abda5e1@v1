@@ -1,0 +1,303 @@
+#include "WaveformDisplay.h"
+
+WaveformDisplay::WaveformDisplay()
+    : thumbnail (128, formatManager, thumbnailCache)
+{
+    // Register all supported audio formats (WAV, AIFF, FLAC, OGG, MP3)
+    formatManager.registerBasicFormats();
+    formatManager.registerFormat (new juce::FlacAudioFormat(), true);
+    formatManager.registerFormat (new juce::OggVorbisAudioFormat(), true);
+
+    #if JUCE_USE_MP3AUDIOFORMAT
+    formatManager.registerFormat (new juce::MP3AudioFormat(), true);
+    #endif
+
+    thumbnail.addChangeListener (this);
+    startTimer (40); // 25 fps for smooth cursor updates
+}
+
+WaveformDisplay::~WaveformDisplay()
+{
+    thumbnail.removeChangeListener (this);
+}
+
+void WaveformDisplay::loadFile (const juce::File& file)
+{
+    // Clear previous waveform first
+    thumbnail.clear();
+
+    auto* reader = formatManager.createReaderFor (file);
+
+    if (reader != nullptr)
+    {
+        sampleRate = reader->sampleRate;
+        DBG ("Audio file info: " + juce::String (reader->numChannels) + " channels, " +
+             juce::String (sampleRate) + " Hz, " +
+             juce::String (reader->lengthInSamples) + " samples");
+        delete reader;
+
+        // Load the file into the thumbnail
+        thumbnail.setSource (new juce::FileInputSource (file));
+
+        DBG ("Waveform thumbnail loading started for: " + file.getFullPathName());
+
+        // Force immediate repaint
+        repaint();
+    }
+    else
+    {
+        DBG ("Failed to create reader for file: " + file.getFullPathName());
+    }
+}
+
+void WaveformDisplay::clear()
+{
+    thumbnail.clear();
+    clickMarkers.clear();
+    selectionStart = -1;
+    selectionEnd = -1;
+    playbackPosition = 0.0;
+    repaint();
+}
+
+void WaveformDisplay::setPlaybackPosition (double position)
+{
+    playbackPosition = juce::jlimit (0.0, 1.0, position);
+}
+
+void WaveformDisplay::addClickMarker (int64_t samplePosition)
+{
+    clickMarkers.push_back (samplePosition);
+    std::sort (clickMarkers.begin(), clickMarkers.end());
+    repaint();
+}
+
+void WaveformDisplay::clearClickMarkers()
+{
+    clickMarkers.clear();
+    repaint();
+}
+
+void WaveformDisplay::setHorizontalZoom (double samplesPerPixel)
+{
+    horizontalZoom = juce::jmax (1.0, samplesPerPixel);
+    repaint();
+}
+
+void WaveformDisplay::setVerticalZoom (double amplitudeMultiplier)
+{
+    verticalZoom = juce::jlimit (0.1, 10.0, amplitudeMultiplier);
+    repaint();
+}
+
+void WaveformDisplay::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds();
+
+    // Background
+    g.fillAll (juce::Colour (0xff1e1e1e));
+
+    if (thumbnail.getTotalLength() > 0.0)
+    {
+        drawWaveform (g, bounds);
+        drawClickMarkers (g, bounds);
+        drawSelection (g, bounds);
+        drawPlaybackCursor (g, bounds);
+    }
+    else if (thumbnail.isFullyLoaded() == false && thumbnail.getNumChannels() > 0)
+    {
+        // Thumbnail is loading
+        g.setColour (juce::Colours::lightgrey);
+        g.setFont (16.0f);
+        g.drawText ("Loading waveform...", bounds, juce::Justification::centred);
+    }
+    else
+    {
+        // No audio loaded
+        g.setColour (juce::Colours::grey);
+        g.setFont (16.0f);
+        g.drawText ("No audio file loaded", bounds, juce::Justification::centred);
+    }
+
+    // Border
+    g.setColour (juce::Colours::darkgrey);
+    g.drawRect (bounds, 1);
+}
+
+void WaveformDisplay::resized()
+{
+    // Update zoom to fit if needed
+}
+
+void WaveformDisplay::mouseDown (const juce::MouseEvent& event)
+{
+    if (thumbnail.getTotalLength() <= 0.0)
+        return;
+
+    double totalLength = thumbnail.getTotalLength();
+    double clickTime = (event.position.x / (double) getWidth()) * totalLength;
+
+    selectionStart = (int64_t) (clickTime * sampleRate);
+    selectionEnd = selectionStart;
+    isDragging = true;
+    repaint();
+}
+
+void WaveformDisplay::mouseDrag (const juce::MouseEvent& event)
+{
+    if (!isDragging || thumbnail.getTotalLength() <= 0.0)
+        return;
+
+    double totalLength = thumbnail.getTotalLength();
+    double dragTime = juce::jlimit (0.0, totalLength,
+                                     (event.position.x / (double) getWidth()) * totalLength);
+
+    selectionEnd = (int64_t) (dragTime * sampleRate);
+    repaint();
+}
+
+void WaveformDisplay::mouseUp (const juce::MouseEvent&)
+{
+    isDragging = false;
+
+    // Ensure selectionStart < selectionEnd
+    if (selectionStart > selectionEnd)
+        std::swap (selectionStart, selectionEnd);
+}
+
+void WaveformDisplay::mouseDoubleClick (const juce::MouseEvent& event)
+{
+    if (thumbnail.getTotalLength() <= 0.0)
+        return;
+
+    // Calculate position in file (0.0 to 1.0)
+    double totalLength = thumbnail.getTotalLength();
+    double clickTime = (event.position.x / (double) getWidth()) * totalLength;
+    double position = clickTime / totalLength;
+
+    // Notify listener to seek to this position
+    if (onSeekPosition)
+        onSeekPosition (position);
+
+    DBG ("Double-click seek to: " + juce::String (position));
+}
+
+void WaveformDisplay::mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel)
+{
+    // Horizontal zoom with Ctrl+wheel (wheel up = zoom in, wheel down = zoom out)
+    if (event.mods.isCtrlDown() || event.mods.isCommandDown())
+    {
+        double zoomFactor = wheel.deltaY > 0 ? 2.0 : 0.5;  // Reversed: zoom IN when scrolling up
+        setHorizontalZoom (horizontalZoom * zoomFactor);
+    }
+    // Vertical zoom with Shift+wheel
+    else if (event.mods.isShiftDown())
+    {
+        double zoomFactor = wheel.deltaY > 0 ? 1.1 : 0.9;
+        setVerticalZoom (verticalZoom * zoomFactor);
+    }
+}
+
+void WaveformDisplay::changeListenerCallback (juce::ChangeBroadcaster* source)
+{
+    if (source == &thumbnail)
+        repaint();
+}
+
+void WaveformDisplay::timerCallback()
+{
+    // Smooth cursor updates
+    repaint();
+}
+
+void WaveformDisplay::drawWaveform (juce::Graphics& g, const juce::Rectangle<int>& bounds)
+{
+    // Calculate visible range based on zoom and scroll
+    double totalLength = thumbnail.getTotalLength();
+
+    if (totalLength <= 0.0)
+        return;
+
+    // Calculate the visible portion of the waveform
+    double visibleDuration = totalLength / horizontalZoom;
+    double startTime = scrollPosition * (totalLength - visibleDuration);
+    startTime = juce::jmax (0.0, startTime);
+
+    double endTime = startTime + visibleDuration;
+    endTime = juce::jmin (totalLength, endTime);
+
+    // Draw waveform with zoom applied
+    g.setColour (juce::Colour (0xff4a90e2)); // Blue waveform
+    thumbnail.drawChannels (g, bounds, startTime, endTime, verticalZoom);
+}
+
+void WaveformDisplay::drawClickMarkers (juce::Graphics& g, const juce::Rectangle<int>& bounds)
+{
+    if (thumbnail.getTotalLength() <= 0.0 || clickMarkers.empty())
+        return;
+
+    double totalLength = thumbnail.getTotalLength();
+
+    g.setColour (juce::Colours::red.withAlpha (0.7f));
+
+    for (auto markerSample : clickMarkers)
+    {
+        double markerTime = markerSample / sampleRate;
+        if (markerTime < 0.0 || markerTime > totalLength)
+            continue;
+
+        float x = (float) ((markerTime / totalLength) * bounds.getWidth());
+        g.drawVerticalLine ((int) x, (float) bounds.getY(), (float) bounds.getBottom());
+
+        // Draw small circle at marker
+        g.fillEllipse (x - 3.0f, bounds.getCentreY() - 3.0f, 6.0f, 6.0f);
+    }
+}
+
+void WaveformDisplay::drawPlaybackCursor (juce::Graphics& g, const juce::Rectangle<int>& bounds)
+{
+    if (playbackPosition <= 0.0)
+        return;
+
+    g.setColour (juce::Colours::yellow.withAlpha (0.8f));
+    float x = (float) (playbackPosition * bounds.getWidth());
+    g.drawVerticalLine ((int) x, (float) bounds.getY(), (float) bounds.getBottom());
+}
+
+void WaveformDisplay::drawSelection (juce::Graphics& g, const juce::Rectangle<int>& bounds)
+{
+    if (selectionStart < 0 || selectionEnd < 0 || thumbnail.getTotalLength() <= 0.0)
+        return;
+
+    // Calculate visible range based on zoom
+    double totalLength = thumbnail.getTotalLength();
+    double visibleDuration = totalLength / horizontalZoom;
+    double startTime = scrollPosition * (totalLength - visibleDuration);
+    startTime = juce::jmax (0.0, startTime);
+    double endTime = startTime + visibleDuration;
+
+    // Convert selection samples to time
+    double selStartTime = selectionStart / sampleRate;
+    double selEndTime = selectionEnd / sampleRate;
+
+    // Check if selection is visible
+    if (selEndTime < startTime || selStartTime > endTime)
+        return;
+
+    // Calculate pixel positions within visible range
+    double startPosInView = (selStartTime - startTime) / visibleDuration;
+    double endPosInView = (selEndTime - startTime) / visibleDuration;
+
+    float x1 = (float) (startPosInView * bounds.getWidth());
+    float x2 = (float) (endPosInView * bounds.getWidth());
+
+    // Clamp to bounds
+    x1 = juce::jlimit (0.0f, (float) bounds.getWidth(), x1);
+    x2 = juce::jlimit (0.0f, (float) bounds.getWidth(), x2);
+
+    g.setColour (juce::Colours::white.withAlpha (0.2f));
+    g.fillRect (x1, (float) bounds.getY(), x2 - x1, (float) bounds.getHeight());
+
+    g.setColour (juce::Colours::white.withAlpha (0.5f));
+    g.drawRect (x1, (float) bounds.getY(), x2 - x1, (float) bounds.getHeight(), 1.0f);
+}

@@ -1,0 +1,43 @@
+{
+  "Name": "MatrixFilter VST",
+  "Version": "1.1.0",
+  "Factory Info": {
+    "Vendor": "MatrixFilter",
+    "URL": "https://github.com/flarkflarkflark/MatrixFilter",
+    "E-Mail": "info@matrixfilter.com",
+    "Flags": {
+      "Unicode": true,
+      "Classes Discardable": false,
+      "Component Non Discardable": false
+    }
+  },
+  "Classes": [
+    {
+      "CID": "A1B2C3D4E5F64A5B9C8D7E6F5A4B3C2D",
+      "Category": "Audio Module Class",
+      "Name": "MatrixFilter VST",
+      "Vendor": "MatrixFilter",
+      "Version": "1.1.0",
+      "SDKVersion": "VST 3.7.3",
+      "Sub Categories": [
+        "Fx",
+        "Filter"
+      ],
+      "Class Flags": 0,
+      "Cardinality": 2147483647,
+      "Snapshots": []
+    },
+    {
+      "CID": "B2C3D4E5F6A75B6CAD9E8F7A6B5C4D3E",
+      "Category": "Component Controller Class",
+      "Name": "MatrixFilter VST Controller",
+      "Vendor": "MatrixFilter",
+      "Version": "1.1.0",
+      "SDKVersion": "VST 3.7.3",
+      "Sub Categories": [],
+      "Class Flags": 0,
+      "Cardinality": 2147483647,
+      "Snapshots": []
+    }
+  ]
+}

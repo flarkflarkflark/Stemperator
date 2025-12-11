@@ -1,0 +1,436 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "PremiumLookAndFeel.h"
+
+/**
+ * UISettings - Centralized font size configuration
+ * All font sizes in the app should reference these values
+ */
+struct UISettings
+{
+    // Main Window
+    float titleFont = 32.0f;           // "STEMPERATOR" title
+    float subtitleFont = 11.0f;        // "AI-POWERED STEM SEPARATION"
+    float brandFont = 20.0f;           // "flarkAUDIO"
+    float fileNameFont = 28.0f;        // Current file name
+    float modeLabelFont = 16.0f;       // STEMS/LIVE indicator
+    float splashFont = 42.0f;          // "Drop audio file here"
+    float masterLabelFont = 22.0f;     // "MASTER" label
+
+    // Stem Channels
+    float stemNameFont = 22.0f;        // VOCALS, DRUMS, etc.
+    float stemDbFont = 10.0f;          // dB readout
+    float meterScaleFont = 10.0f;      // Meter markings
+
+    // Buttons
+    float buttonFont = 14.0f;          // Generic buttons
+    float muteSoloFont = 18.0f;        // M/S buttons
+    float comboBoxFont = 18.0f;        // Combo boxes
+
+    // Dialogs
+    float dialogTitleFont = 20.0f;     // Dialog titles
+    float dialogMessageFont = 15.0f;   // Dialog text
+
+    // Batch Window
+    float batchLabelFont = 30.0f;      // Section labels
+    float batchListFont = 30.0f;       // List items
+    float batchStatusFont = 28.0f;     // Status text
+
+    // Transport
+    float transportTimeFont = 14.0f;   // Time display
+
+    // Minimum allowed
+    static constexpr float minFont = 8.0f;
+    static constexpr float maxFont = 72.0f;
+
+    // Singleton access
+    static UISettings& getInstance()
+    {
+        static UISettings instance;
+        return instance;
+    }
+
+    void loadFromFile()
+    {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "Stemperator";
+        options.folderName = "flarkAUDIO";
+        options.filenameSuffix = ".uisettings";
+
+        juce::PropertiesFile props (options);
+
+        titleFont = props.getDoubleValue ("titleFont", titleFont);
+        subtitleFont = props.getDoubleValue ("subtitleFont", subtitleFont);
+        brandFont = props.getDoubleValue ("brandFont", brandFont);
+        fileNameFont = props.getDoubleValue ("fileNameFont", fileNameFont);
+        modeLabelFont = props.getDoubleValue ("modeLabelFont", modeLabelFont);
+        splashFont = props.getDoubleValue ("splashFont", splashFont);
+        masterLabelFont = props.getDoubleValue ("masterLabelFont", masterLabelFont);
+        stemNameFont = props.getDoubleValue ("stemNameFont", stemNameFont);
+        stemDbFont = props.getDoubleValue ("stemDbFont", stemDbFont);
+        meterScaleFont = props.getDoubleValue ("meterScaleFont", meterScaleFont);
+        buttonFont = props.getDoubleValue ("buttonFont", buttonFont);
+        muteSoloFont = props.getDoubleValue ("muteSoloFont", muteSoloFont);
+        comboBoxFont = props.getDoubleValue ("comboBoxFont", comboBoxFont);
+        dialogTitleFont = props.getDoubleValue ("dialogTitleFont", dialogTitleFont);
+        dialogMessageFont = props.getDoubleValue ("dialogMessageFont", dialogMessageFont);
+        batchLabelFont = props.getDoubleValue ("batchLabelFont", batchLabelFont);
+        batchListFont = props.getDoubleValue ("batchListFont", batchListFont);
+        batchStatusFont = props.getDoubleValue ("batchStatusFont", batchStatusFont);
+        transportTimeFont = props.getDoubleValue ("transportTimeFont", transportTimeFont);
+    }
+
+    bool saveToFile()
+    {
+        juce::PropertiesFile::Options options;
+        options.applicationName = "Stemperator";
+        options.folderName = "flarkAUDIO";
+        options.filenameSuffix = ".uisettings";
+
+        juce::PropertiesFile props (options);
+
+        props.setValue ("titleFont", titleFont);
+        props.setValue ("subtitleFont", subtitleFont);
+        props.setValue ("brandFont", brandFont);
+        props.setValue ("fileNameFont", fileNameFont);
+        props.setValue ("modeLabelFont", modeLabelFont);
+        props.setValue ("splashFont", splashFont);
+        props.setValue ("masterLabelFont", masterLabelFont);
+        props.setValue ("stemNameFont", stemNameFont);
+        props.setValue ("stemDbFont", stemDbFont);
+        props.setValue ("meterScaleFont", meterScaleFont);
+        props.setValue ("buttonFont", buttonFont);
+        props.setValue ("muteSoloFont", muteSoloFont);
+        props.setValue ("comboBoxFont", comboBoxFont);
+        props.setValue ("dialogTitleFont", dialogTitleFont);
+        props.setValue ("dialogMessageFont", dialogMessageFont);
+        props.setValue ("batchLabelFont", batchLabelFont);
+        props.setValue ("batchListFont", batchListFont);
+        props.setValue ("batchStatusFont", batchStatusFont);
+        props.setValue ("transportTimeFont", transportTimeFont);
+
+        return props.save();
+    }
+
+    void resetToDefaults()
+    {
+        *this = UISettings();
+    }
+
+private:
+    UISettings() = default;
+};
+
+/**
+ * FontSlider - A slider with label showing current font size
+ */
+class FontSlider : public juce::Component
+{
+public:
+    FontSlider (const juce::String& name, float& valueRef, std::function<void()> onChange)
+        : value (valueRef), onChangeCallback (onChange)
+    {
+        label.setText (name, juce::dontSendNotification);
+        label.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+        label.setFont (juce::FontOptions (14.0f));
+        addAndMakeVisible (label);
+
+        slider.setRange (UISettings::minFont, UISettings::maxFont, 0.5);
+        slider.setValue (value, juce::dontSendNotification);
+        slider.setSliderStyle (juce::Slider::LinearHorizontal);
+        slider.setTextBoxStyle (juce::Slider::TextBoxRight, false, 50, 20);
+        slider.onValueChange = [this]()
+        {
+            value = static_cast<float> (slider.getValue());
+            updatePreview();
+            if (onChangeCallback)
+                onChangeCallback();
+        };
+        addAndMakeVisible (slider);
+
+        preview.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::accent);
+        preview.setText ("Abc 123", juce::dontSendNotification);
+        addAndMakeVisible (preview);
+
+        updatePreview();
+    }
+
+    void resized() override
+    {
+        auto bounds = getLocalBounds();
+        label.setBounds (bounds.removeFromLeft (150));
+        preview.setBounds (bounds.removeFromRight (100));
+        slider.setBounds (bounds.reduced (5, 0));
+    }
+
+    void updatePreview()
+    {
+        preview.setFont (juce::FontOptions (value));
+    }
+
+    void refresh()
+    {
+        slider.setValue (value, juce::dontSendNotification);
+        updatePreview();
+    }
+
+private:
+    float& value;
+    std::function<void()> onChangeCallback;
+    juce::Label label;
+    juce::Slider slider;
+    juce::Label preview;
+};
+
+/**
+ * UISettingsDialog - Dialog for configuring UI font sizes
+ */
+class UISettingsDialog : public juce::DocumentWindow
+{
+public:
+    UISettingsDialog (std::function<void()> onApply, std::function<void()> onQuit = nullptr)
+        : DocumentWindow ("UI Settings", PremiumLookAndFeel::Colours::bgDark,
+                          DocumentWindow::closeButton | DocumentWindow::minimiseButton),
+          applyCallback (onApply), quitCallback (onQuit)
+    {
+        setUsingNativeTitleBar (false);
+        setResizable (true, true);
+        setSize (700, 700);
+
+        content = std::make_unique<Content> (applyCallback, quitCallback);
+        setContentOwned (content.release(), true);
+
+        centreWithSize (700, 700);
+        setVisible (true);
+        toFront (true);
+    }
+
+    void closeButtonPressed() override
+    {
+        setVisible (false);
+        delete this;
+    }
+
+private:
+    class Content : public juce::Component
+    {
+    public:
+        Content (std::function<void()> onApply, std::function<void()> onQuit = nullptr)
+            : applyCallback (onApply), quitCallback (onQuit)
+        {
+            auto& settings = UISettings::getInstance();
+
+            // Title
+            titleLabel.setText ("UI Font Settings", juce::dontSendNotification);
+            titleLabel.setFont (juce::FontOptions (24.0f).withStyle ("Bold"));
+            titleLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textBright);
+            titleLabel.setJustificationType (juce::Justification::centred);
+            addAndMakeVisible (titleLabel);
+
+            // Create tabs
+            tabs = std::make_unique<juce::TabbedComponent> (juce::TabbedButtonBar::TabsAtTop);
+            tabs->setColour (juce::TabbedComponent::backgroundColourId, PremiumLookAndFeel::Colours::bgDark);
+            tabs->setColour (juce::TabbedComponent::outlineColourId, PremiumLookAndFeel::Colours::bgMid);
+
+            // Main Window tab
+            auto* mainTab = new juce::Component();
+            mainSliders.push_back (std::make_unique<FontSlider> ("Title (STEMPERATOR)", settings.titleFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("Subtitle", settings.subtitleFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("Brand (flarkAUDIO)", settings.brandFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("File Name", settings.fileNameFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("Mode Label", settings.modeLabelFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("Splash Text", settings.splashFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("Master Label", settings.masterLabelFont, applyCallback));
+            mainSliders.push_back (std::make_unique<FontSlider> ("Transport Time", settings.transportTimeFont, applyCallback));
+            for (auto& s : mainSliders)
+                mainTab->addAndMakeVisible (s.get());
+            tabs->addTab ("Main Window", PremiumLookAndFeel::Colours::bgMid, mainTab, true);
+
+            // Stems tab
+            auto* stemsTab = new juce::Component();
+            stemSliders.push_back (std::make_unique<FontSlider> ("Stem Name", settings.stemNameFont, applyCallback));
+            stemSliders.push_back (std::make_unique<FontSlider> ("dB Readout", settings.stemDbFont, applyCallback));
+            stemSliders.push_back (std::make_unique<FontSlider> ("Meter Scale", settings.meterScaleFont, applyCallback));
+            stemSliders.push_back (std::make_unique<FontSlider> ("Mute/Solo Buttons", settings.muteSoloFont, applyCallback));
+            for (auto& s : stemSliders)
+                stemsTab->addAndMakeVisible (s.get());
+            tabs->addTab ("Stem Channels", PremiumLookAndFeel::Colours::bgMid, stemsTab, true);
+
+            // Buttons tab
+            auto* buttonsTab = new juce::Component();
+            buttonSliders.push_back (std::make_unique<FontSlider> ("Button Text", settings.buttonFont, applyCallback));
+            buttonSliders.push_back (std::make_unique<FontSlider> ("ComboBox Text", settings.comboBoxFont, applyCallback));
+            for (auto& s : buttonSliders)
+                buttonsTab->addAndMakeVisible (s.get());
+            tabs->addTab ("Buttons", PremiumLookAndFeel::Colours::bgMid, buttonsTab, true);
+
+            // Dialogs tab
+            auto* dialogsTab = new juce::Component();
+            dialogSliders.push_back (std::make_unique<FontSlider> ("Dialog Title", settings.dialogTitleFont, applyCallback));
+            dialogSliders.push_back (std::make_unique<FontSlider> ("Dialog Message", settings.dialogMessageFont, applyCallback));
+            for (auto& s : dialogSliders)
+                dialogsTab->addAndMakeVisible (s.get());
+            tabs->addTab ("Dialogs", PremiumLookAndFeel::Colours::bgMid, dialogsTab, true);
+
+            // Batch tab
+            auto* batchTab = new juce::Component();
+            batchSliders.push_back (std::make_unique<FontSlider> ("Section Labels", settings.batchLabelFont, applyCallback));
+            batchSliders.push_back (std::make_unique<FontSlider> ("List Items", settings.batchListFont, applyCallback));
+            batchSliders.push_back (std::make_unique<FontSlider> ("Status Text", settings.batchStatusFont, applyCallback));
+            for (auto& s : batchSliders)
+                batchTab->addAndMakeVisible (s.get());
+            tabs->addTab ("Batch Window", PremiumLookAndFeel::Colours::bgMid, batchTab, true);
+
+            addAndMakeVisible (tabs.get());
+
+            // Buttons
+            resetButton.setButtonText ("Reset to Defaults");
+            resetButton.onClick = [this]()
+            {
+                UISettings::getInstance().resetToDefaults();
+                refreshAllSliders();
+                if (applyCallback)
+                    applyCallback();
+            };
+            addAndMakeVisible (resetButton);
+
+            saveButton.setButtonText ("Save");
+            saveButton.onClick = [this]()
+            {
+                UISettings::getInstance().saveToFile();
+            };
+            addAndMakeVisible (saveButton);
+
+            saveRestartButton.setButtonText ("Save & Quit");
+            saveRestartButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::accent);
+            saveRestartButton.onClick = [this]()
+            {
+                if (UISettings::getInstance().saveToFile())
+                {
+                    // Save succeeded - close dialog and trigger quit through proper flow
+                    if (auto* window = findParentComponentOfClass<UISettingsDialog>())
+                        window->closeButtonPressed();
+
+                    // Use the quit callback to go through proper quit flow (with unsaved project check)
+                    if (quitCallback)
+                    {
+                        juce::Timer::callAfterDelay (100, [cb = quitCallback]()
+                        {
+                            cb();
+                        });
+                    }
+                    else
+                    {
+                        // Fallback to direct quit if no callback provided
+                        juce::Timer::callAfterDelay (100, []()
+                        {
+                            if (auto* application = juce::JUCEApplication::getInstance())
+                                application->systemRequestedQuit();
+                        });
+                    }
+                }
+                else
+                {
+                    // Save failed - show error message
+                    juce::AlertWindow::showMessageBoxAsync (
+                        juce::AlertWindow::WarningIcon,
+                        "Save Failed",
+                        "Could not save UI settings. Check file permissions.",
+                        "OK");
+                }
+            };
+            addAndMakeVisible (saveRestartButton);
+
+            closeButton.setButtonText ("Close");
+            closeButton.onClick = [this]()
+            {
+                if (auto* window = findParentComponentOfClass<UISettingsDialog>())
+                    window->closeButtonPressed();
+            };
+            addAndMakeVisible (closeButton);
+
+            // Info label
+            infoLabel.setText ("Changes are applied in real-time. Click 'Save Settings' to persist.",
+                               juce::dontSendNotification);
+            infoLabel.setFont (juce::FontOptions (12.0f));
+            infoLabel.setColour (juce::Label::textColourId, PremiumLookAndFeel::Colours::textDim);
+            infoLabel.setJustificationType (juce::Justification::centred);
+            addAndMakeVisible (infoLabel);
+        }
+
+        void resized() override
+        {
+            auto bounds = getLocalBounds().reduced (15);
+
+            titleLabel.setBounds (bounds.removeFromTop (40));
+            bounds.removeFromTop (10);
+
+            auto buttonArea = bounds.removeFromBottom (40);
+            resetButton.setBounds (buttonArea.removeFromLeft (140).reduced (5));
+            closeButton.setBounds (buttonArea.removeFromRight (80).reduced (5));
+            saveRestartButton.setBounds (buttonArea.removeFromRight (130).reduced (5));
+            saveButton.setBounds (buttonArea.removeFromRight (80).reduced (5));
+
+            infoLabel.setBounds (bounds.removeFromBottom (25));
+            bounds.removeFromBottom (5);
+
+            tabs->setBounds (bounds);
+
+            // Layout sliders in each tab
+            layoutSliders (tabs->getTabContentComponent (0), mainSliders);
+            layoutSliders (tabs->getTabContentComponent (1), stemSliders);
+            layoutSliders (tabs->getTabContentComponent (2), buttonSliders);
+            layoutSliders (tabs->getTabContentComponent (3), dialogSliders);
+            layoutSliders (tabs->getTabContentComponent (4), batchSliders);
+        }
+
+        void paint (juce::Graphics& g) override
+        {
+            g.fillAll (PremiumLookAndFeel::Colours::bgDark);
+        }
+
+    private:
+        void layoutSliders (juce::Component* tab, std::vector<std::unique_ptr<FontSlider>>& sliders)
+        {
+            if (tab == nullptr)
+                return;
+
+            auto bounds = tab->getLocalBounds().reduced (15);
+            int sliderHeight = 35;
+
+            for (auto& slider : sliders)
+            {
+                slider->setBounds (bounds.removeFromTop (sliderHeight));
+                bounds.removeFromTop (5);
+            }
+        }
+
+        void refreshAllSliders()
+        {
+            for (auto& s : mainSliders) s->refresh();
+            for (auto& s : stemSliders) s->refresh();
+            for (auto& s : buttonSliders) s->refresh();
+            for (auto& s : dialogSliders) s->refresh();
+            for (auto& s : batchSliders) s->refresh();
+        }
+
+        std::function<void()> applyCallback;
+        std::function<void()> quitCallback;
+        juce::Label titleLabel;
+        std::unique_ptr<juce::TabbedComponent> tabs;
+
+        std::vector<std::unique_ptr<FontSlider>> mainSliders;
+        std::vector<std::unique_ptr<FontSlider>> stemSliders;
+        std::vector<std::unique_ptr<FontSlider>> buttonSliders;
+        std::vector<std::unique_ptr<FontSlider>> dialogSliders;
+        std::vector<std::unique_ptr<FontSlider>> batchSliders;
+
+        juce::TextButton resetButton, saveButton, saveRestartButton, closeButton;
+        juce::Label infoLabel;
+    };
+
+    std::function<void()> applyCallback;
+    std::function<void()> quitCallback;
+    std::unique_ptr<Content> content;
+};

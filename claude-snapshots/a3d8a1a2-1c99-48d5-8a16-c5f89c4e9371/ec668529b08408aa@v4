@@ -1,0 +1,291 @@
+# Stemperator
+
+**AI-Powered Stem Separation for REAPER**
+
+![flarkAUDIO](https://img.shields.io/badge/flarkAUDIO-Stemperator-blue)
+![ReaPack](https://img.shields.io/badge/ReaPack-compatible-green)
+![Platform](https://img.shields.io/badge/platform-Linux%20%7C%20Windows%20%7C%20macOS-lightgrey)
+
+Stemperator uses AI (Demucs/HTDemucs) to separate audio into individual stems directly in REAPER. Perfect for remixing, karaoke, transcription, and music production.
+
+## What You Get
+
+### REAPER Scripts (via ReaPack)
+
+| Script | Description |
+|--------|-------------|
+| **Stemperator: AI Stem Separation** | Main dialog with all options - select stems, choose model, configure output |
+| **Stemperator: Karaoke** | One-click vocal removal (instrumental) |
+| **Stemperator: Vocals Only** | Extract isolated vocals |
+| **Stemperator: Drums Only** | Extract drums and percussion |
+| **Stemperator: Bass Only** | Extract bass |
+| **Stemperator: Other Only** | Extract other instruments (guitars, synths, keys) |
+| **Stemperator: All 4 Stems** | Extract all 4 stems at once |
+| **Stemperator: 6-Stem All** | Extract 6 stems including Guitar & Piano |
+| **Stemperator: Guitar Only** | Extract guitar (6-stem model) |
+| **Stemperator: Piano Only** | Extract piano/keys (6-stem model) |
+| **Stemperator: Explode to Tracks** | Separate stems to individual REAPER tracks |
+| **Stemperator: Setup Toolbar** | Install toolbar icons for quick access |
+
+### Stem Types
+
+**4-Stem Model (htdemucs):**
+- Vocals - Singing and spoken voice
+- Drums - Percussion and drums
+- Bass - Bass guitar and low frequencies
+- Other - Guitars, synths, keys, etc.
+
+**6-Stem Model (htdemucs_6s):**
+- All of the above, plus:
+- Guitar - Isolated guitar
+- Piano - Isolated piano/keys
+
+## Installation via ReaPack
+
+1. Open REAPER
+2. Go to **Extensions > ReaPack > Import repositories...**
+3. Paste this URL:
+   ```
+   https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/index.xml
+   ```
+4. Go to **Extensions > ReaPack > Browse packages**
+5. Search for "Stemperator" and install the scripts you want
+6. Run **Stemperator: Setup Toolbar** to add toolbar icons
+
+## Requirements
+
+- **Python 3.10+** with pip
+- **audio-separator** package (auto-installed on first run, or install manually):
+  ```bash
+  pip install audio-separator[gpu]  # For GPU acceleration
+  # or
+  pip install audio-separator       # CPU only
+  ```
+
+### Optional: GPU Acceleration
+
+For faster processing:
+
+**AMD GPU (ROCm):**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/rocm6.0
+```
+
+**NVIDIA GPU (CUDA):**
+```bash
+pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/cu121
+```
+
+## Usage
+
+### Quick Actions (One-Click)
+1. Select an audio item in REAPER
+2. Run any quick action script (Karaoke, Vocals Only, etc.)
+3. Stems are created in the same folder as your audio file
+
+### Main Dialog
+1. Select an audio item
+2. Run **Stemperator: AI Stem Separation**
+3. Check which stems you want
+4. Choose model (4-stem or 6-stem)
+5. Click **Separate**
+
+### Keyboard Shortcuts (in main dialog)
+- `1-4` - Toggle Vocals/Drums/Bass/Other
+- `5-6` - Toggle Guitar/Piano (6-stem mode)
+- `K` - Karaoke preset
+- `I` - Instrumental preset
+- `A` - All stems
+
+### Toolbar
+Run **Stemperator: Setup Toolbar** once, then restart REAPER. Go to **View > Toolbars > Toolbar 2 (Stemperator)** to show the toolbar with quick-action buttons.
+
+## Output
+
+Stems are saved alongside your original audio file:
+```
+mysong.wav
+mysong_vocals.wav
+mysong_drums.wav
+mysong_bass.wav
+mysong_other.wav
+mysong_guitar.wav    # 6-stem only
+mysong_piano.wav     # 6-stem only
+```
+
+## Processing Time
+
+| Hardware | Approximate Time (3-min song) |
+|----------|-------------------------------|
+| GPU (CUDA/ROCm) | 30-60 seconds |
+| CPU (modern) | 2-5 minutes |
+| CPU (older) | 5-15 minutes |
+
+---
+
+## System Recommendations
+
+### Minimum Requirements
+
+| Component | Minimum | Recommended |
+|-----------|---------|-------------|
+| **RAM** | 8 GB | 16 GB |
+| **CPU** | 4 cores | 8+ cores |
+| **GPU VRAM** | 4 GB | 8+ GB |
+| **Storage** | 2 GB free | SSD preferred |
+
+### Performance by Hardware Configuration
+
+#### GPU Performance (AI Separation - Demucs)
+
+| GPU | 3-min Song | Quality | Notes |
+|-----|-----------|---------|-------|
+| **NVIDIA RTX 4090/4080** | ~6-8 sec | Excellent | Best performance, CUDA optimized |
+| **NVIDIA RTX 3090/3080** | ~8-12 sec | Excellent | Great for production use |
+| **NVIDIA RTX 3070/3060** | ~15-25 sec | Very Good | Sweet spot price/performance |
+| **NVIDIA RTX 2080/2070** | ~20-30 sec | Good | Solid performance |
+| **NVIDIA GTX 1080/1660** | ~30-45 sec | Acceptable | Entry-level GPU acceleration |
+| **AMD RX 7900/9070** | ~10-15 sec | Excellent | ROCm 6.0+ required |
+| **AMD RX 6800/6700** | ~20-35 sec | Good | ROCm support varies |
+| **Apple M3 Pro/Max** | ~12-18 sec | Very Good | MPS backend |
+| **Apple M1/M2** | ~20-30 sec | Good | MPS backend |
+| **Intel Arc A770** | ~40-60 sec | Limited | IPEX experimental |
+
+#### CPU Performance (Fallback - No GPU)
+
+| CPU | 3-min Song | Notes |
+|-----|-----------|-------|
+| **AMD Ryzen 9 7950X** | ~90-120 sec | Best consumer CPU |
+| **Intel i9-13900K** | ~100-130 sec | Comparable to Ryzen 9 |
+| **AMD Ryzen 7 5800X** | ~150-180 sec | Good mid-range |
+| **Intel i7-12700** | ~150-200 sec | Good mid-range |
+| **AMD Ryzen 5 5600** | ~200-250 sec | Budget option |
+| **Intel i5-12400** | ~220-280 sec | Budget option |
+| **Apple M2** | ~120-150 sec | Efficient ARM |
+| **Older 4-core CPUs** | 5-15 minutes | Not recommended |
+
+### Memory Requirements
+
+| Model | Minimum RAM | GPU VRAM | Notes |
+|-------|-------------|----------|-------|
+| htdemucs (4-stem) | 8 GB | 4 GB | Standard model |
+| htdemucs_ft (fine-tuned) | 12 GB | 6 GB | Better quality |
+| htdemucs_6s (6-stem) | 16 GB | 8 GB | Guitar + Piano |
+| Real-time spectral only | 4 GB | 512 MB | No AI, FFT-based |
+
+### Recommendations by Use Case
+
+| Use Case | Recommended Setup |
+|----------|-------------------|
+| **Professional Production** | NVIDIA RTX 3080+ or AMD RX 7900+, 32GB RAM |
+| **Home Studio** | NVIDIA RTX 3060/4060 or AMD RX 6700, 16GB RAM |
+| **Casual/Hobbyist** | Any GPU with 4GB+ VRAM, or modern 8-core CPU |
+| **Laptop** | RTX 3060 Mobile or M1/M2 MacBook, 16GB RAM |
+| **Budget** | CPU-only is viable, expect 3-5 min per song |
+
+### Real-time Spectral Separation (VST3 Plugin)
+
+The VST3 plugin uses FFT-based spectral separation for real-time preview:
+
+| Backend | Latency | CPU Usage | Notes |
+|---------|---------|-----------|-------|
+| **rocFFT (AMD)** | 5-10 ms | Low | Requires ROCm |
+| **cuFFT (NVIDIA)** | 5-10 ms | Low | Requires CUDA toolkit |
+| **FFTW (CPU)** | 20-50 ms | Medium | Universal fallback |
+| **vDSP (macOS)** | 10-15 ms | Low | Apple Accelerate |
+
+---
+
+## Stemperator Versions Comparison
+
+Stemperator comes in three versions, each optimized for different workflows:
+
+### 1. Standalone Application
+
+**Best for**: Quick batch processing, file conversion, previewing stems
+
+| Feature | Details |
+|---------|---------|
+| **Input** | Load audio files (WAV, MP3, FLAC, etc.) |
+| **Processing** | AI separation via Demucs (GPU accelerated) |
+| **Output** | Export individual stems to files |
+| **Quality** | Highest (offline processing, no real-time constraint) |
+| **Workflow** | Load file -> Separate -> Export -> Done |
+
+### 2. VST3 Plugin (DAW Integration)
+
+**Best for**: Real-time stem mixing in your DAW, live performance
+
+| Feature | Details |
+|---------|---------|
+| **Input** | Audio from DAW track |
+| **Real-time Mode** | FFT spectral separation (~10ms latency) |
+| **AI Mode** | Capture audio -> Run Demucs -> Playback cached stems |
+| **Output** | 4 stereo buses (Vocals, Drums, Bass, Other) |
+| **Quality** | Good (real-time) / Excellent (AI mode) |
+| **Workflow** | Insert on track -> Adjust stem levels -> Route outputs |
+
+**VST3 AI Mode (v1.3.0-AI)**:
+1. Click "Capture" and play your track in the DAW
+2. Click "Stop & Analyze" to run Demucs
+3. Stems are cached - mix in real-time with mute/solo
+4. Route each stem to separate mixer channels
+
+### 3. REAPER Scripts (ReaPack)
+
+**Best for**: REAPER users, batch workflows, DAW-integrated stem export
+
+| Feature | Details |
+|---------|---------|
+| **Input** | Selected items in REAPER |
+| **Processing** | AI separation via Demucs |
+| **Output** | Stems saved next to original, optionally imported to tracks |
+| **Quality** | Highest (same as standalone) |
+| **Workflow** | Select item -> Run script -> Stems appear in project |
+
+### Quality Comparison
+
+| Version | Separation Quality | Latency | Best For |
+|---------|-------------------|---------|----------|
+| **Standalone** | Excellent (Demucs AI) | Offline | Batch export |
+| **VST3 Real-time** | Good (Spectral FFT) | ~10ms | Live mixing |
+| **VST3 AI Mode** | Excellent (Demucs AI) | Offline + cached | DAW integration |
+| **REAPER Scripts** | Excellent (Demucs AI) | Offline | REAPER workflow |
+
+### When to Use Each
+
+- **"I want the best quality stems"** -> Standalone or REAPER Scripts
+- **"I want to mix stems live in my DAW"** -> VST3 Plugin (real-time mode)
+- **"I want AI quality in my DAW"** -> VST3 Plugin (AI capture mode)
+- **"I use REAPER and want tight integration"** -> REAPER Scripts
+- **"I want to process many files at once"** -> Standalone (batch) or REAPER Scripts
+
+---
+
+## Also Available: VST3 Plugin
+
+Stemperator is also available as a multi-output VST3 plugin for real-time stem routing in any DAW.
+
+### Building the VST3
+
+```bash
+git clone --recursive https://github.com/flarkflarkflark/Stemperator.git
+cd Stemperator
+mkdir build && cd build
+cmake ..
+cmake --build . --config Release -j8
+```
+
+See [CLAUDE.md](CLAUDE.md) for detailed build instructions and architecture documentation.
+
+---
+
+## Credits
+
+- **Demucs/HTDemucs**: Meta AI Research (MIT License)
+- **audio-separator**: Python wrapper for stem separation models
+- **JUCE**: Framework for VST3 plugin (commercial license)
+
+---
+
+**flarkAUDIO** - Professional Audio Tools

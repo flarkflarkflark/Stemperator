@@ -1,0 +1,53 @@
+#pragma once
+
+#include <clap/clap.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include "dsp.h"
+
+// Parameter IDs
+enum {
+    PARAM_CUTOFF = 0,
+    PARAM_RESONANCE = 1,
+    PARAM_GAIN = 2,
+    PARAM_TYPE = 3,
+    PARAM_ENABLED = 4
+};
+
+// Plugin structure
+typedef struct {
+    clap_plugin_t plugin;
+    const clap_host_t *host;
+
+    // Host extensions
+    const clap_host_log_t *host_log;
+    const clap_host_thread_check_t *host_thread_check;
+    const clap_host_params_t *host_params;
+    const clap_host_state_t *host_state;
+    const clap_host_latency_t *host_latency;
+
+    // Plugin state
+    filter_t filter;
+    bool enabled;
+
+    // Parameter values
+    float cutoff_freq;
+    float resonance;
+    float gain;
+    filter_type_t filter_type;
+
+    // Sample rate
+    float sample_rate;
+
+    // Temporary buffers
+    float *temp_buffer;
+    uint32_t temp_buffer_size;
+} audio_filter_plugin_t;
+
+// External declarations
+extern const clap_plugin_descriptor_t s_plugin_desc;
+
+// Function declarations
+clap_plugin_t *audio_filter_plugin_create(const clap_host_t *host);
+const void *clap_get_factory(const char *factory_id);
+void update_filter_parameters(audio_filter_plugin_t *plugin);

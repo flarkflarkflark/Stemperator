@@ -1,0 +1,246 @@
+#include "AudioFileManager.h"
+
+AudioFileManager::AudioFileManager()
+{
+    // Register standard audio formats (WAV, AIFF)
+    formatManager.registerBasicFormats();
+
+    // Register additional formats for broader compatibility
+    formatManager.registerFormat (new juce::FlacAudioFormat(), true);
+    formatManager.registerFormat (new juce::OggVorbisAudioFormat(), true);
+
+    #if JUCE_USE_MP3AUDIOFORMAT
+    formatManager.registerFormat (new juce::MP3AudioFormat(), true); // MP3 read-only
+    #endif
+
+    #if JUCE_MAC || JUCE_IOS
+    formatManager.registerFormat (new juce::CoreAudioFormat(), true); // CAF, M4A on macOS/iOS
+    #endif
+
+    #if JUCE_WINDOWS
+    formatManager.registerFormat (new juce::WindowsMediaAudioFormat(), true); // WMA on Windows
+    #endif
+
+    DBG ("Registered audio formats: WAV, AIFF, FLAC, OGG, MP3");
+}
+
+bool AudioFileManager::loadAudioFile (const juce::File& file,
+                                      juce::AudioBuffer<float>& buffer,
+                                      double& sampleRate)
+{
+    if (!file.existsAsFile())
+    {
+        DBG ("Audio file does not exist: " + file.getFullPathName());
+        return false;
+    }
+
+    // Create reader for the file
+    std::unique_ptr<juce::AudioFormatReader> reader (formatManager.createReaderFor (file));
+
+    if (reader == nullptr)
+    {
+        DBG ("Could not create reader for file: " + file.getFullPathName());
+        return false;
+    }
+
+    // Get file properties
+    sampleRate = reader->sampleRate;
+    auto numChannels = (int) reader->numChannels;
+    auto lengthInSamples = (int) reader->lengthInSamples;
+
+    DBG ("Loading audio file:");
+    DBG ("  Path: " + file.getFullPathName());
+    DBG ("  Sample Rate: " + juce::String (sampleRate) + " Hz");
+    DBG ("  Channels: " + juce::String (numChannels));
+    DBG ("  Length: " + juce::String (lengthInSamples) + " samples");
+    DBG ("  Duration: " + juce::String (lengthInSamples / sampleRate, 2) + " seconds");
+
+    // Allocate buffer
+    buffer.setSize (numChannels, lengthInSamples);
+
+    // Read entire file into buffer
+    reader->read (&buffer,
+                  0,                // destination start sample
+                  lengthInSamples,  // number of samples to read
+                  0,                // source start sample
+                  true,             // use left channel
+                  true);            // use right channel
+
+    DBG ("Audio file loaded successfully");
+    return true;
+}
+
+bool AudioFileManager::saveAudioFile (const juce::File& file,
+                                      const juce::AudioBuffer<float>& buffer,
+                                      double sampleRate,
+                                      int bitDepth)
+{
+    if (buffer.getNumSamples() == 0)
+    {
+        DBG ("Cannot save empty buffer");
+        return false;
+    }
+
+    // Delete existing file
+    if (file.existsAsFile())
+    {
+        file.deleteFile();
+    }
+
+    // Create output stream
+    std::unique_ptr<juce::FileOutputStream> outputStream (file.createOutputStream());
+
+    if (outputStream == nullptr)
+    {
+        DBG ("Could not create output stream for: " + file.getFullPathName());
+        return false;
+    }
+
+    // Determine format from file extension
+    juce::WavAudioFormat wavFormat;
+    juce::FlacAudioFormat flacFormat;
+    juce::OggVorbisAudioFormat oggFormat;
+
+    juce::AudioFormat* format = nullptr;
+    juce::String extension = file.getFileExtension().toLowerCase();
+
+    if (extension == ".wav")
+        format = &wavFormat;
+    else if (extension == ".flac")
+        format = &flacFormat;
+    else if (extension == ".ogg")
+        format = &oggFormat;
+    else
+    {
+        DBG ("Unsupported file format for writing: " + extension);
+        DBG ("Supported formats: WAV, FLAC, OGG");
+        return false;
+    }
+
+    // Create writer
+    std::unique_ptr<juce::AudioFormatWriter> writer;
+    writer.reset (format->createWriterFor (outputStream.get(),
+                                           sampleRate,
+                                           (unsigned int) buffer.getNumChannels(),
+                                           bitDepth,
+                                           {},     // metadata
+                                           0));    // quality option
+
+    if (writer == nullptr)
+    {
+        DBG ("Could not create writer for: " + file.getFullPathName());
+        return false;
+    }
+
+    // Release ownership of the stream to the writer
+    outputStream.release();
+
+    DBG ("Saving audio file:");
+    DBG ("  Path: " + file.getFullPathName());
+    DBG ("  Sample Rate: " + juce::String (sampleRate) + " Hz");
+    DBG ("  Channels: " + juce::String (buffer.getNumChannels()));
+    DBG ("  Length: " + juce::String (buffer.getNumSamples()) + " samples");
+    DBG ("  Bit Depth: " + juce::String (bitDepth));
+
+    // Write buffer to file
+    bool success = writer->writeFromAudioSampleBuffer (buffer, 0, buffer.getNumSamples());
+
+    if (success)
+        DBG ("Audio file saved successfully");
+    else
+        DBG ("Failed to write audio data");
+
+    return success;
+}
+
+bool AudioFileManager::saveSession (const juce::File& sessionFile,
+                                    const juce::File& audioFile,
+                                    const juce::var& sessionData)
+{
+    if (!audioFile.existsAsFile())
+    {
+        DBG ("Audio file does not exist: " + audioFile.getFullPathName());
+        return false;
+    }
+
+    // Create JSON object for session
+    juce::DynamicObject::Ptr sessionObject = new juce::DynamicObject();
+
+    sessionObject->setProperty ("audioFile", audioFile.getFullPathName());
+    sessionObject->setProperty ("timestamp", juce::Time::getCurrentTime().toISO8601 (true));
+    sessionObject->setProperty ("fileSize", audioFile.getSize());
+    sessionObject->setProperty ("sessionData", sessionData);
+
+    juce::var sessionVar (sessionObject.get());
+
+    // Write JSON to file
+    juce::String jsonString = juce::JSON::toString (sessionVar, true);
+
+    bool success = sessionFile.replaceWithText (jsonString);
+
+    if (success)
+        DBG ("Session saved: " + sessionFile.getFullPathName());
+    else
+        DBG ("Failed to save session");
+
+    return success;
+}
+
+bool AudioFileManager::loadSession (const juce::File& sessionFile,
+                                    juce::File& audioFile,
+                                    juce::var& sessionData)
+{
+    if (!sessionFile.existsAsFile())
+    {
+        DBG ("Session file does not exist: " + sessionFile.getFullPathName());
+        return false;
+    }
+
+    // Read JSON from file
+    juce::String jsonString = sessionFile.loadFileAsString();
+    juce::var sessionVar = juce::JSON::parse (jsonString);
+
+    if (!sessionVar.isObject())
+    {
+        DBG ("Invalid session file format");
+        return false;
+    }
+
+    juce::DynamicObject* sessionObject = sessionVar.getDynamicObject();
+
+    if (sessionObject == nullptr)
+    {
+        DBG ("Could not parse session object");
+        return false;
+    }
+
+    // Extract audio file path
+    juce::String audioFilePath = sessionObject->getProperty ("audioFile").toString();
+    audioFile = juce::File (audioFilePath);
+
+    if (!audioFile.existsAsFile())
+    {
+        DBG ("Audio file referenced in session does not exist: " + audioFilePath);
+        return false;
+    }
+
+    // Verify file hasn't changed (optional check using file size)
+    juce::int64 expectedSize = sessionObject->getProperty ("fileSize");
+    juce::int64 actualSize = audioFile.getSize();
+
+    if (expectedSize != actualSize)
+    {
+        DBG ("Warning: Audio file size has changed since session was saved");
+        DBG ("  Expected: " + juce::String (expectedSize) + " bytes");
+        DBG ("  Actual: " + juce::String (actualSize) + " bytes");
+    }
+
+    // Extract session data
+    sessionData = sessionObject->getProperty ("sessionData");
+
+    DBG ("Session loaded: " + sessionFile.getFullPathName());
+    DBG ("  Audio file: " + audioFile.getFullPathName());
+    DBG ("  Timestamp: " + sessionObject->getProperty ("timestamp").toString());
+
+    return true;
+}

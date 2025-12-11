@@ -1,0 +1,491 @@
+#include "PluginProcessor.h"
+#include "PluginEditor.h"
+
+//==============================================================================
+AudioRestorationEditor::AudioRestorationEditor (AudioRestorationProcessor& p)
+    : AudioProcessorEditor (&p), audioProcessor (p)
+{
+    // Set editor size - fully scalable and resizable
+    setSize (baseWidth, baseHeight);
+    setResizable (true, true);
+    setResizeLimits (500, 400, 2560, 1440); // Min 500x400, max supports 1440p displays
+
+    //==============================================================================
+    // UI Scale Selector
+    scaleLabel.setText ("UI Scale:", juce::dontSendNotification);
+    scaleLabel.setJustificationType (juce::Justification::centredRight);
+    addAndMakeVisible (scaleLabel);
+
+    scaleSelector.addItem ("25%", 1);
+    scaleSelector.addItem ("50%", 2);
+    scaleSelector.addItem ("75%", 3);
+    scaleSelector.addItem ("100%", 4);
+    scaleSelector.addItem ("125%", 5);
+    scaleSelector.addItem ("150%", 6);
+    scaleSelector.addItem ("200%", 7);
+    scaleSelector.addItem ("300%", 8);
+    scaleSelector.addItem ("400%", 9);
+    scaleSelector.setSelectedId (4); // Default 100%
+    addAndMakeVisible (scaleSelector);
+
+    scaleSelector.onChange = [this]
+    {
+        const float scaleValues[] = {0.25f, 0.5f, 0.75f, 1.0f, 1.25f, 1.5f, 2.0f, 3.0f, 4.0f};
+        int selectedIndex = scaleSelector.getSelectedId() - 1;
+        if (selectedIndex >= 0 && selectedIndex < 9)
+        {
+            setScaleFactor (scaleValues[selectedIndex]);
+        }
+    };
+
+    scaleAttachment = std::make_unique<ComboBoxAttachment> (
+        audioProcessor.getParameters(), "uiScale", scaleSelector);
+
+    //==============================================================================
+    // Global Controls - Difference Mode
+    differenceModeButton.setButtonText ("Listen to Difference (Hear what's being removed)");
+    differenceModeButton.setColour (juce::ToggleButton::textColourId, juce::Colours::orange);
+    addAndMakeVisible (differenceModeButton);
+
+    differenceModeAttachment = std::make_unique<ButtonAttachment> (
+        audioProcessor.getParameters(), "differenceMode", differenceModeButton);
+
+    //==============================================================================
+    // Click Removal Section
+    clickGroup.setText ("Click & Pop Removal");
+    clickGroup.setTextLabelPosition (juce::Justification::centredLeft);
+    addAndMakeVisible (clickGroup);
+
+    clickSensitivitySlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    clickSensitivitySlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 20);
+    addAndMakeVisible (clickSensitivitySlider);
+
+    clickSensitivityLabel.setText ("Sensitivity", juce::dontSendNotification);
+    clickSensitivityLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (clickSensitivityLabel);
+
+    clickBypassButton.setButtonText ("Bypass");
+    clickBypassButton.setColour (juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible (clickBypassButton);
+
+    clickSensitivityAttachment = std::make_unique<SliderAttachment> (
+        audioProcessor.getParameters(), "clickSensitivity", clickSensitivitySlider);
+    clickBypassAttachment = std::make_unique<ButtonAttachment> (
+        audioProcessor.getParameters(), "clickBypass", clickBypassButton);
+
+    clickActivityLabel.setText ("○ Idle", juce::dontSendNotification);
+    clickActivityLabel.setJustificationType (juce::Justification::centred);
+    clickActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    clickActivityLabel.setFont (juce::Font (11.0f));
+    addAndMakeVisible (clickActivityLabel);
+
+    //==============================================================================
+    // Noise Reduction Section
+    noiseGroup.setText ("Noise Reduction");
+    noiseGroup.setTextLabelPosition (juce::Justification::centredLeft);
+    addAndMakeVisible (noiseGroup);
+
+    noiseReductionSlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    noiseReductionSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 20);
+    addAndMakeVisible (noiseReductionSlider);
+
+    noiseReductionLabel.setText ("Reduction (dB)", juce::dontSendNotification);
+    noiseReductionLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (noiseReductionLabel);
+
+    noiseBypassButton.setButtonText ("Bypass");
+    noiseBypassButton.setColour (juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible (noiseBypassButton);
+
+    captureProfileButton.setButtonText ("Capture Noise Profile");
+    addAndMakeVisible (captureProfileButton);
+    captureProfileButton.onClick = [this]
+    {
+        // Capture noise profile from current audio
+        audioProcessor.getNoiseReduction().captureProfile();
+    };
+
+    noiseReductionAttachment = std::make_unique<SliderAttachment> (
+        audioProcessor.getParameters(), "noiseReduction", noiseReductionSlider);
+    noiseBypassAttachment = std::make_unique<ButtonAttachment> (
+        audioProcessor.getParameters(), "noiseBypass", noiseBypassButton);
+
+    noiseActivityLabel.setText ("○ No Profile", juce::dontSendNotification);
+    noiseActivityLabel.setJustificationType (juce::Justification::centred);
+    noiseActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    noiseActivityLabel.setFont (juce::Font (11.0f));
+    addAndMakeVisible (noiseActivityLabel);
+
+    //==============================================================================
+    // Filter Section
+    filterGroup.setText ("Filters");
+    filterGroup.setTextLabelPosition (juce::Justification::centredLeft);
+    addAndMakeVisible (filterGroup);
+
+    rumbleSlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    rumbleSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 20);
+    addAndMakeVisible (rumbleSlider);
+
+    rumbleLabel.setText ("Rumble (Hz)", juce::dontSendNotification);
+    rumbleLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (rumbleLabel);
+
+    rumbleBypassButton.setButtonText ("Bypass");
+    rumbleBypassButton.setColour (juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible (rumbleBypassButton);
+
+    humSlider.setSliderStyle (juce::Slider::RotaryHorizontalVerticalDrag);
+    humSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 80, 20);
+    addAndMakeVisible (humSlider);
+
+    humLabel.setText ("Hum (Hz)", juce::dontSendNotification);
+    humLabel.setJustificationType (juce::Justification::centred);
+    addAndMakeVisible (humLabel);
+
+    humBypassButton.setButtonText ("Bypass");
+    humBypassButton.setColour (juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible (humBypassButton);
+
+    rumbleAttachment = std::make_unique<SliderAttachment> (
+        audioProcessor.getParameters(), "rumbleFilter", rumbleSlider);
+    rumbleBypassAttachment = std::make_unique<ButtonAttachment> (
+        audioProcessor.getParameters(), "rumbleBypass", rumbleBypassButton);
+
+    rumbleActivityLabel.setText ("○ Idle", juce::dontSendNotification);
+    rumbleActivityLabel.setJustificationType (juce::Justification::centred);
+    rumbleActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    rumbleActivityLabel.setFont (juce::Font (10.0f));
+    addAndMakeVisible (rumbleActivityLabel);
+
+    humAttachment = std::make_unique<SliderAttachment> (
+        audioProcessor.getParameters(), "humFilter", humSlider);
+    humBypassAttachment = std::make_unique<ButtonAttachment> (
+        audioProcessor.getParameters(), "humBypass", humBypassButton);
+
+    humActivityLabel.setText ("○ Idle", juce::dontSendNotification);
+    humActivityLabel.setJustificationType (juce::Justification::centred);
+    humActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    humActivityLabel.setFont (juce::Font (10.0f));
+    addAndMakeVisible (humActivityLabel);
+
+    //==============================================================================
+    // Graphic EQ Section
+    eqGroup.setText ("Graphic EQ");
+    eqGroup.setTextLabelPosition (juce::Justification::centredLeft);
+    addAndMakeVisible (eqGroup);
+
+    eqBypassButton.setButtonText ("Bypass");
+    eqBypassButton.setColour (juce::ToggleButton::textColourId, juce::Colours::lightgrey);
+    addAndMakeVisible (eqBypassButton);
+
+    eqBypassAttachment = std::make_unique<ButtonAttachment> (
+        audioProcessor.getParameters(), "eqBypass", eqBypassButton);
+
+    eqActivityLabel.setText ("○ Idle", juce::dontSendNotification);
+    eqActivityLabel.setJustificationType (juce::Justification::centredLeft);
+    eqActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    eqActivityLabel.setFont (juce::Font (10.0f));
+    addAndMakeVisible (eqActivityLabel);
+
+    const std::vector<juce::String> eqFreqLabels = {
+        "31", "62", "125", "250", "500", "1k", "2k", "4k", "8k", "16k"
+    };
+
+    for (size_t i = 0; i < eqFreqLabels.size(); ++i)
+    {
+        auto slider = std::make_unique<juce::Slider>();
+        slider->setSliderStyle (juce::Slider::LinearVertical);
+        slider->setTextBoxStyle (juce::Slider::TextBoxBelow, false, 60, 20);
+        addAndMakeVisible (*slider);
+
+        auto label = std::make_unique<juce::Label>();
+        label->setText (eqFreqLabels[i], juce::dontSendNotification);
+        label->setJustificationType (juce::Justification::centred);
+        addAndMakeVisible (*label);
+
+        auto paramID = "eqBand" + juce::String (i);
+        auto attachment = std::make_unique<SliderAttachment> (
+            audioProcessor.getParameters(), paramID, *slider);
+
+        eqSliders.push_back (std::move (slider));
+        eqLabels.push_back (std::move (label));
+        eqAttachments.push_back (std::move (attachment));
+    }
+
+    // Start timer for visual feedback updates (20 Hz)
+    startTimer (50);
+}
+
+AudioRestorationEditor::~AudioRestorationEditor()
+{
+    stopTimer();
+}
+
+//==============================================================================
+void AudioRestorationEditor::paint (juce::Graphics& g)
+{
+    g.fillAll (getLookAndFeel().findColour (juce::ResizableWindow::backgroundColourId));
+
+    g.setColour (juce::Colours::white);
+    g.setFont (24.0f);
+    g.drawFittedText ("Audio Restoration Suite", getLocalBounds().removeFromTop (40),
+                      juce::Justification::centred, 1);
+}
+
+void AudioRestorationEditor::timerCallback()
+{
+    // Update Click Removal activity
+    bool clickBypassed = *audioProcessor.getParameters().getRawParameterValue ("clickBypass") > 0.5f;
+    if (!clickBypassed)
+    {
+        float clickRate = audioProcessor.getClickRemoval().getClickRate();
+        if (clickRate > 0.1f)
+        {
+            clickActivityLabel.setText ("● " + juce::String (clickRate, 1) + " /sec", juce::dontSendNotification);
+            clickActivityLabel.setColour (juce::Label::textColourId, juce::Colours::lightgreen);
+        }
+        else
+        {
+            clickActivityLabel.setText ("● Monitoring", juce::dontSendNotification);
+            clickActivityLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+        }
+    }
+    else
+    {
+        clickActivityLabel.setText ("○ Bypassed", juce::dontSendNotification);
+        clickActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    }
+
+    // Update Noise Reduction activity
+    bool noiseBypassed = *audioProcessor.getParameters().getRawParameterValue ("noiseBypass") > 0.5f;
+    if (!noiseBypassed && audioProcessor.getNoiseReduction().isActivelyReducing())
+    {
+        float reduction = audioProcessor.getNoiseReduction().getReductionAmount();
+        noiseActivityLabel.setText ("● -" + juce::String (reduction, 1) + " dB", juce::dontSendNotification);
+        noiseActivityLabel.setColour (juce::Label::textColourId, juce::Colours::lightgreen);
+    }
+    else if (!noiseBypassed && audioProcessor.getNoiseReduction().hasProfile())
+    {
+        noiseActivityLabel.setText ("● Ready", juce::dontSendNotification);
+        noiseActivityLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+    }
+    else if (!noiseBypassed)
+    {
+        noiseActivityLabel.setText ("○ No Profile", juce::dontSendNotification);
+        noiseActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    }
+    else
+    {
+        noiseActivityLabel.setText ("○ Bypassed", juce::dontSendNotification);
+        noiseActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    }
+
+    // Update Rumble Filter activity
+    bool rumbleBypassed = *audioProcessor.getParameters().getRawParameterValue ("rumbleBypass") > 0.5f;
+    if (!rumbleBypassed)
+    {
+        rumbleActivityLabel.setText ("● Active", juce::dontSendNotification);
+        rumbleActivityLabel.setColour (juce::Label::textColourId, juce::Colours::lightgreen);
+    }
+    else
+    {
+        rumbleActivityLabel.setText ("○ Bypassed", juce::dontSendNotification);
+        rumbleActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    }
+
+    // Update Hum Filter activity
+    bool humBypassed = *audioProcessor.getParameters().getRawParameterValue ("humBypass") > 0.5f;
+    if (!humBypassed)
+    {
+        humActivityLabel.setText ("● Active", juce::dontSendNotification);
+        humActivityLabel.setColour (juce::Label::textColourId, juce::Colours::lightgreen);
+    }
+    else
+    {
+        humActivityLabel.setText ("○ Bypassed", juce::dontSendNotification);
+        humActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    }
+
+    // Update EQ activity
+    bool eqBypassed = *audioProcessor.getParameters().getRawParameterValue ("eqBypass") > 0.5f;
+    bool anyEQActive = false;
+    if (!eqBypassed)
+    {
+        for (int i = 0; i < 10; ++i)
+        {
+            auto paramID = "eqBand" + juce::String (i);
+            float gain = *audioProcessor.getParameters().getRawParameterValue (paramID);
+            if (std::abs (gain) > 0.1f)
+            {
+                anyEQActive = true;
+                break;
+            }
+        }
+    }
+
+    if (!eqBypassed && anyEQActive)
+    {
+        eqActivityLabel.setText ("● Active", juce::dontSendNotification);
+        eqActivityLabel.setColour (juce::Label::textColourId, juce::Colours::lightgreen);
+    }
+    else if (!eqBypassed)
+    {
+        eqActivityLabel.setText ("● Flat", juce::dontSendNotification);
+        eqActivityLabel.setColour (juce::Label::textColourId, juce::Colours::yellow);
+    }
+    else
+    {
+        eqActivityLabel.setText ("○ Bypassed", juce::dontSendNotification);
+        eqActivityLabel.setColour (juce::Label::textColourId, juce::Colours::grey);
+    }
+}
+
+void AudioRestorationEditor::setScaleFactor (float newScale)
+{
+    if (newScale == scaleFactor)
+        return;
+
+    scaleFactor = juce::jlimit (0.25f, 4.0f, newScale);
+
+    // Apply scale transform to the entire editor
+    setTransform (juce::AffineTransform::scale (scaleFactor));
+
+    // Update the actual window size based on the scaled content
+    int scaledWidth = juce::roundToInt (baseWidth * scaleFactor);
+    int scaledHeight = juce::roundToInt (baseHeight * scaleFactor);
+
+    // Update size limits based on scale
+    setResizeLimits (
+        juce::roundToInt (500 * scaleFactor),
+        juce::roundToInt (400 * scaleFactor),
+        juce::roundToInt (2560 * scaleFactor),
+        juce::roundToInt (1440 * scaleFactor));
+
+    // Resize to maintain proportions
+    setSize (scaledWidth, scaledHeight);
+
+    // Notify parent window of size change
+    if (auto* peer = getPeer())
+        peer->handleMovedOrResized();
+}
+
+void AudioRestorationEditor::resized()
+{
+    auto area = getLocalBounds().reduced (10);
+
+    // Title area with scale selector on the right
+    auto titleArea = area.removeFromTop (40);
+    auto scaleArea = titleArea.removeFromRight (180);
+    scaleLabel.setBounds (scaleArea.removeFromLeft (70));
+    scaleSelector.setBounds (scaleArea.removeFromLeft (100).reduced (0, 5));
+
+    // Difference mode toggle (global control)
+    auto diffModeArea = area.removeFromTop (35);
+    differenceModeButton.setBounds (diffModeArea.withSizeKeepingCentre (450, 30));
+
+    area.removeFromTop (5); // Small gap
+
+    // Top row: Click removal, Noise reduction, Filters (increased height for better proportions)
+    // All sections now scale proportionally with window width
+    auto topRow = area.removeFromTop (240);
+    int totalWidth = topRow.getWidth();
+
+    // Calculate proportional widths: Click (27%), Noise (29%), Filters (44%)
+    int clickWidth = totalWidth * 27 / 100;
+    int noiseWidth = totalWidth * 29 / 100;
+    // Filter gets the remainder
+
+    auto clickArea = topRow.removeFromLeft (clickWidth).reduced (5);
+    clickGroup.setBounds (clickArea);
+
+    auto clickContent = clickArea.reduced (10).withTrimmedTop (20);
+
+    // Place bypass button in top-right corner (inside group bounds)
+    auto clickBypassArea = clickContent.removeFromTop (25).removeFromRight (90).reduced (3, 0);
+    clickBypassButton.setBounds (clickBypassArea);
+
+    clickContent.removeFromTop (5); // Small gap after bypass
+    clickSensitivitySlider.setBounds (clickContent.removeFromTop (100).withSizeKeepingCentre (100, 100));
+    clickSensitivityLabel.setBounds (clickContent.removeFromTop (20));
+    clickContent.removeFromTop (5);
+    clickActivityLabel.setBounds (clickContent.removeFromTop (15));
+
+    auto noiseArea = topRow.removeFromLeft (noiseWidth).reduced (5);
+    noiseGroup.setBounds (noiseArea);
+
+    auto noiseContent = noiseArea.reduced (10).withTrimmedTop (20);
+
+    // Place bypass button in top-right corner (inside group bounds)
+    auto noiseBypassArea = noiseContent.removeFromTop (25).removeFromRight (90).reduced (3, 0);
+    noiseBypassButton.setBounds (noiseBypassArea);
+
+    noiseContent.removeFromTop (5); // Small gap after bypass
+    noiseReductionSlider.setBounds (noiseContent.removeFromTop (100).withSizeKeepingCentre (100, 100));
+    noiseReductionLabel.setBounds (noiseContent.removeFromTop (20));
+    noiseContent.removeFromTop (5);
+    noiseActivityLabel.setBounds (noiseContent.removeFromTop (15));
+    noiseContent.removeFromTop (10);
+    captureProfileButton.setBounds (noiseContent.removeFromTop (30).withSizeKeepingCentre (180, 30));
+
+    auto filterArea = topRow.reduced (5);
+    filterGroup.setBounds (filterArea);
+    auto filterContent = filterArea.reduced (10).withTrimmedTop (20);
+
+    // Safety check for width
+    int halfWidth = filterContent.getWidth() > 0 ? filterContent.getWidth() / 2 : 0;
+    auto rumbleArea = filterContent.removeFromLeft (halfWidth).reduced (5);
+
+    // Place rumble bypass in top-right of its area (aligned with other bypasses)
+    auto rumbleBypassArea = rumbleArea.removeFromTop (25).removeFromRight (80).reduced (2, 0);
+    rumbleBypassButton.setBounds (rumbleBypassArea);
+
+    rumbleArea.removeFromTop (5); // Small gap after bypass
+    rumbleSlider.setBounds (rumbleArea.removeFromTop (100).withSizeKeepingCentre (100, 100));
+    rumbleLabel.setBounds (rumbleArea.removeFromTop (20));
+    rumbleArea.removeFromTop (5);
+    rumbleActivityLabel.setBounds (rumbleArea.removeFromTop (15));
+
+    auto humArea = filterContent.reduced (5);
+
+    // Place hum bypass in top-right of its area (aligned with other bypasses)
+    auto humBypassArea = humArea.removeFromTop (25).removeFromRight (80).reduced (2, 0);
+    humBypassButton.setBounds (humBypassArea);
+
+    humArea.removeFromTop (5); // Small gap after bypass
+    humSlider.setBounds (humArea.removeFromTop (100).withSizeKeepingCentre (100, 100));
+    humLabel.setBounds (humArea.removeFromTop (20));
+    humArea.removeFromTop (5);
+    humActivityLabel.setBounds (humArea.removeFromTop (15));
+
+    // Bottom row: Graphic EQ - more compact size for better proportions
+    area.removeFromTop (10);
+    auto eqArea = area; // Use all remaining area for EQ
+    eqGroup.setBounds (eqArea);
+
+    auto eqContent = eqArea.reduced (10).withTrimmedTop (20);
+
+    // Place EQ bypass button in top-right corner (inside group bounds)
+    auto eqBypassArea = eqContent.removeFromTop (25).removeFromRight (90).reduced (3, 0);
+    eqBypassButton.setBounds (eqBypassArea);
+
+    // Place EQ activity label on the left side of the top row
+    auto eqActivityArea = eqContent.removeFromTop (25).removeFromLeft (120).reduced (5, 5);
+    eqActivityLabel.setBounds (eqActivityArea);
+
+    eqContent.removeFromTop (5); // Small gap after bypass
+
+    // Safety check to prevent division by zero
+    if (!eqSliders.empty() && eqContent.getWidth() > 0 && eqContent.getHeight() > 0)
+    {
+        int sliderWidth = eqContent.getWidth() / static_cast<int> (eqSliders.size());
+        if (sliderWidth > 0)
+        {
+            for (size_t i = 0; i < eqSliders.size(); ++i)
+            {
+                auto sliderArea = eqContent.removeFromLeft (sliderWidth).reduced (3);
+                eqLabels[i]->setBounds (sliderArea.removeFromBottom (25));
+                eqSliders[i]->setBounds (sliderArea);
+            }
+        }
+    }
+}

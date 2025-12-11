@@ -1,0 +1,20 @@
+# AI Image Prompts voor Stemperator - Claude.ai
+
+**Website:** https://claude.ai
+
+Claude kan geen afbeeldingen genereren. Claude is een text-based AI zonder image generation capabilities.
+
+## Alternatieven
+
+Gebruik in plaats daarvan:
+
+| Tool | Link | Opmerkingen |
+|------|------|-------------|
+| **Midjourney** | https://www.midjourney.com/ | Beste kwaliteit, betaald |
+| **DALL-E 3** | https://chat.openai.com/ | Via ChatGPT Plus |
+| **Bing Image Creator** | https://www.bing.com/images/create | Gratis, DALL-E 3 backend |
+| **Ideogram** | https://ideogram.ai/ | Gratis, goed met tekst |
+| **Leonardo.ai** | https://leonardo.ai/ | Gratis tier beschikbaar |
+| **Stable Diffusion** | https://stability.ai/ | Open source, lokaal te draaien |
+
+Zie `readme_reaper.md` voor kant-en-klare prompts voor deze tools.

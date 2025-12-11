@@ -1,0 +1,61 @@
+<?xml version="1.0" encoding="utf-8"?>
+<index version="1" name="Stemperator">
+  <category name="Scripts">
+    <reapack name="Stemperator_AI_Separate.lua" type="script" desc="Stemperator - AI Stem Separation (Main Dialog)">
+      <version name="1.5.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.5.0: MilkDrop visuals + FX toggle
+- 100 MilkDrop-inspired patterns (1000 unique styles!)
+- Smooth crossfade transitions with zoom effect (1.5s)
+- FX toggle icon on all pages (below day/night icon)
+- Gallery controls fade out when mouse leaves
+- Multilingual FX tooltips (EN/NL/DE)
+- Fixed "AI STEMperator - Processing..." window title
+
+v1.4.0: Time selection support
+- Can now separate time selections (not just media items)
+- If no item selected, uses time selection instead
+- Stems are placed at the time selection position
+
+v1.3.0: 6-stem model support with Guitar/Piano
+- Guitar and Piano checkboxes appear when 6-stem model selected
+- Keys 5/6 toggle Guitar/Piano stems
+- Presets updated to include Guitar/Piano when using 6-stem model
+
+v1.2.0: Scalable/resizable GUI
+- Window is now resizable (drag edges/corners)
+- All elements scale proportionally with window size
+- Minimum size: 380x340, Maximum: 760x680
+- Window size persists between sessions
+
+v1.1.0: Major update
+- Persist settings between sessions
+- Keyboard shortcuts: 1-4 toggle stems, K=Karaoke, I=Instrumental
+
+v1.0.0: Initial release]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Stemperator_AI_Separate.lua</source>
+        <source>https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Source/AI/audio_separator_process.py</source>
+        <source file="lang/i18n.lua">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/lang/i18n.lua</source>
+        <source file="toolbar/toolbar_6stem.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_6stem.png</source>
+        <source file="toolbar/toolbar_allstems.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_allstems.png</source>
+        <source file="toolbar/toolbar_bass.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_bass.png</source>
+        <source file="toolbar/toolbar_drums.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_drums.png</source>
+        <source file="toolbar/toolbar_explode.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_explode.png</source>
+        <source file="toolbar/toolbar_guitar.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_guitar.png</source>
+        <source file="toolbar/toolbar_karaoke.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_karaoke.png</source>
+        <source file="toolbar/toolbar_other.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_other.png</source>
+        <source file="toolbar/toolbar_piano.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_piano.png</source>
+        <source file="toolbar/toolbar_settings.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_settings.png</source>
+        <source file="toolbar/toolbar_vocals.png">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/toolbar/toolbar_vocals.png</source>
+      </version>
+    </reapack>
+    <reapack name="Stemperator_Installation.lua" type="script" desc="Stemperator - Installation &amp; Setup (Run First!)">
+      <version name="1.0.0" author="flarkAUDIO" time="2025-12-10T12:00:00Z">
+        <changelog><![CDATA[v1.0.0: Initial release
+- Cross-platform Python/audio-separator installation
+- GPU detection (NVIDIA CUDA, AMD ROCm, Apple MPS)
+- Automatic venv creation and dependency install]]></changelog>
+        <source main="main">https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/Stemperator_Installation.lua</source>
+      </version>
+    </reapack>
+  </category>
+</index>

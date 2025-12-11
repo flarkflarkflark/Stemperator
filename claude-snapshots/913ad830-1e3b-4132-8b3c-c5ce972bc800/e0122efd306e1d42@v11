@@ -1,0 +1,857 @@
+#include "StandaloneWindow.h"
+
+//==============================================================================
+// StandaloneWindow Implementation
+//==============================================================================
+
+StandaloneWindow::StandaloneWindow()
+    : DocumentWindow ("Vinyl Restoration Suite",
+                      juce::Colour (0xff2e2e2e),
+                      DocumentWindow::allButtons),
+      menuBar (this)
+{
+    setUsingNativeTitleBar (true);
+    setResizable (true, true);
+
+    // Initialize audio device
+    juce::String audioError = audioDeviceManager.initialise (
+        0,     // number of input channels
+        2,     // number of output channels
+        nullptr,  // saved state
+        true   // select default device on failure
+    );
+
+    if (audioError.isNotEmpty())
+    {
+        DBG ("Audio device error: " + audioError);
+    }
+
+    // Setup audio transport
+    transportSource.addChangeListener (this);
+    audioSourcePlayer.setSource (&transportSource);
+    audioDeviceManager.addAudioCallback (&audioSourcePlayer);
+
+    // Create main component
+    mainComponent = std::make_unique<MainComponent>();
+    mainComponent->setParentWindow (this);
+
+    // Wire up waveform double-click to seek playback
+    mainComponent->getWaveformDisplay().onSeekPosition = [this](double position)
+    {
+        if (transportSource.getTotalLength() > 0.0)
+        {
+            double timeInSeconds = position * transportSource.getLengthInSeconds();
+            transportSource.setPosition (timeInSeconds);
+            DBG ("Seek to: " + juce::String (timeInSeconds) + " seconds");
+        }
+    };
+
+    // Add menu bar to main component using base class method
+    mainComponent->Component::addAndMakeVisible (menuBar);
+
+    setContentOwned (mainComponent.get(), true);
+
+    // Set initial size
+    centreWithSize (1200, 800);
+
+    // Load recent files
+    recentFiles.setMaxNumberOfItems (10);
+
+    // Start timer for playback position updates
+    startTimer (40); // 25 fps
+
+    setVisible (true);
+}
+
+StandaloneWindow::~StandaloneWindow()
+{
+    // Stop audio playback
+    transportSource.setSource (nullptr);
+    audioSourcePlayer.setSource (nullptr);
+    audioDeviceManager.removeAudioCallback (&audioSourcePlayer);
+    transportSource.removeChangeListener (this);
+
+    setMenuBar (nullptr);
+}
+
+void StandaloneWindow::closeButtonPressed()
+{
+    if (hasUnsavedChanges)
+    {
+        int result = juce::AlertWindow::showYesNoCancelBox (
+            juce::AlertWindow::QuestionIcon,
+            "Unsaved Changes",
+            "Do you want to save your changes before closing?",
+            "Save", "Don't Save", "Cancel",
+            nullptr, nullptr
+        );
+
+        if (result == 0) // Cancel
+            return;
+        else if (result == 1) // Save
+        {
+            if (currentFile.exists())
+                saveFile (currentFile);
+            else
+                return; // User cancelled save dialog
+        }
+    }
+
+    juce::JUCEApplication::getInstance()->systemRequestedQuit();
+}
+
+//==============================================================================
+// Drag and Drop
+//==============================================================================
+
+bool StandaloneWindow::isInterestedInFileDrag (const juce::StringArray& files)
+{
+    for (const auto& file : files)
+    {
+        juce::File f (file);
+        if (f.hasFileExtension ("wav;flac;aiff;mp3;ogg"))
+            return true;
+    }
+    return false;
+}
+
+void StandaloneWindow::filesDropped (const juce::StringArray& files, int, int)
+{
+    if (files.size() > 0)
+    {
+        juce::File file (files[0]);
+        openFile (file);
+    }
+}
+
+//==============================================================================
+// Menu Bar
+//==============================================================================
+
+juce::StringArray StandaloneWindow::getMenuBarNames()
+{
+    return {"File", "Edit", "Process", "View", "Options", "Help"};
+}
+
+juce::PopupMenu StandaloneWindow::getMenuForIndex (int topLevelMenuIndex, const juce::String&)
+{
+    juce::PopupMenu menu;
+
+    if (topLevelMenuIndex == 0) // File
+    {
+        menu.addItem (fileOpen, "Open...                   Ctrl+O");
+        menu.addItem (fileClose, "Close File                Ctrl+W", currentFile.exists());
+        menu.addSeparator();
+        menu.addItem (fileSave, "Save                      Ctrl+S", currentFile.exists());
+        menu.addItem (fileSaveAs, "Save As...             Ctrl+Shift+S");
+        menu.addSeparator();
+        menu.addItem (fileExport, "Export Audio...           Ctrl+E", audioBuffer.getNumSamples() > 0);
+        menu.addSeparator();
+
+        // Recent files submenu
+        juce::PopupMenu recentMenu;
+        recentFiles.createPopupMenuItems (recentMenu, 100, true, true);
+        menu.addSubMenu ("Recent Files", recentMenu);
+        menu.addItem (fileRecentClear, "Clear Recent Files");
+
+        menu.addSeparator();
+        menu.addItem (fileExit, "Exit                      Ctrl+Q");
+    }
+    else if (topLevelMenuIndex == 1) // Edit
+    {
+        menu.addItem (editUndo, "Undo                      Ctrl+Z", false);
+        menu.addItem (editRedo, "Redo                      Ctrl+Y", false);
+        menu.addSeparator();
+        menu.addItem (editSelectAll, "Select All                Ctrl+A", false);
+        menu.addItem (editDeselect, "Deselect                  Ctrl+D", false);
+    }
+    else if (topLevelMenuIndex == 2) // Process
+    {
+        bool hasAudio = audioBuffer.getNumSamples() > 0;
+        menu.addItem (processDetectClicks, "Detect Clicks", hasAudio);
+        menu.addItem (processRemoveClicks, "Remove Clicks", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processNoiseReduction, "Noise Reduction...", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processCutAndSplice, "Cut and Splice...", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processGraphicEQ, "Graphic Equaliser...", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processNormalise, "Normalise...", hasAudio);
+        menu.addItem (processChannelBalance, "Channel Balance...", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processWowFlutterRemoval, "Wow & Flutter Removal...", hasAudio);
+        menu.addItem (processDropoutRestoration, "Dropout Restoration...", hasAudio);
+        menu.addItem (processSpeedCorrection, "Speed Correction...", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processDetectTracks, "Detect Tracks", hasAudio);
+        menu.addItem (processSplitTracks, "Split Tracks...", hasAudio);
+        menu.addSeparator();
+        menu.addItem (processBatchProcess, "Batch Process...");
+    }
+    else if (topLevelMenuIndex == 3) // View
+    {
+        menu.addItem (viewZoomIn, "Zoom In                   Ctrl++");
+        menu.addItem (viewZoomOut, "Zoom Out                  Ctrl+-");
+        menu.addItem (viewZoomFit, "Zoom to Fit               Ctrl+0");
+        menu.addSeparator();
+        menu.addItem (viewShowCorrectionList, "Show Correction List", true, true);
+    }
+    else if (topLevelMenuIndex == 4) // Options
+    {
+        menu.addItem (optionsAudioSettings, "Audio Settings...");
+    }
+    else if (topLevelMenuIndex == 5) // Help
+    {
+        menu.addItem (helpAbout, "About");
+        menu.addItem (helpDocumentation, "Documentation", false);
+    }
+
+    return menu;
+}
+
+void StandaloneWindow::menuItemSelected (int menuItemID, int)
+{
+    // Handle recent files
+    if (menuItemID >= 100 && menuItemID < 200)
+    {
+        juce::File file = recentFiles.getFile (menuItemID - 100);
+        if (file.exists())
+            openFile (file);
+        return;
+    }
+
+    // Handle menu commands
+    switch (menuItemID)
+    {
+        case fileOpen:
+        {
+            auto chooser = std::make_shared<juce::FileChooser> ("Open Audio File",
+                                       juce::File::getSpecialLocation (juce::File::userHomeDirectory),
+                                       "*.wav;*.flac;*.aiff;*.ogg");
+
+            chooser->launchAsync (juce::FileBrowserComponent::openMode | juce::FileBrowserComponent::canSelectFiles,
+                [this, chooser] (const juce::FileChooser&)
+                {
+                    auto file = chooser->getResult();
+                    if (file.existsAsFile())
+                        openFile (file);
+                });
+            break;
+        }
+
+        case fileClose:
+            closeFile();
+            break;
+
+        case fileSave:
+            if (currentFile.exists())
+                saveFile (currentFile);
+            break;
+
+        case fileSaveAs:
+        {
+            auto chooser = std::make_shared<juce::FileChooser> ("Save Session",
+                                       juce::File::getSpecialLocation (juce::File::userHomeDirectory),
+                                       "*.vrs");
+
+            chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+                [this, chooser] (const juce::FileChooser&)
+                {
+                    auto file = chooser->getResult();
+                    if (file != juce::File())
+                        saveFile (file);
+                });
+            break;
+        }
+
+        case fileExport:
+            exportFile();
+            break;
+
+        case fileRecentClear:
+            recentFiles.clear();
+            menuItemsChanged();
+            break;
+
+        case fileExit:
+            juce::JUCEApplication::getInstance()->systemRequestedQuit();
+            break;
+
+        case processDetectClicks:
+            detectClicks();
+            break;
+
+        case processRemoveClicks:
+            removeClicks();
+            break;
+
+        case processNoiseReduction:
+            applyNoiseReduction();
+            break;
+
+        case processDetectTracks:
+            detectTracks();
+            break;
+
+        case processSplitTracks:
+            splitTracks();
+            break;
+
+        case processBatchProcess:
+            showBatchProcessor();
+            break;
+
+        case optionsAudioSettings:
+            showAudioSettings();
+            break;
+
+        case helpAbout:
+            showAboutDialog();
+            break;
+
+        default:
+            break;
+    }
+}
+
+//==============================================================================
+// Timer callback
+//==============================================================================
+
+void StandaloneWindow::timerCallback()
+{
+    // Update playback position if playing
+    if (transportSource.isPlaying())
+    {
+        double position = transportSource.getCurrentPosition() / transportSource.getLengthInSeconds();
+        mainComponent->updatePlaybackPosition (position);
+    }
+}
+
+void StandaloneWindow::changeListenerCallback (juce::ChangeBroadcaster*)
+{
+    // Transport state changed (started/stopped)
+    if (transportSource.hasStreamFinished())
+    {
+        transportSource.setPosition (0.0);
+        isPlaying = false;
+    }
+}
+
+//==============================================================================
+// Helper Methods
+//==============================================================================
+
+void StandaloneWindow::openFile (const juce::File& file)
+{
+    if (!file.exists())
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon,
+                                                "File Not Found",
+                                                "The selected file does not exist.");
+        return;
+    }
+
+    // Show loading status
+    auto fileSizeMB = file.getSize() / (1024.0 * 1024.0);
+    mainComponent->getCorrectionListView().setStatusText (
+        "Loading " + file.getFileName() + " (" +
+        juce::String (fileSizeMB, 1) + " MB)..."
+    );
+
+    // Load audio file
+    if (fileManager.loadAudioFile (file, audioBuffer, sampleRate))
+    {
+        currentFile = file;
+        recentFiles.addFile (file);
+
+        // Update waveform display
+        mainComponent->getWaveformDisplay().loadFile (file);
+        mainComponent->setAudioBuffer (&audioBuffer, sampleRate);
+
+        // Load into transport source for playback
+        juce::AudioFormatManager formatManager;
+        formatManager.registerBasicFormats();
+        formatManager.registerFormat (new juce::FlacAudioFormat(), true);
+        formatManager.registerFormat (new juce::OggVorbisAudioFormat(), true);
+        auto* reader = formatManager.createReaderFor (file);
+
+        if (reader != nullptr)
+        {
+            readerSource.reset (new juce::AudioFormatReaderSource (reader, true));
+            transportSource.setSource (readerSource.get(), 0, nullptr, reader->sampleRate);
+        }
+
+        // Clear corrections
+        mainComponent->getCorrectionListView().clearCorrections();
+
+        hasUnsavedChanges = false;
+        updateTitle();
+
+        DBG ("Opened file: " + file.getFullPathName());
+
+        mainComponent->getCorrectionListView().setStatusText ("Ready");
+    }
+    else
+    {
+        mainComponent->getCorrectionListView().setStatusText ("Ready");
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon,
+                                                "Load Failed",
+                                                "Failed to load audio file: " + file.getFileName());
+    }
+}
+
+void StandaloneWindow::closeFile()
+{
+    // Stop playback
+    transportSource.stop();
+    transportSource.setSource (nullptr);
+    readerSource.reset();
+    isPlaying = false;
+
+    // Clear audio buffer
+    audioBuffer.setSize (0, 0);
+    currentFile = juce::File();
+
+    // Clear displays
+    mainComponent->getWaveformDisplay().clear();
+    mainComponent->getCorrectionListView().clearCorrections();
+    mainComponent->setAudioBuffer (nullptr, sampleRate);
+
+    // Reset state
+    hasUnsavedChanges = false;
+    updateTitle();
+
+    mainComponent->getCorrectionListView().setStatusText ("No file loaded");
+    DBG ("Closed file");
+}
+
+void StandaloneWindow::saveFile (const juce::File& file)
+{
+    // Save session (corrections, settings, etc.)
+    juce::var sessionData;
+    // TODO: Build session data from current state
+
+    if (fileManager.saveSession (file, currentFile, sessionData))
+    {
+        hasUnsavedChanges = false;
+        updateTitle();
+        DBG ("Saved session: " + file.getFullPathName());
+    }
+    else
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon,
+                                                "Save Failed",
+                                                "Failed to save session file.");
+    }
+}
+
+void StandaloneWindow::exportFile()
+{
+    auto chooser = std::make_shared<juce::FileChooser> ("Export Audio",
+                               currentFile.getParentDirectory(),
+                               "*.wav;*.flac;*.ogg");
+
+    chooser->launchAsync (juce::FileBrowserComponent::saveMode | juce::FileBrowserComponent::canSelectFiles,
+        [this, chooser] (const juce::FileChooser&)
+        {
+            juce::File outputFile = chooser->getResult();
+
+            if (outputFile != juce::File())
+            {
+                if (fileManager.saveAudioFile (outputFile, audioBuffer, sampleRate, 24))
+                {
+                    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                                            "Export Complete",
+                                                            "Audio exported successfully.");
+                }
+                else
+                {
+                    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon,
+                                                            "Export Failed",
+                                                            "Failed to export audio file.");
+                }
+            }
+        });
+}
+
+void StandaloneWindow::detectClicks()
+{
+    // TODO: Implement click detection
+    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                            "Click Detection",
+                                            "Click detection will be implemented here.");
+}
+
+void StandaloneWindow::removeClicks()
+{
+    // TODO: Implement click removal
+    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                            "Click Removal",
+                                            "Click removal will be implemented here.");
+}
+
+void StandaloneWindow::applyNoiseReduction()
+{
+    // TODO: Implement noise reduction
+    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                            "Noise Reduction",
+                                            "Noise reduction will be implemented here.");
+}
+
+void StandaloneWindow::detectTracks()
+{
+    if (audioBuffer.getNumSamples() == 0)
+    {
+        juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::WarningIcon,
+                                                "No Audio",
+                                                "Please load an audio file first.");
+        return;
+    }
+
+    TrackDetector detector;
+    TrackDetector::DetectionSettings settings;
+    settings.silenceThresholdDb = -40.0f;
+    settings.minSilenceDurationSeconds = 2.0;
+    settings.minTrackDurationSeconds = 10.0;
+
+    auto boundaries = detector.detectTracks (audioBuffer, sampleRate, settings);
+
+    juce::String message = "Detected " + juce::String (boundaries.size()) + " track boundaries.";
+    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                            "Track Detection",
+                                            message);
+}
+
+void StandaloneWindow::splitTracks()
+{
+    // TODO: Implement track splitting with dialog
+    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                            "Split Tracks",
+                                            "Track splitting will be implemented here.");
+}
+
+void StandaloneWindow::showBatchProcessor()
+{
+    // TODO: Show batch processor dialog
+    juce::AlertWindow::showMessageBoxAsync (juce::AlertWindow::InfoIcon,
+                                            "Batch Processor",
+                                            "Batch processor will be implemented here.");
+}
+
+void StandaloneWindow::showAboutDialog()
+{
+    // Create custom about window with logo
+    auto* aboutWindow = new juce::AlertWindow ("About Vinyl Restoration Suite",
+                                               juce::String(),
+                                               juce::AlertWindow::NoIcon);
+
+    // Load and add logo
+    #include "../Resources/VRSLogoData.h"
+    juce::Image logo = juce::ImageFileFormat::loadFrom (VRSlogo_png, VRSlogo_png_len);
+
+    if (logo.isValid())
+    {
+        auto* imageComp = new juce::ImageComponent();
+        imageComp->setImage (logo);
+        int logoHeight = 80;
+        int logoWidth = (int) (logo.getWidth() * (logoHeight / (float) logo.getHeight()));
+        imageComp->setSize (logoWidth, logoHeight);
+        aboutWindow->addCustomComponent (imageComp);
+    }
+
+    juce::String message = "Version 1.5.2\n\n"
+                          "Professional audio restoration tool for vinyl and tape transfers.\n\n"
+                          "Features:\n"
+                          "• Click and pop removal\n"
+                          "• Spectral noise reduction\n"
+                          "• Multi-band graphic equalizer\n"
+                          "• Track detection and splitting\n"
+                          "• Wow & flutter removal\n"
+                          "• Batch processing\n\n"
+                          "(c) 2024-2025 flarkAUDIO";
+
+    aboutWindow->addTextBlock (message);
+    aboutWindow->addButton ("OK", 1);
+    aboutWindow->enterModalState (true, juce::ModalCallbackFunction::create (
+        [](int) {}
+    ), true);
+}
+
+void StandaloneWindow::updateTitle()
+{
+    juce::String title = "Vinyl Restoration Suite - Standalone";
+
+    if (currentFile.exists())
+    {
+        title += " - " + currentFile.getFileNameWithoutExtension();
+        if (hasUnsavedChanges)
+            title += "*";
+    }
+
+    setName (title);
+}
+
+void StandaloneWindow::showAudioSettings()
+{
+    // Show JUCE's built-in audio settings dialog
+    juce::DialogWindow::LaunchOptions options;
+    options.dialogTitle = "Audio Settings";
+    options.dialogBackgroundColour = juce::Colours::darkgrey;
+    options.content.setOwned (new juce::AudioDeviceSelectorComponent (
+        audioDeviceManager,
+        0,  // min input channels
+        0,  // max input channels
+        2,  // min output channels
+        2,  // max output channels
+        false,  // show MIDI input
+        false,  // show MIDI output
+        false,  // show channels as stereo pairs
+        false   // hide advanced options
+    ));
+    options.content->setSize (500, 400);
+    options.launchAsync();
+}
+
+//==============================================================================
+// MainComponent Implementation
+//==============================================================================
+
+StandaloneWindow::MainComponent::MainComponent()
+{
+    // Load logo from embedded PNG data
+    #include "../Resources/VRSLogoData.h"
+    logoImage = juce::ImageFileFormat::loadFrom (VRSlogo_png, VRSlogo_png_len);
+
+    // Add waveform display
+    addAndMakeVisible (waveformDisplay);
+
+    // Add correction list
+    addAndMakeVisible (correctionListView);
+
+    // Transport controls
+    addAndMakeVisible (playButton);
+    addAndMakeVisible (pauseButton);
+    addAndMakeVisible (stopButton);
+
+    playButton.addListener (this);
+    pauseButton.addListener (this);
+    stopButton.addListener (this);
+
+    // Position slider
+    addAndMakeVisible (positionSlider);
+    positionSlider.setRange (0.0, 1.0);
+    positionSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    positionSlider.addListener (this);
+
+    // Time label
+    addAndMakeVisible (timeLabel);
+    timeLabel.setText ("00:00.000", juce::dontSendNotification);
+    timeLabel.setJustificationType (juce::Justification::centred);
+
+    // Volume slider
+    addAndMakeVisible (volumeSlider);
+    volumeSlider.setRange (0.0, 1.0);
+    volumeSlider.setValue (0.7); // 70% default volume
+    volumeSlider.setSliderStyle (juce::Slider::LinearVertical);
+    volumeSlider.setTextBoxStyle (juce::Slider::NoTextBox, false, 0, 0);
+    volumeSlider.addListener (this);
+
+    // Volume label
+    addAndMakeVisible (volumeLabel);
+    volumeLabel.setText ("Volume", juce::dontSendNotification);
+    volumeLabel.setJustificationType (juce::Justification::centred);
+
+    // Zoom controls
+    addAndMakeVisible (zoomInButton);
+    addAndMakeVisible (zoomOutButton);
+    addAndMakeVisible (zoomFitButton);
+
+    zoomInButton.addListener (this);
+    zoomOutButton.addListener (this);
+    zoomFitButton.addListener (this);
+
+    // Status label
+    addAndMakeVisible (statusLabel);
+    statusLabel.setText ("Ready", juce::dontSendNotification);
+    statusLabel.setJustificationType (juce::Justification::centredLeft);
+}
+
+StandaloneWindow::MainComponent::~MainComponent()
+{
+}
+
+void StandaloneWindow::MainComponent::paint (juce::Graphics& g)
+{
+    g.fillAll (juce::Colour (0xff2e2e2e));
+
+    // Draw logo in bottom-right corner
+    if (logoImage.isValid())
+    {
+        int logoWidth = 200;
+        int logoHeight = (int) (logoImage.getHeight() * (logoWidth / (float) logoImage.getWidth()));
+        int x = getWidth() - logoWidth - 10;
+        int y = getHeight() - logoHeight - 10;
+        g.drawImage (logoImage, x, y, logoWidth, logoHeight,
+                     0, 0, logoImage.getWidth(), logoImage.getHeight());
+    }
+}
+
+void StandaloneWindow::MainComponent::resized()
+{
+    auto area = getLocalBounds();
+
+    // Menu bar at very top (if present)
+    for (auto* child : getChildren())
+    {
+        if (auto* menuBar = dynamic_cast<juce::MenuBarComponent*> (child))
+        {
+            menuBar->setBounds (area.removeFromTop (juce::LookAndFeel::getDefaultLookAndFeel()
+                                                    .getDefaultMenuBarHeight()));
+            break;
+        }
+    }
+
+    // Transport controls at top
+    auto transportArea = area.removeFromTop (50);
+    transportArea.reduce (10, 10);
+
+    playButton.setBounds (transportArea.removeFromLeft (60));
+    transportArea.removeFromLeft (5);
+    pauseButton.setBounds (transportArea.removeFromLeft (60));
+    transportArea.removeFromLeft (5);
+    stopButton.setBounds (transportArea.removeFromLeft (60));
+    transportArea.removeFromLeft (10);
+
+    // Volume slider on right side
+    auto volumeArea = transportArea.removeFromRight (40);
+    volumeSlider.setBounds (volumeArea);
+    volumeLabel.setBounds (volumeArea.getX(), volumeArea.getBottom() + 2, volumeArea.getWidth(), 15);
+
+    transportArea.removeFromRight (10);
+    timeLabel.setBounds (transportArea.removeFromRight (100));
+    transportArea.removeFromRight (10);
+    positionSlider.setBounds (transportArea);
+
+    // Zoom controls at bottom
+    auto zoomArea = area.removeFromBottom (40);
+    zoomArea.reduce (10, 5);
+
+    zoomInButton.setBounds (zoomArea.removeFromLeft (40));
+    zoomArea.removeFromLeft (5);
+    zoomOutButton.setBounds (zoomArea.removeFromLeft (40));
+    zoomArea.removeFromLeft (5);
+    zoomFitButton.setBounds (zoomArea.removeFromLeft (60));
+
+    // Status bar at bottom
+    auto statusArea = area.removeFromBottom (30);
+    statusArea.reduce (10, 5);
+    statusLabel.setBounds (statusArea);
+
+    // Waveform takes 2/3 of remaining space
+    auto waveformHeight = (int) (area.getHeight() * 0.66f);
+    waveformDisplay.setBounds (area.removeFromTop (waveformHeight));
+
+    // Correction list takes remaining space
+    area.removeFromTop (5); // Small gap
+    correctionListView.setBounds (area);
+}
+
+void StandaloneWindow::MainComponent::buttonClicked (juce::Button* button)
+{
+    if (button == &playButton)
+    {
+        if (parentWindow && parentWindow->transportSource.getTotalLength() > 0.0)
+        {
+            parentWindow->transportSource.start();
+            parentWindow->isPlaying = true;
+            DBG ("Playback started");
+        }
+    }
+    else if (button == &pauseButton)
+    {
+        if (parentWindow)
+        {
+            parentWindow->transportSource.stop();
+            parentWindow->isPlaying = false;
+            DBG ("Playback paused");
+        }
+    }
+    else if (button == &stopButton)
+    {
+        if (parentWindow)
+        {
+            parentWindow->transportSource.stop();
+            parentWindow->transportSource.setPosition (0.0);
+            parentWindow->isPlaying = false;
+            DBG ("Playback stopped");
+        }
+    }
+    else if (button == &zoomInButton)
+    {
+        // Zoom in = increase zoom multiplier
+        waveformDisplay.setHorizontalZoom (waveformDisplay.horizontalZoom * 2.0);
+    }
+    else if (button == &zoomOutButton)
+    {
+        // Zoom out = decrease zoom multiplier
+        waveformDisplay.setHorizontalZoom (juce::jmax (1.0, waveformDisplay.horizontalZoom * 0.5));
+    }
+    else if (button == &zoomFitButton)
+    {
+        // Fit entire waveform
+        waveformDisplay.setHorizontalZoom (1.0);
+        waveformDisplay.scrollPosition = 0.0;
+    }
+}
+
+void StandaloneWindow::MainComponent::sliderValueChanged (juce::Slider* slider)
+{
+    if (slider == &positionSlider)
+    {
+        double position = positionSlider.getValue();
+        waveformDisplay.setPlaybackPosition (position);
+
+        // Update time label
+        if (currentBuffer != nullptr && currentSampleRate > 0)
+        {
+            double timeInSeconds = position * (currentBuffer->getNumSamples() / currentSampleRate);
+            int minutes = (int) (timeInSeconds / 60.0);
+            double seconds = timeInSeconds - minutes * 60;
+
+            juce::String timeString = juce::String::formatted ("%02d:%06.3f", minutes, seconds);
+            timeLabel.setText (timeString, juce::dontSendNotification);
+        }
+    }
+    else if (slider == &volumeSlider)
+    {
+        // Update volume
+        float volume = (float) volumeSlider.getValue();
+        if (parentWindow)
+        {
+            parentWindow->transportSource.setGain (volume);
+            DBG ("Volume set to: " + juce::String (volume * 100.0f, 0) + "%");
+        }
+    }
+}
+
+void StandaloneWindow::MainComponent::setAudioBuffer (const juce::AudioBuffer<float>* buffer, double sampleRate)
+{
+    currentBuffer = buffer;
+    currentSampleRate = sampleRate;
+
+    if (buffer != nullptr)
+    {
+        statusLabel.setText (juce::String (buffer->getNumChannels()) + " channels, " +
+                           juce::String (sampleRate / 1000.0, 1) + " kHz, " +
+                           juce::String (buffer->getNumSamples() / sampleRate, 2) + " seconds",
+                           juce::dontSendNotification);
+    }
+}
+
+void StandaloneWindow::MainComponent::updatePlaybackPosition (double position)
+{
+    positionSlider.setValue (position, juce::dontSendNotification);
+    waveformDisplay.setPlaybackPosition (position);
+}

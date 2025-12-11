@@ -1,0 +1,23 @@
+# Plan: Move Terminal Toggle Below Elapsed
+
+## Task
+Move the `>_` terminal toggle button to be positioned below the "Elapsed:" info box.
+
+## File to modify
+- `/home/flark/GIT/Stemperator/Stemperator_AI_Separate.lua`
+
+## Changes
+1. Change `nerdBtnY` from `infoY` to `infoY + infoH + PS(5)` (below the elapsed box)
+2. Keep `nerdBtnX` at `PS(25)` to align with the Elapsed box
+
+## Current code (lines ~9117-9118):
+```lua
+local nerdBtnX = PS(25)
+local nerdBtnY = infoY
+```
+
+## New code:
+```lua
+local nerdBtnX = PS(25)
+local nerdBtnY = infoY + infoH + PS(5)
+```

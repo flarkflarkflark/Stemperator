@@ -1,0 +1,192 @@
+#!/usr/bin/env python3
+"""
+Audio Separator Script for Stemperator
+Uses audio-separator library for high-quality AI stem separation.
+
+Usage:
+    python audio_separator_process.py <input.wav> <output_dir> [--model htdemucs]
+
+Models:
+    - htdemucs (default): Facebook's Hybrid Transformer Demucs
+    - htdemucs_ft: Fine-tuned version (better quality, slower)
+    - htdemucs_6s: 6-stem model (adds guitar, piano)
+    - UVR-MDX-NET-Voc_FT: Best for vocal isolation
+    - Kim_Vocal_2: Alternative vocal model
+
+Outputs:
+    <output_dir>/vocals.wav
+    <output_dir>/drums.wav
+    <output_dir>/bass.wav
+    <output_dir>/other.wav
+"""
+
+import sys
+import os
+import argparse
+import json
+from pathlib import Path
+
+def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs"):
+    """
+    Separate audio into stems using audio-separator.
+
+    Args:
+        input_file: Path to input audio file
+        output_dir: Directory to write output stems
+        model_name: Model to use for separation (htdemucs, htdemucs_ft, htdemucs_6s)
+
+    Returns:
+        dict: Paths to output stem files
+    """
+    from audio_separator.separator import Separator
+
+    # Map short names to full model names used by audio-separator
+    # Model names require .yaml suffix for Demucs v4 models
+    model_mapping = {
+        'htdemucs': 'htdemucs.yaml',
+        'htdemucs_ft': 'htdemucs_ft.yaml',
+        'htdemucs_6s': 'htdemucs_6s.yaml',
+        'hdemucs_mmi': 'hdemucs_mmi.yaml',
+    }
+
+    # Use mapped name or original if not in mapping
+    full_model_name = model_mapping.get(model_name, model_name)
+
+    # Create output directory
+    os.makedirs(output_dir, exist_ok=True)
+
+    print(f"Loading model: {full_model_name} (from {model_name})", file=sys.stderr)
+    print(f"Input: {input_file}", file=sys.stderr)
+    print(f"Output: {output_dir}", file=sys.stderr)
+
+    # Check GPU availability
+    import torch
+    if torch.cuda.is_available():
+        device = "cuda:0"  # Use first GPU (RX 9070)
+        print(f"Using GPU: {torch.cuda.get_device_name(0)}", file=sys.stderr)
+    else:
+        device = "cpu"
+        print("WARNING: No GPU detected, using CPU (will be slow)", file=sys.stderr)
+
+    # Initialize separator
+    # Note: Don't set output_bitrate - it causes ffmpeg errors with WAV format
+    separator = Separator(
+        output_dir=output_dir,
+        output_format="WAV",
+        normalization_threshold=0.9,
+        log_level=10,  # DEBUG
+        mdx_params={"device": device},
+        demucs_params={"device": device}
+    )
+
+    # Load model with full name
+    separator.load_model(full_model_name)
+
+    # Run separation
+    print("Processing...", file=sys.stderr)
+    output_files = separator.separate(input_file)
+
+    print(f"Raw output files: {output_files}", file=sys.stderr)
+
+    # Rename outputs to standard names
+    result = {}
+    stem_mapping = {
+        'vocals': ['vocals', 'vocal', 'Vocals'],
+        'drums': ['drums', 'drum', 'Drums'],
+        'bass': ['bass', 'Bass'],
+        'other': ['other', 'Other', 'no_vocals', 'instrumental', 'Instrumental']
+    }
+
+    for output_file in output_files:
+        # output_file may be relative or just filename - make it absolute
+        if not os.path.isabs(output_file):
+            output_file = os.path.join(output_dir, output_file)
+
+        filename = Path(output_file).stem.lower()
+
+        for stem_name, patterns in stem_mapping.items():
+            for pattern in patterns:
+                if pattern.lower() in filename:
+                    # Rename to standard name
+                    new_path = os.path.join(output_dir, f"{stem_name}.wav")
+                    if output_file != new_path:
+                        if os.path.exists(new_path):
+                            os.remove(new_path)
+                        import shutil
+                        shutil.move(output_file, new_path)
+                    result[stem_name] = new_path
+                    print(f"  {stem_name}: {new_path}", file=sys.stderr)
+                    break
+
+    return result
+
+def check_installation():
+    """Check if audio-separator is properly installed."""
+    try:
+        from audio_separator.separator import Separator
+        import torch
+
+        print(f"audio-separator: OK", file=sys.stderr)
+        print(f"PyTorch: {torch.__version__}", file=sys.stderr)
+        print(f"CUDA available: {torch.cuda.is_available()}", file=sys.stderr)
+
+        if torch.cuda.is_available():
+            print(f"GPU: {torch.cuda.get_device_name(0)}", file=sys.stderr)
+
+        return True
+    except ImportError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        print("\nInstall with: pip install audio-separator[gpu]", file=sys.stderr)
+        return False
+
+def main():
+    parser = argparse.ArgumentParser(description="Audio Separator for Stemperator")
+    parser.add_argument("input", nargs="?", help="Input audio file")
+    parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
+    parser.add_argument("--model", default="htdemucs",
+                        help="Model to use (htdemucs, htdemucs_ft, UVR-MDX-NET-Voc_FT, etc.)")
+    parser.add_argument("--check", action="store_true",
+                        help="Only check installation, don't process")
+    parser.add_argument("--list-models", action="store_true",
+                        help="List available models")
+
+    args = parser.parse_args()
+
+    if args.check:
+        if check_installation():
+            print("Installation OK!")
+            sys.exit(0)
+        else:
+            sys.exit(1)
+
+    if args.list_models:
+        print("Popular models:")
+        print("  htdemucs - Hybrid Transformer Demucs (default, fast)")
+        print("  htdemucs_ft - Fine-tuned Demucs (better quality)")
+        print("  htdemucs_6s - 6-stem model (guitar, piano)")
+        print("  UVR-MDX-NET-Voc_FT - Best vocal isolation")
+        print("  Kim_Vocal_2 - Alternative vocal model")
+        sys.exit(0)
+
+    if not args.input or not args.output_dir:
+        parser.print_help()
+        sys.exit(1)
+
+    if not os.path.exists(args.input):
+        print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
+        sys.exit(1)
+
+    try:
+        output_files = separate_stems(args.input, args.output_dir, args.model)
+
+        # Output JSON for C++ to parse
+        print(json.dumps(output_files))
+
+    except Exception as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
+
+if __name__ == "__main__":
+    main()

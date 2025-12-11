@@ -1,0 +1,202 @@
+name: Build
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*' ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            name: Linux
+            artifact_standalone: Stemperator
+            artifact_vst3: Stemperator.vst3
+          - os: macos-latest
+            name: macOS
+            artifact_standalone: Stemperator.app
+            artifact_vst3: Stemperator.vst3
+          - os: windows-latest
+            name: Windows
+            artifact_standalone: Stemperator.exe
+            artifact_vst3: Stemperator.vst3
+
+    runs-on: ${{ matrix.os }}
+    name: Build ${{ matrix.name }}
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Clone JUCE
+      run: git clone --depth 1 https://github.com/juce-framework/JUCE.git JUCE
+
+    - name: Install Linux dependencies
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y build-essential cmake libasound2-dev libjack-jackd2-dev \
+          libfreetype6-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+          libxinerama-dev libxrandr-dev libxrender-dev libglu1-mesa-dev mesa-common-dev libcurl4-openssl-dev
+
+    - name: Setup MSVC (Windows)
+      if: matrix.os == 'windows-latest'
+      uses: microsoft/setup-msbuild@v2
+
+    - name: Configure (Unix)
+      if: matrix.os != 'windows-latest'
+      run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DGPU_BACKEND=NONE
+
+    - name: Configure (Windows)
+      if: matrix.os == 'windows-latest'
+      run: cmake -B build -DGPU_BACKEND=NONE
+
+    - name: Build (Unix)
+      if: matrix.os != 'windows-latest'
+      run: cmake --build build --config Release -j4
+
+    - name: Build (Windows)
+      if: matrix.os == 'windows-latest'
+      run: cmake --build build --config Release
+
+    # Package artifacts
+    - name: Package Linux
+      if: matrix.os == 'ubuntu-latest'
+      run: |
+        mkdir -p release
+        # Standalone
+        cp build/Stemperator_artefacts/Release/Standalone/Stemperator release/
+        chmod +x release/Stemperator
+        tar -czvf Stemperator-Standalone-Linux-x86_64.tar.gz -C release Stemperator
+        # VST3
+        rm -rf release/*
+        cp -r build/Stemperator_artefacts/Release/VST3/Stemperator.vst3 release/
+        tar -czvf Stemperator-VST3-Linux-x86_64.tar.gz -C release Stemperator.vst3
+
+    - name: Package macOS
+      if: matrix.os == 'macos-latest'
+      run: |
+        mkdir -p release
+        # Standalone
+        cp -r "build/Stemperator_artefacts/Release/Standalone/Stemperator.app" release/
+        cd release && zip -r ../Stemperator-Standalone-macOS.zip Stemperator.app && cd ..
+        # VST3
+        rm -rf release/*
+        cp -r build/Stemperator_artefacts/Release/VST3/Stemperator.vst3 release/
+        cd release && zip -r ../Stemperator-VST3-macOS.zip Stemperator.vst3 && cd ..
+
+    - name: Package Windows
+      if: matrix.os == 'windows-latest'
+      shell: pwsh
+      run: |
+        New-Item -ItemType Directory -Force -Path release
+        # Standalone
+        Copy-Item "build/Stemperator_artefacts/Release/Standalone/Stemperator.exe" release/
+        Compress-Archive -Path release/Stemperator.exe -DestinationPath Stemperator-Standalone-Windows-x64.zip
+        # VST3
+        Remove-Item release/* -Recurse -Force
+        Copy-Item -Recurse "build/Stemperator_artefacts/Release/VST3/Stemperator.vst3" release/
+        Compress-Archive -Path release/Stemperator.vst3 -DestinationPath Stemperator-VST3-Windows-x64.zip
+
+    - name: Upload Standalone artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Stemperator-Standalone-${{ matrix.name }}
+        path: |
+          Stemperator-Standalone-*.tar.gz
+          Stemperator-Standalone-*.zip
+
+    - name: Upload VST3 artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Stemperator-VST3-${{ matrix.name }}
+        path: |
+          Stemperator-VST3-*.tar.gz
+          Stemperator-VST3-*.zip
+
+  # Raspberry Pi ARM64 build (Pi 4/5)
+  build-arm64:
+    runs-on: ubuntu-latest
+    name: Build Linux ARM64 (Raspberry Pi 4/5)
+
+    steps:
+    - uses: actions/checkout@v4
+
+    - name: Set up QEMU
+      uses: docker/setup-qemu-action@v3
+      with:
+        platforms: arm64
+
+    - name: Build in ARM64 container
+      uses: uraimo/run-on-arch-action@v2
+      with:
+        arch: aarch64
+        distro: ubuntu22.04
+        githubToken: ${{ github.token }}
+        install: |
+          apt-get update
+          apt-get install -y git build-essential cmake libasound2-dev libjack-jackd2-dev \
+            libfreetype6-dev libfontconfig1-dev libx11-dev libxcomposite-dev libxcursor-dev libxext-dev \
+            libxinerama-dev libxrandr-dev libxrender-dev libglu1-mesa-dev mesa-common-dev libcurl4-openssl-dev
+        run: |
+          git clone --depth 1 https://github.com/juce-framework/JUCE.git JUCE
+          cmake -B build -DCMAKE_BUILD_TYPE=Release -DGPU_BACKEND=NONE
+          cmake --build build --config Release -j4
+
+    - name: Package ARM64
+      uses: uraimo/run-on-arch-action@v2
+      with:
+        arch: aarch64
+        distro: ubuntu22.04
+        githubToken: ${{ github.token }}
+        run: |
+          mkdir -p release
+          cp build/Stemperator_artefacts/Release/Standalone/Stemperator release/
+          chmod +x release/Stemperator
+          tar -czvf Stemperator-Standalone-Linux-arm64.tar.gz -C release Stemperator
+          rm -rf release/*
+          cp -r build/Stemperator_artefacts/Release/VST3/Stemperator.vst3 release/
+          tar -czvf Stemperator-VST3-Linux-arm64.tar.gz -C release Stemperator.vst3
+
+    - name: Upload ARM64 Standalone artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Stemperator-Standalone-Linux-ARM64
+        path: Stemperator-Standalone-Linux-arm64.tar.gz
+
+    - name: Upload ARM64 VST3 artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: Stemperator-VST3-Linux-ARM64
+        path: Stemperator-VST3-Linux-arm64.tar.gz
+
+  # Create release when a tag is pushed
+  release:
+    needs: [build, build-arm64]
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download all artifacts
+      uses: actions/download-artifact@v4
+      with:
+        path: artifacts
+
+    - name: Display structure
+      run: find artifacts -type f
+
+    - name: Create Release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: |
+          artifacts/**/*.tar.gz
+          artifacts/**/*.zip
+        generate_release_notes: true
+        draft: false
+        prerelease: false

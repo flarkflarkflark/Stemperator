@@ -1,0 +1,461 @@
+#include "GPUStemSeparator.h"
+#include <cmath>
+
+#if USE_HIP
+#include <hip/hip_runtime.h>
+#include <rocfft/rocfft.h>
+
+// GPU implementation struct with HIP/rocFFT resources
+struct GPUStemSeparator::GPUImpl
+{
+    hipStream_t stream = nullptr;
+    rocfft_plan fftPlanForward = nullptr;
+    rocfft_plan fftPlanInverse = nullptr;
+    rocfft_execution_info execInfo = nullptr;
+
+    // Device buffers
+    float* d_input = nullptr;
+    float* d_output = nullptr;
+    void* d_workBuffer = nullptr;
+    size_t workBufferSize = 0;
+
+    bool initialized = false;
+    juce::String deviceName;
+
+    bool initialize (int fftSize)
+    {
+        hipError_t err;
+
+        // Get device info
+        int deviceCount = 0;
+        err = hipGetDeviceCount (&deviceCount);
+        if (err != hipSuccess || deviceCount == 0)
+            return false;
+
+        hipDeviceProp_t props;
+        err = hipGetDeviceProperties (&props, 0);
+        if (err != hipSuccess)
+            return false;
+
+        deviceName = juce::String (props.name) + " (" +
+                     juce::String (props.multiProcessorCount) + " CUs)";
+
+        // Create stream
+        err = hipStreamCreate (&stream);
+        if (err != hipSuccess)
+            return false;
+
+        // Allocate device memory (padded for FFT)
+        size_t bufferBytes = (fftSize + 2) * sizeof (float);
+        if (hipMalloc (&d_input, bufferBytes) != hipSuccess ||
+            hipMalloc (&d_output, bufferBytes) != hipSuccess)
+        {
+            cleanup();
+            return false;
+        }
+
+        // Create rocFFT plans
+        size_t lengths[1] = { (size_t) fftSize };
+        rocfft_status status;
+
+        // Forward R2C plan
+        status = rocfft_plan_create (&fftPlanForward,
+                                      rocfft_placement_notinplace,
+                                      rocfft_transform_type_real_forward,
+                                      rocfft_precision_single,
+                                      1, lengths, 1, nullptr);
+        if (status != rocfft_status_success)
+        {
+            cleanup();
+            return false;
+        }
+
+        // Inverse C2R plan
+        status = rocfft_plan_create (&fftPlanInverse,
+                                      rocfft_placement_notinplace,
+                                      rocfft_transform_type_real_inverse,
+                                      rocfft_precision_single,
+                                      1, lengths, 1, nullptr);
+        if (status != rocfft_status_success)
+        {
+            cleanup();
+            return false;
+        }
+
+        // Get work buffer size
+        status = rocfft_plan_get_work_buffer_size (fftPlanForward, &workBufferSize);
+        if (status == rocfft_status_success && workBufferSize > 0)
+            hipMalloc (&d_workBuffer, workBufferSize);
+
+        // Create execution info
+        rocfft_execution_info_create (&execInfo);
+        if (d_workBuffer != nullptr)
+            rocfft_execution_info_set_work_buffer (execInfo, d_workBuffer, workBufferSize);
+        rocfft_execution_info_set_stream (execInfo, stream);
+
+        initialized = true;
+        return true;
+    }
+
+    void cleanup()
+    {
+        if (fftPlanForward) { rocfft_plan_destroy (fftPlanForward); fftPlanForward = nullptr; }
+        if (fftPlanInverse) { rocfft_plan_destroy (fftPlanInverse); fftPlanInverse = nullptr; }
+        if (execInfo) { rocfft_execution_info_destroy (execInfo); execInfo = nullptr; }
+        if (d_input) { hipFree (d_input); d_input = nullptr; }
+        if (d_output) { hipFree (d_output); d_output = nullptr; }
+        if (d_workBuffer) { hipFree (d_workBuffer); d_workBuffer = nullptr; }
+        if (stream) { hipStreamDestroy (stream); stream = nullptr; }
+        initialized = false;
+    }
+
+    void forwardFFT (float* hostInput, float* hostOutput, int fftSize)
+    {
+        if (!initialized) return;
+
+        // Copy input to device
+        hipMemcpyAsync (d_input, hostInput, fftSize * sizeof (float),
+                        hipMemcpyHostToDevice, stream);
+
+        // Execute forward FFT
+        void* inBuffers[1] = { d_input };
+        void* outBuffers[1] = { d_output };
+        rocfft_execute (fftPlanForward, inBuffers, outBuffers, execInfo);
+
+        // Copy result back
+        hipMemcpyAsync (hostOutput, d_output, (fftSize + 2) * sizeof (float),
+                        hipMemcpyDeviceToHost, stream);
+        hipStreamSynchronize (stream);
+    }
+
+    void inverseFFT (float* hostInput, float* hostOutput, int fftSize)
+    {
+        if (!initialized) return;
+
+        // Copy input to device
+        hipMemcpyAsync (d_input, hostInput, (fftSize + 2) * sizeof (float),
+                        hipMemcpyHostToDevice, stream);
+
+        // Execute inverse FFT
+        void* inBuffers[1] = { d_input };
+        void* outBuffers[1] = { d_output };
+        rocfft_execute (fftPlanInverse, inBuffers, outBuffers, execInfo);
+
+        // Copy result back
+        hipMemcpyAsync (hostOutput, d_output, fftSize * sizeof (float),
+                        hipMemcpyDeviceToHost, stream);
+        hipStreamSynchronize (stream);
+    }
+};
+#else
+// Stub implementation when HIP is not available
+struct GPUStemSeparator::GPUImpl
+{
+    bool initialized = false;
+    juce::String deviceName = "N/A";
+    bool initialize (int) { return false; }
+    void cleanup() {}
+    void forwardFFT (float*, float*, int) {}
+    void inverseFFT (float*, float*, int) {}
+};
+#endif
+
+GPUStemSeparator::GPUStemSeparator()
+    : gpu (std::make_unique<GPUImpl>())
+{
+    // Initialize window (Hann)
+    window.resize (fftSize);
+    for (int i = 0; i < fftSize; ++i)
+        window[static_cast<size_t> (i)] = 0.5f * (1.0f - std::cos (2.0f * juce::MathConstants<float>::pi * i / (fftSize - 1)));
+
+    // Initialize FFT buffers
+    fftBuffer.resize (fftSize * 2, 0.0f);
+    spectrumL.resize (numBins);
+    spectrumR.resize (numBins);
+    spectrumMid.resize (numBins);
+    spectrumSide.resize (numBins);
+    prevMagnitude.resize (numBins, 0.0f);
+
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        stemSpectraL[static_cast<size_t> (stem)].resize (numBins);
+        stemSpectraR[static_cast<size_t> (stem)].resize (numBins);
+    }
+
+    // Input/output buffers
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        inputBuffer[static_cast<size_t> (ch)].resize (fftSize, 0.0f);
+        for (int stem = 0; stem < NumStems; ++stem)
+            outputBuffers[static_cast<size_t> (stem)][static_cast<size_t> (ch)].resize (fftSize, 0.0f);
+    }
+
+    // Try to initialize GPU
+#if USE_HIP
+    gpuAvailable = gpu->initialize (fftSize);
+    if (gpuAvailable)
+        gpuInfo = "GPU: " + gpu->deviceName + " (rocFFT accelerated)";
+    else
+        gpuInfo = "GPU not available - using CPU FFT";
+#else
+    gpuInfo = "Built without GPU support - using CPU FFT";
+#endif
+}
+
+GPUStemSeparator::~GPUStemSeparator()
+{
+#if USE_HIP
+    if (gpu)
+        gpu->cleanup();
+#endif
+}
+
+void GPUStemSeparator::prepare (double sampleRate, int maxBlockSize)
+{
+    currentSampleRate = sampleRate;
+
+    for (int stem = 0; stem < NumStems; ++stem)
+        stems[static_cast<size_t> (stem)].setSize (2, maxBlockSize);
+
+    reset();
+}
+
+void GPUStemSeparator::reset()
+{
+    inputWritePos = 0;
+    outputReadPos = 0;
+    samplesUntilNextFFT = hopSize;
+
+    for (int ch = 0; ch < 2; ++ch)
+    {
+        std::fill (inputBuffer[static_cast<size_t> (ch)].begin(),
+                   inputBuffer[static_cast<size_t> (ch)].end(), 0.0f);
+        for (int stem = 0; stem < NumStems; ++stem)
+            std::fill (outputBuffers[static_cast<size_t> (stem)][static_cast<size_t> (ch)].begin(),
+                       outputBuffers[static_cast<size_t> (stem)][static_cast<size_t> (ch)].end(), 0.0f);
+    }
+
+    std::fill (prevMagnitude.begin(), prevMagnitude.end(), 0.0f);
+}
+
+void GPUStemSeparator::process (juce::AudioBuffer<float>& buffer)
+{
+    int numSamples = buffer.getNumSamples();
+    int numChannels = juce::jmin (2, buffer.getNumChannels());
+
+    // Prepare stem output buffers
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        stems[static_cast<size_t> (stem)].setSize (2, numSamples, false, false, true);
+        stems[static_cast<size_t> (stem)].clear();
+    }
+
+    // Process sample by sample through overlap-add
+    for (int i = 0; i < numSamples; ++i)
+    {
+        // Write input to circular buffer
+        for (int ch = 0; ch < numChannels; ++ch)
+            inputBuffer[static_cast<size_t> (ch)][static_cast<size_t> (inputWritePos)] = buffer.getSample (ch, i);
+
+        // Read output from circular buffer
+        for (int stem = 0; stem < NumStems; ++stem)
+        {
+            for (int ch = 0; ch < numChannels; ++ch)
+            {
+                stems[static_cast<size_t> (stem)].setSample (ch, i,
+                    outputBuffers[static_cast<size_t> (stem)][static_cast<size_t> (ch)][static_cast<size_t> (outputReadPos)]);
+                outputBuffers[static_cast<size_t> (stem)][static_cast<size_t> (ch)][static_cast<size_t> (outputReadPos)] = 0.0f;
+            }
+        }
+
+        inputWritePos = (inputWritePos + 1) % fftSize;
+        outputReadPos = (outputReadPos + 1) % fftSize;
+        samplesUntilNextFFT--;
+
+        // Time to process an FFT frame
+        if (samplesUntilNextFFT <= 0)
+        {
+            processFrame();
+            samplesUntilNextFFT = hopSize;
+        }
+    }
+}
+
+void GPUStemSeparator::processFrame()
+{
+    // Process both channels
+    processFFTFrame (0);  // Left
+    processFFTFrame (1);  // Right (or copy L if mono)
+
+    // Separate into stems
+    separateStems();
+
+    // Synthesize stem outputs
+    synthesizeStems();
+}
+
+void GPUStemSeparator::processFFTFrame (int channel)
+{
+    int readPos = (inputWritePos - fftSize + fftSize) % fftSize;
+
+    // Copy input with window
+    for (int i = 0; i < fftSize; ++i)
+    {
+        int pos = (readPos + i) % fftSize;
+        fftBuffer[static_cast<size_t> (i)] = inputBuffer[static_cast<size_t> (channel)][static_cast<size_t> (pos)] *
+                                             window[static_cast<size_t> (i)];
+    }
+
+    // Forward FFT (GPU or CPU)
+#if USE_HIP
+    if (gpuAvailable)
+    {
+        gpu->forwardFFT (fftBuffer.data(), fftBuffer.data(), fftSize);
+    }
+    else
+#endif
+    {
+        // Clear imaginary part for real FFT
+        for (int i = 0; i < fftSize; ++i)
+            fftBuffer[static_cast<size_t> (fftSize + i)] = 0.0f;
+        fft.performRealOnlyForwardTransform (fftBuffer.data());
+    }
+
+    // Extract spectrum
+    auto& spectrum = (channel == 0) ? spectrumL : spectrumR;
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        float real = fftBuffer[static_cast<size_t> (bin * 2)];
+        float imag = fftBuffer[static_cast<size_t> (bin * 2 + 1)];
+        spectrum[static_cast<size_t> (bin)] = std::complex<float> (real, imag);
+    }
+}
+
+void GPUStemSeparator::separateStems()
+{
+    // Compute Mid/Side
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        spectrumMid[static_cast<size_t> (bin)] = (spectrumL[static_cast<size_t> (bin)] + spectrumR[static_cast<size_t> (bin)]) * 0.5f;
+        spectrumSide[static_cast<size_t> (bin)] = (spectrumL[static_cast<size_t> (bin)] - spectrumR[static_cast<size_t> (bin)]) * 0.5f;
+    }
+
+    int bassCutoffBin = freqToBin (bassCutoffHz);
+
+    for (int bin = 0; bin < numBins; ++bin)
+    {
+        float freq = binToFreq (bin);
+        float midMag = std::abs (spectrumMid[static_cast<size_t> (bin)]);
+        float sideMag = std::abs (spectrumSide[static_cast<size_t> (bin)]);
+
+        // Bass mask - low frequencies from mid channel
+        float bassMask = 0.0f;
+        if (bin < bassCutoffBin)
+        {
+            float rolloff = 1.0f - (float) bin / bassCutoffBin;
+            bassMask = rolloff * rolloff;
+        }
+        else if (bin < bassCutoffBin * 2)
+        {
+            float t = (float) (bin - bassCutoffBin) / bassCutoffBin;
+            bassMask = (1.0f - t) * 0.2f;
+        }
+
+        // Vocals mask - center channel in vocal frequency range
+        float vocalsMask = 0.0f;
+        if (freq > 100.0f && freq < 8000.0f)
+        {
+            float centerWeight = midMag / std::max (sideMag + midMag, 0.0001f);
+            vocalsMask = centerWeight * vocalsFocus;
+            if (freq > 300.0f && freq < 3500.0f)
+                vocalsMask *= 1.3f;
+            vocalsMask = std::min (vocalsMask, 1.0f);
+        }
+
+        // Drums mask - transient detection
+        float currentMag = std::abs (spectrumL[static_cast<size_t> (bin)]) + std::abs (spectrumR[static_cast<size_t> (bin)]);
+        float prevMag = prevMagnitude[static_cast<size_t> (bin)];
+        float transientRatio = (currentMag - prevMag) / std::max (prevMag, 0.0001f);
+        transientRatio = std::max (0.0f, transientRatio);
+
+        float drumsMask = transientRatio * drumSensitivity;
+        if ((freq > 50.0f && freq < 400.0f) || (freq > 4000.0f && freq < 12000.0f))
+            drumsMask *= 1.2f;
+        drumsMask = std::min (drumsMask, 1.0f);
+
+        prevMagnitude[static_cast<size_t> (bin)] = currentMag * 0.3f + prevMag * 0.7f;
+
+        // Normalize and compute Other
+        float total = bassMask + vocalsMask + drumsMask;
+        float otherMask = std::max (0.0f, 1.0f - total);
+
+        if (total > 1.0f)
+        {
+            float scale = 1.0f / total;
+            bassMask *= scale;
+            vocalsMask *= scale;
+            drumsMask *= scale;
+            otherMask = 0.0f;
+        }
+
+        // Apply masks
+        size_t b = static_cast<size_t> (bin);
+
+        // Bass: mono from mid
+        stemSpectraL[Bass][b] = spectrumMid[b] * bassMask;
+        stemSpectraR[Bass][b] = stemSpectraL[Bass][b];
+
+        // Vocals: from mid
+        stemSpectraL[Vocals][b] = spectrumMid[b] * vocalsMask;
+        stemSpectraR[Vocals][b] = stemSpectraL[Vocals][b];
+
+        // Drums: from full mix
+        stemSpectraL[Drums][b] = spectrumL[b] * drumsMask;
+        stemSpectraR[Drums][b] = spectrumR[b] * drumsMask;
+
+        // Other: remainder
+        stemSpectraL[Other][b] = spectrumL[b] * otherMask;
+        stemSpectraR[Other][b] = spectrumR[b] * otherMask;
+    }
+}
+
+void GPUStemSeparator::synthesizeStems()
+{
+    int writePos = (outputReadPos - hopSize + fftSize) % fftSize;
+
+    for (int stem = 0; stem < NumStems; ++stem)
+    {
+        for (int ch = 0; ch < 2; ++ch)
+        {
+            auto& spectrum = (ch == 0) ? stemSpectraL[static_cast<size_t> (stem)]
+                                       : stemSpectraR[static_cast<size_t> (stem)];
+
+            // Pack spectrum into FFT buffer
+            for (int bin = 0; bin < numBins; ++bin)
+            {
+                fftBuffer[static_cast<size_t> (bin * 2)] = spectrum[static_cast<size_t> (bin)].real();
+                fftBuffer[static_cast<size_t> (bin * 2 + 1)] = spectrum[static_cast<size_t> (bin)].imag();
+            }
+
+            // Inverse FFT (GPU or CPU)
+#if USE_HIP
+            if (gpuAvailable)
+            {
+                gpu->inverseFFT (fftBuffer.data(), fftBuffer.data(), fftSize);
+            }
+            else
+#endif
+            {
+                fft.performRealOnlyInverseTransform (fftBuffer.data());
+            }
+
+            // Overlap-add with window
+            for (int i = 0; i < fftSize; ++i)
+            {
+                int pos = (writePos + i) % fftSize;
+                outputBuffers[static_cast<size_t> (stem)][static_cast<size_t> (ch)][static_cast<size_t> (pos)] +=
+                    fftBuffer[static_cast<size_t> (i)] * window[static_cast<size_t> (i)] / (fftSize * 0.375f);
+            }
+        }
+    }
+}

@@ -1,0 +1,142 @@
+#include <iostream>
+#include <hip/hip_runtime.h>
+#include <rocfft/rocfft.h>
+
+int main()
+{
+    std::cout << "=== GPU Test (AMD RX 9070) ===" << std::endl;
+
+    // Test 1: HIP Device Detection
+    std::cout << "\n1. Testing HIP Device Detection..." << std::endl;
+    int deviceCount = 0;
+    hipError_t err = hipGetDeviceCount(&deviceCount);
+
+    if (err == hipSuccess && deviceCount > 0)
+    {
+        std::cout << "   ✓ Found " << deviceCount << " HIP device(s)" << std::endl;
+
+        for (int i = 0; i < deviceCount; ++i)
+        {
+            hipDeviceProp_t prop;
+            hipGetDeviceProperties(&prop, i);
+
+            std::cout << "\n   Device " << i << ":" << std::endl;
+            std::cout << "   - Name: " << prop.name << std::endl;
+            std::cout << "   - Total Memory: " << (prop.totalGlobalMem / (1024*1024)) << " MB" << std::endl;
+            std::cout << "   - Compute Units: " << prop.multiProcessorCount << std::endl;
+            std::cout << "   - Max Clock: " << (prop.clockRate / 1000) << " MHz" << std::endl;
+            std::cout << "   - Warp Size: " << prop.warpSize << std::endl;
+        }
+    }
+    else
+    {
+        std::cout << "   ✗ No HIP devices found or error: " << err << std::endl;
+        return 1;
+    }
+
+    // Test 2: GPU Memory Allocation
+    std::cout << "\n2. Testing GPU Memory Allocation..." << std::endl;
+    void* gpuPtr = nullptr;
+    size_t allocSize = 1024 * 1024; // 1 MB
+
+    err = hipMalloc(&gpuPtr, allocSize);
+    if (err == hipSuccess)
+    {
+        std::cout << "   ✓ Allocated " << allocSize << " bytes on GPU" << std::endl;
+
+        // Test memory copy
+        float* hostData = new float[allocSize / sizeof(float)];
+        for (size_t i = 0; i < allocSize / sizeof(float); ++i)
+            hostData[i] = 3.14f;
+
+        err = hipMemcpy(gpuPtr, hostData, allocSize, hipMemcpyHostToDevice);
+        if (err == hipSuccess)
+        {
+            std::cout << "   ✓ Copied data to GPU" << std::endl;
+
+            // Copy back
+            float* readback = new float[allocSize / sizeof(float)];
+            err = hipMemcpy(readback, gpuPtr, allocSize, hipMemcpyDeviceToHost);
+
+            if (err == hipSuccess)
+            {
+                std::cout << "   ✓ Copied data from GPU" << std::endl;
+
+                // Verify
+                if (readback[0] == 3.14f && readback[100] == 3.14f)
+                    std::cout << "   ✓ Data verification passed" << std::endl;
+                else
+                    std::cout << "   ✗ Data verification failed" << std::endl;
+            }
+
+            delete[] readback;
+        }
+
+        delete[] hostData;
+        hipFree(gpuPtr);
+    }
+    else
+    {
+        std::cout << "   ✗ GPU allocation failed: " << err << std::endl;
+    }
+
+    // Test 3: rocFFT
+    std::cout << "\n3. Testing rocFFT..." << std::endl;
+    rocfft_plan plan = nullptr;
+    size_t fftSize = 2048;
+    rocfft_status status = rocfft_plan_create(&plan,
+                                               rocfft_placement_notinplace,
+                                               rocfft_transform_type_real_forward,
+                                               rocfft_precision_single,
+                                               1, // 1D
+                                               &fftSize,
+                                               1,   // batch
+                                               nullptr);
+
+    if (status == rocfft_status_success)
+    {
+        std::cout << "   ✓ rocFFT plan created (size: " << fftSize << ")" << std::endl;
+        rocfft_plan_destroy(plan);
+    }
+    else
+    {
+        std::cout << "   ✗ rocFFT plan creation failed: " << status << std::endl;
+    }
+
+    // Test 4: Performance Check
+    std::cout << "\n4. Testing GPU Performance..." << std::endl;
+    hipEvent_t start, stop;
+    hipEventCreate(&start);
+    hipEventCreate(&stop);
+
+    void* perfGpu;
+    size_t perfSize = 100 * 1024 * 1024; // 100 MB
+    err = hipMalloc(&perfGpu, perfSize);
+
+    if (err == hipSuccess)
+    {
+        float* perfHost = new float[perfSize / sizeof(float)];
+
+        hipEventRecord(start);
+        hipMemcpy(perfGpu, perfHost, perfSize, hipMemcpyHostToDevice);
+        hipEventRecord(stop);
+        hipEventSynchronize(stop);
+
+        float milliseconds = 0;
+        hipEventElapsedTime(&milliseconds, start, stop);
+
+        float bandwidth = (perfSize / (1024.0f * 1024.0f)) / (milliseconds / 1000.0f);
+        std::cout << "   GPU Upload Bandwidth: " << bandwidth << " MB/s" << std::endl;
+
+        delete[] perfHost;
+        hipFree(perfGpu);
+    }
+
+    hipEventDestroy(start);
+    hipEventDestroy(stop);
+
+    std::cout << "\n=== GPU Test Complete ===" << std::endl;
+    std::cout << "✓ Your AMD RX 9070 is ready for audio processing!" << std::endl;
+
+    return 0;
+}

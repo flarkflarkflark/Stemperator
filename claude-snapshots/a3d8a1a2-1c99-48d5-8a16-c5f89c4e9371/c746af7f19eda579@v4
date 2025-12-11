@@ -1,0 +1,211 @@
+#include "StemChannel.h"
+#include "PremiumLookAndFeel.h"
+#include <cmath>
+
+StemChannel::StemChannel (const juce::String& name, juce::Colour colour)
+    : stemName (name), stemColour (colour)
+{
+    // Optimize rendering - cache to reduce GPU load when idle
+    setBufferedToImage (true);
+    setOpaque (false);  // StemChannels have rounded corners and transparency
+
+    // Gain slider (vertical fader)
+    // Note: Don't set range/value here - the attachment will do it from the parameter
+    gainSlider.setSliderStyle (juce::Slider::LinearVertical);
+    gainSlider.setTextBoxStyle (juce::Slider::TextBoxBelow, false, 55, 18);
+    gainSlider.setTextValueSuffix (" dB");
+    gainSlider.setColour (juce::Slider::thumbColourId, stemColour);
+    gainSlider.setColour (juce::Slider::trackColourId, stemColour.darker (0.3f));
+    gainSlider.setColour (juce::Slider::textBoxTextColourId, PremiumLookAndFeel::Colours::textBright);
+    gainSlider.setColour (juce::Slider::textBoxOutlineColourId, juce::Colours::transparentBlack);
+    gainSlider.setColour (juce::Slider::textBoxBackgroundColourId, PremiumLookAndFeel::Colours::bgPanel);
+    addAndMakeVisible (gainSlider);
+
+    // Mute button
+    muteButton.setClickingTogglesState (true);
+    muteButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    muteButton.setColour (juce::TextButton::buttonOnColourId, PremiumLookAndFeel::Colours::mute);
+    muteButton.setColour (juce::TextButton::textColourOnId, juce::Colours::white);
+    muteButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    muteButton.addListener (this);
+    addAndMakeVisible (muteButton);
+
+    // Solo button
+    soloButton.setClickingTogglesState (true);
+    soloButton.setColour (juce::TextButton::buttonColourId, PremiumLookAndFeel::Colours::bgPanel);
+    soloButton.setColour (juce::TextButton::buttonOnColourId, PremiumLookAndFeel::Colours::solo);
+    soloButton.setColour (juce::TextButton::textColourOnId, juce::Colours::black);
+    soloButton.setColour (juce::TextButton::textColourOffId, PremiumLookAndFeel::Colours::textMid);
+    soloButton.addListener (this);
+    addAndMakeVisible (soloButton);
+
+    // Name label
+    nameLabel.setText (stemName, juce::dontSendNotification);
+    nameLabel.setJustificationType (juce::Justification::centred);
+    nameLabel.setColour (juce::Label::textColourId, stemColour);
+    nameLabel.setFont (juce::FontOptions (13.0f).withStyle ("Bold"));
+    addAndMakeVisible (nameLabel);
+
+    // Note: No timer needed - the parent editor updates levels via setLevel() which triggers repaint
+}
+
+void StemChannel::paint (juce::Graphics& g)
+{
+    auto bounds = getLocalBounds().toFloat();
+
+    // Background with subtle gradient
+    juce::ColourGradient bgGradient (
+        PremiumLookAndFeel::Colours::bgLight.withAlpha (0.6f), bounds.getX(), bounds.getY(),
+        PremiumLookAndFeel::Colours::bgDark.withAlpha (0.8f), bounds.getX(), bounds.getBottom(), false);
+    g.setGradientFill (bgGradient);
+    g.fillRoundedRectangle (bounds, 8.0f);
+
+    // Border with stem color accent at top
+    g.setColour (stemColour.withAlpha (0.4f));
+    g.drawRoundedRectangle (bounds.reduced (1.0f), 8.0f, 1.5f);
+
+    // Top accent line (stem color)
+    g.setColour (stemColour);
+    g.fillRoundedRectangle (bounds.getX() + 10, bounds.getY() + 2, bounds.getWidth() - 20, 3.0f, 1.5f);
+
+    // Level meter (right side)
+    auto meterX = bounds.getRight() - 16.0f;
+    auto meterTop = bounds.getY() + 40.0f;
+    auto meterBottom = bounds.getBottom() - 85.0f;
+    auto meterHeight = meterBottom - meterTop;
+    auto meterWidth = 8.0f;
+
+    // Meter background
+    g.setColour (PremiumLookAndFeel::Colours::bgDark);
+    g.fillRoundedRectangle (meterX, meterTop, meterWidth, meterHeight, 3.0f);
+
+    // Meter segments with gradient coloring
+    float levelHeight = displayLevel * meterHeight;
+    if (levelHeight > 0)
+    {
+        auto levelRect = juce::Rectangle<float> (meterX, meterBottom - levelHeight, meterWidth, levelHeight);
+
+        // Color based on level: green -> yellow -> red
+        juce::Colour levelColour;
+        if (displayLevel > 0.9f)
+            levelColour = PremiumLookAndFeel::Colours::mute;  // Red for clipping
+        else if (displayLevel > 0.7f)
+            levelColour = juce::Colour (0xffffcc00);  // Yellow warning
+        else
+            levelColour = stemColour;  // Normal - stem color
+
+        // Glow effect
+        g.setColour (levelColour.withAlpha (0.3f));
+        g.fillRoundedRectangle (levelRect.expanded (2.0f, 0), 4.0f);
+
+        // Main meter fill
+        g.setColour (levelColour);
+        g.fillRoundedRectangle (levelRect, 3.0f);
+    }
+
+    // Peak hold indicator
+    if (peakLevel > 0.01f)
+    {
+        float peakY = meterBottom - (peakLevel * meterHeight);
+        juce::Colour peakColour = peakLevel > 0.9f ? PremiumLookAndFeel::Colours::mute : stemColour.brighter();
+        g.setColour (peakColour);
+        g.fillRoundedRectangle (meterX - 1, peakY - 1.5f, meterWidth + 2, 3.0f, 1.5f);
+    }
+
+    // dB markings
+    g.setColour (PremiumLookAndFeel::Colours::textDim);
+    g.setFont (juce::FontOptions (8.0f));
+
+    const float dbMarks[] = { 0.0f, -6.0f, -12.0f, -24.0f, -48.0f };
+    for (float db : dbMarks)
+    {
+        float normalizedDb = (db + 60.0f) / 72.0f;  // -60 to +12 dB range
+        float y = meterBottom - (normalizedDb * meterHeight);
+        g.drawText (juce::String ((int) db), (int) (meterX - 22), (int) (y - 6), 18, 12,
+                    juce::Justification::centredRight, false);
+    }
+}
+
+void StemChannel::resized()
+{
+    auto bounds = getLocalBounds().reduced (6);
+
+    // Name at top
+    nameLabel.setBounds (bounds.removeFromTop (24));
+    bounds.removeFromTop (3);
+
+    // Mute/Solo buttons at bottom
+    auto buttonArea = bounds.removeFromBottom (60);
+    auto buttonRow1 = buttonArea.removeFromTop (28);
+    auto buttonRow2 = buttonArea.removeFromTop (28);
+
+    // Center buttons and make them smaller
+    int buttonWidth = juce::jmin (bounds.getWidth() - 24, 50);
+    int buttonX = (bounds.getWidth() - buttonWidth) / 2 + bounds.getX();
+
+    muteButton.setBounds (buttonX, buttonRow1.getY() + 2, buttonWidth, 24);
+    soloButton.setBounds (buttonX, buttonRow2.getY() + 2, buttonWidth, 24);
+
+    // Fader takes remaining space (leave room for meter on right)
+    bounds.removeFromRight (22);
+    bounds.removeFromBottom (3);
+    gainSlider.setBounds (bounds);
+}
+
+void StemChannel::buttonClicked (juce::Button* button)
+{
+    if (button == &muteButton && onMuteChanged)
+        onMuteChanged (muteButton.getToggleState());
+    else if (button == &soloButton && onSoloChanged)
+        onSoloChanged (soloButton.getToggleState());
+}
+
+void StemChannel::attachToParameters (juce::AudioProcessorValueTreeState& apvts,
+                                       const juce::String& gainID,
+                                       const juce::String& muteID,
+                                       const juce::String& soloID)
+{
+    gainAttachment = std::make_unique<juce::AudioProcessorValueTreeState::SliderAttachment> (
+        apvts, gainID, gainSlider);
+    muteAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        apvts, muteID, muteButton);
+    soloAttachment = std::make_unique<juce::AudioProcessorValueTreeState::ButtonAttachment> (
+        apvts, soloID, soloButton);
+}
+
+void StemChannel::setLevel (float level)
+{
+    // Only update if level changed significantly
+    constexpr float threshold = 0.001f;
+    if (std::abs (level - currentLevel) < threshold &&
+        std::abs (displayLevel - currentLevel) < threshold)
+        return;  // No significant change, skip repaint
+
+    currentLevel = level;
+    updateMeter();
+    repaint();
+}
+
+void StemChannel::updateMeter()
+{
+    // Smooth level display with faster attack, slower release
+    if (currentLevel > displayLevel)
+        displayLevel = currentLevel;  // Fast attack
+    else
+        displayLevel = displayLevel * 0.92f + currentLevel * 0.08f;  // Slow release
+
+    // Peak hold
+    if (currentLevel >= peakLevel)
+    {
+        peakLevel = currentLevel;
+        peakHoldCount = 0;
+    }
+    else
+    {
+        peakHoldCount++;
+        if (peakHoldCount > peakHoldTime)
+        {
+            peakLevel *= 0.95f;  // Decay peak
+        }
+    }
+}

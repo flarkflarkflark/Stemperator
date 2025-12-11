@@ -1,0 +1,128 @@
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+
+/**
+ * Custom LookAndFeel for Glowing Activity Knobs
+ *
+ * Creates rotary sliders with an inner glow effect that radiates
+ * from center to edge when the associated DSP module is active.
+ * The glow intensity reflects real-time processing activity.
+ */
+class GlowingKnobLookAndFeel : public juce::LookAndFeel_V4
+{
+public:
+    GlowingKnobLookAndFeel()
+    {
+        // Default glow color (can be customized per knob)
+        setGlowColour (juce::Colours::cyan);
+    }
+
+    /** Set the glow color for this knob */
+    void setGlowColour (juce::Colour colour)
+    {
+        glowColour = colour;
+    }
+
+    /** Set the glow intensity (0.0 = off, 1.0 = full) */
+    void setGlowIntensity (float intensity)
+    {
+        glowIntensity = juce::jlimit (0.0f, 1.0f, intensity);
+    }
+
+    /** Get current glow intensity */
+    float getGlowIntensity() const { return glowIntensity; }
+
+    //==============================================================================
+    void drawRotarySlider (juce::Graphics& g, int x, int y, int width, int height,
+                          float sliderPos, float rotaryStartAngle, float rotaryEndAngle,
+                          juce::Slider& slider) override
+    {
+        auto bounds = juce::Rectangle<int> (x, y, width, height).toFloat().reduced (10);
+        auto radius = juce::jmin (bounds.getWidth(), bounds.getHeight()) / 2.0f;
+        auto toAngle = rotaryStartAngle + sliderPos * (rotaryEndAngle - rotaryStartAngle);
+        auto lineW = juce::jmin (8.0f, radius * 0.5f);
+        auto arcRadius = radius - lineW * 0.5f;
+        auto centerX = bounds.getCentreX();
+        auto centerY = bounds.getCentreY();
+
+        // Draw inner glow effect when active
+        if (glowIntensity > 0.01f)
+        {
+            // Multiple glow layers for smooth gradient effect
+            int numGlowLayers = 12;
+            for (int i = 0; i < numGlowLayers; ++i)
+            {
+                float layerProgress = static_cast<float> (i) / static_cast<float> (numGlowLayers);
+                float layerRadius = radius * (0.2f + layerProgress * 0.6f);
+                float layerOpacity = glowIntensity * (1.0f - layerProgress) * 0.15f;
+
+                g.setColour (glowColour.withAlpha (layerOpacity));
+                g.fillEllipse (centerX - layerRadius, centerY - layerRadius,
+                              layerRadius * 2.0f, layerRadius * 2.0f);
+            }
+        }
+
+        // Draw outer ring (knob background)
+        g.setColour (juce::Colours::darkgrey);
+        g.fillEllipse (centerX - arcRadius, centerY - arcRadius,
+                      arcRadius * 2.0f, arcRadius * 2.0f);
+
+        // Draw inner circle (knob center)
+        g.setColour (juce::Colours::black);
+        auto innerRadius = arcRadius * 0.7f;
+        g.fillEllipse (centerX - innerRadius, centerY - innerRadius,
+                      innerRadius * 2.0f, innerRadius * 2.0f);
+
+        // Draw value arc
+        if (slider.isEnabled())
+        {
+            juce::Path valueArc;
+            valueArc.addCentredArc (centerX, centerY,
+                                   arcRadius, arcRadius,
+                                   0.0f,
+                                   rotaryStartAngle, toAngle,
+                                   true);
+
+            g.setColour (slider.findColour (juce::Slider::thumbColourId));
+            g.strokePath (valueArc, juce::PathStrokeType (lineW, juce::PathStrokeType::curved, juce::PathStrokeType::rounded));
+        }
+
+        // Draw pointer line
+        juce::Path pointer;
+        auto pointerLength = radius * 0.5f;
+        auto pointerThickness = lineW * 0.5f;
+        pointer.addRectangle (-pointerThickness * 0.5f, -arcRadius, pointerThickness, pointerLength);
+        pointer.applyTransform (juce::AffineTransform::rotation (toAngle).translated (centerX, centerY));
+
+        // Pointer color glows when active
+        if (glowIntensity > 0.3f)
+        {
+            g.setColour (glowColour.brighter (0.3f));
+        }
+        else
+        {
+            g.setColour (slider.findColour (juce::Slider::thumbColourId));
+        }
+        g.fillPath (pointer);
+
+        // Draw center dot (glows with activity)
+        auto dotRadius = lineW * 0.6f;
+        if (glowIntensity > 0.5f)
+        {
+            // Bright center dot when very active
+            g.setColour (glowColour.brighter (0.5f));
+            g.fillEllipse (centerX - dotRadius * 1.5f, centerY - dotRadius * 1.5f,
+                          dotRadius * 3.0f, dotRadius * 3.0f);
+        }
+        g.setColour (juce::Colours::white.withAlpha (0.9f));
+        g.fillEllipse (centerX - dotRadius, centerY - dotRadius,
+                      dotRadius * 2.0f, dotRadius * 2.0f);
+    }
+
+private:
+    juce::Colour glowColour;
+    float glowIntensity = 0.0f;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (GlowingKnobLookAndFeel)
+};

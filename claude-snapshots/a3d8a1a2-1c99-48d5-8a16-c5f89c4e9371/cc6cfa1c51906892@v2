@@ -1,0 +1,139 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "../AI/SeparationWorkflow.h"
+
+/**
+ * SeparationWizard - User-friendly stem separation interface
+ *
+ * A step-by-step wizard that guides users through:
+ * 1. What do you want to do? (Goal selection)
+ * 2. Quality vs Speed preference
+ * 3. File selection
+ * 4. Processing with progress
+ * 5. Results and next steps
+ */
+class SeparationWizard : public juce::Component,
+                         public juce::FileDragAndDropTarget,
+                         private juce::Timer
+{
+public:
+    SeparationWizard();
+    ~SeparationWizard() override;
+
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+
+    // FileDragAndDropTarget
+    bool isInterestedInFileDrag (const juce::StringArray& files) override;
+    void filesDropped (const juce::StringArray& files, int x, int y) override;
+
+    // Callbacks
+    std::function<void()> onClose;
+    std::function<void (const juce::File& outputDir)> onComplete;
+
+private:
+    void timerCallback() override;
+
+    // Wizard steps
+    enum class Step
+    {
+        SelectGoal,         // Step 1: What do you want?
+        SelectQuality,      // Step 2: Quality preference
+        SelectFile,         // Step 3: Choose file
+        Processing,         // Step 4: Processing
+        Complete            // Step 5: Done!
+    };
+
+    Step currentStep = Step::SelectGoal;
+    void goToStep (Step step);
+    void updateStepUI();
+
+    // Current selections
+    SeparationWorkflow::Goal selectedGoal = SeparationWorkflow::Goal::RemoveVocals;
+    SeparationWorkflow::Quality selectedQuality = SeparationWorkflow::Quality::Balanced;
+    juce::File selectedFile;
+    juce::File outputDir;
+
+    // Workflow engine
+    SeparationWorkflow workflow;
+
+    // Processing state
+    float currentProgress = 0.0f;
+    juce::String currentStatus;
+    SeparationWorkflow::SeparationResult lastResult;
+
+    //==========================================================================
+    // UI Components
+    //==========================================================================
+
+    // Header
+    juce::Label titleLabel;
+    juce::Label subtitleLabel;
+    juce::TextButton backButton { "< Back" };
+    juce::TextButton closeButton { "X" };
+
+    // Step 1: Goal selection
+    struct GoalButton : public juce::Component
+    {
+        SeparationWorkflow::GoalInfo info;
+        bool selected = false;
+        std::function<void()> onClick;
+
+        void paint (juce::Graphics& g) override;
+        void mouseUp (const juce::MouseEvent&) override { if (onClick) onClick(); }
+    };
+    juce::OwnedArray<GoalButton> goalButtons;
+    juce::Viewport goalScrollView;
+    juce::Component goalContainer;
+
+    // Step 2: Quality selection
+    struct QualityOption : public juce::Component
+    {
+        SeparationWorkflow::QualityInfo info;
+        bool selected = false;
+        std::function<void()> onClick;
+
+        void paint (juce::Graphics& g) override;
+        void mouseUp (const juce::MouseEvent&) override { if (onClick) onClick(); }
+    };
+    juce::OwnedArray<QualityOption> qualityOptions;
+    juce::Label estimatedTimeLabel;
+
+    // Step 3: File selection
+    juce::Label dropZoneLabel { {}, "Drag & drop audio file here\nor click to browse" };
+    juce::TextButton browseButton { "Browse Files..." };
+    juce::Label selectedFileLabel;
+
+    // Step 4: Processing
+    juce::ProgressBar progressBar { currentProgress };
+    juce::Label progressStatusLabel;
+    juce::TextButton cancelButton { "Cancel" };
+
+    // Step 5: Complete
+    juce::Label completeLabel;
+    juce::TextButton openFolderButton { "Open Output Folder" };
+    juce::TextButton processAnotherButton { "Process Another File" };
+    juce::ListBox outputFilesList;
+
+    // Output files list model
+    class OutputFilesModel : public juce::ListBoxModel
+    {
+    public:
+        juce::StringArray files;
+        int getNumRows() override { return files.size(); }
+        void paintListBoxItem (int row, juce::Graphics& g, int w, int h, bool selected) override;
+    };
+    OutputFilesModel outputFilesModel;
+
+    // Navigation
+    juce::TextButton nextButton { "Next >" };
+
+    void setupGoalButtons();
+    void setupQualityOptions();
+    void selectFile();
+    void startProcessing();
+    void handleCompletion (const SeparationWorkflow::SeparationResult& result);
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (SeparationWizard)
+};

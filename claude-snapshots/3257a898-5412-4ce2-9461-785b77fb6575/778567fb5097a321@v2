@@ -1,0 +1,48 @@
+#pragma once
+
+#include <JuceHeader.h>
+
+/**
+ * StemChannel - Single stem channel strip with fader, mute, solo, and meter
+ */
+class StemChannel : public juce::Component,
+                    public juce::Button::Listener
+{
+public:
+    StemChannel (const juce::String& name, juce::Colour colour);
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+
+    void buttonClicked (juce::Button* button) override;
+
+    // Attach to APVTS parameters
+    void attachToParameters (juce::AudioProcessorValueTreeState& apvts,
+                             const juce::String& gainID,
+                             const juce::String& muteID,
+                             const juce::String& soloID);
+
+    // Set level for meter (0-1)
+    void setLevel (float level);
+
+    // Callbacks
+    std::function<void (bool)> onMuteChanged;
+    std::function<void (bool)> onSoloChanged;
+
+private:
+    juce::String stemName;
+    juce::Colour stemColour;
+
+    juce::Slider gainSlider;
+    juce::TextButton muteButton { "M" };
+    juce::TextButton soloButton { "S" };
+    juce::Label nameLabel;
+
+    float currentLevel = 0.0f;
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> gainAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> muteAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ButtonAttachment> soloAttachment;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemChannel)
+};

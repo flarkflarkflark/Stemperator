@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Stemperator
+Comment=AI-powered stem separation plugin
+Exec=Stemperator
+Icon=stemperator
+Categories=AudioVideo;Audio;
+Terminal=false
+StartupNotify=true
+StartupWMClass=Stemperator

@@ -1,0 +1,438 @@
+#!/usr/bin/env python3
+"""
+Vinyl Click Analysis Tool
+
+Analyzes vinyl click/pop/crackle samples to calibrate click detection parameters.
+Downloads samples from Freesound.org and analyzes local samples from 99Sounds.
+
+Usage:
+    1. Set FREESOUND_API_KEY environment variable (get from https://freesound.org/apiv2/apply)
+    2. Download 99Sounds Vinyl Noise SFX pack and place in ./vinyl_samples/99sounds/
+    3. Run: python3 analyze_vinyl_clicks.py
+
+Dependencies:
+    pip install numpy scipy librosa requests matplotlib
+"""
+
+import os
+import sys
+import json
+import requests
+import numpy as np
+import librosa
+import matplotlib.pyplot as plt
+from pathlib import Path
+from typing import List, Dict, Tuple
+from dataclasses import dataclass, asdict
+from scipy import signal
+
+
+@dataclass
+class ClickCharacteristics:
+    """Characteristics of a detected click"""
+    position: int
+    peak_amplitude: float
+    second_derivative: float
+    width_samples: int
+    frequency_centroid: float
+    rms_level: float
+    click_to_noise_ratio: float
+
+
+class VinylClickAnalyzer:
+    """Analyzes vinyl clicks to determine optimal detection parameters"""
+
+    def __init__(self, sample_rate: int = 44100):
+        self.sample_rate = sample_rate
+        self.samples_dir = Path("./vinyl_samples")
+        self.samples_dir.mkdir(exist_ok=True)
+        self.freesound_dir = self.samples_dir / "freesound"
+        self.freesound_dir.mkdir(exist_ok=True)
+        self.results_dir = Path("./analysis_results")
+        self.results_dir.mkdir(exist_ok=True)
+
+    def download_freesound_samples(self, api_key: str, max_samples: int = 20):
+        """Download vinyl click samples from Freesound.org"""
+        print(f"Downloading samples from Freesound.org...")
+
+        search_terms = [
+            "vinyl click",
+            "vinyl pop",
+            "vinyl crackle",
+            "record click",
+            "record pop"
+        ]
+
+        headers = {"Authorization": f"Token {api_key}"}
+        downloaded = 0
+
+        for term in search_terms:
+            if downloaded >= max_samples:
+                break
+
+            print(f"\nSearching for: {term}")
+            url = f"https://freesound.org/apiv2/search/text/"
+            params = {
+                "query": term,
+                "filter": "duration:[0 TO 5]",  # Short samples only
+                "fields": "id,name,previews",
+                "page_size": 15
+            }
+
+            try:
+                response = requests.get(url, headers=headers, params=params)
+                response.raise_for_status()
+                data = response.json()
+
+                for result in data.get("results", []):
+                    if downloaded >= max_samples:
+                        break
+
+                    sound_id = result["id"]
+                    sound_name = result["name"]
+                    preview_url = result["previews"]["preview-hq-mp3"]
+
+                    # Download preview
+                    filename = self.freesound_dir / f"{sound_id}_{sound_name[:30]}.mp3"
+                    if not filename.exists():
+                        print(f"  Downloading: {sound_name}")
+                        audio_response = requests.get(preview_url)
+                        with open(filename, 'wb') as f:
+                            f.write(audio_response.content)
+                        downloaded += 1
+                    else:
+                        print(f"  Already have: {sound_name}")
+
+            except Exception as e:
+                print(f"  Error searching '{term}': {e}")
+                continue
+
+        print(f"\nDownloaded {downloaded} samples to {self.freesound_dir}")
+
+    def load_audio(self, filepath: Path) -> Tuple[np.ndarray, int]:
+        """Load audio file and return samples + sample rate"""
+        try:
+            audio, sr = librosa.load(filepath, sr=self.sample_rate, mono=True)
+            return audio, sr
+        except Exception as e:
+            print(f"Error loading {filepath}: {e}")
+            return None, None
+
+    def detect_clicks_in_sample(self, audio: np.ndarray,
+                                threshold_multiplier: float = 3.0) -> List[ClickCharacteristics]:
+        """Detect clicks in audio sample using our current algorithm"""
+        clicks = []
+
+        if len(audio) < 10:
+            return clicks
+
+        # Calculate RMS level
+        rms = np.sqrt(np.mean(audio ** 2))
+
+        # Detect clicks using second derivative
+        for i in range(4, len(audio) - 4):
+            # Second derivative
+            second_deriv = abs((audio[i] - audio[i-1]) - (audio[i-1] - audio[i-2]))
+
+            # Adaptive threshold
+            threshold = threshold_multiplier * rms
+
+            if second_deriv > threshold:
+                # Found potential click - analyze it
+                click = self._analyze_click(audio, i, rms)
+                if click:
+                    clicks.append(click)
+
+        return clicks
+
+    def _analyze_click(self, audio: np.ndarray, position: int,
+                      rms: float) -> ClickCharacteristics:
+        """Analyze characteristics of a detected click"""
+
+        # Get click region (±32 samples)
+        window = 32
+        start = max(0, position - window)
+        end = min(len(audio), position + window)
+        click_region = audio[start:end]
+
+        if len(click_region) < 10:
+            return None
+
+        # Peak amplitude
+        peak_amp = np.max(np.abs(click_region))
+
+        # Second derivative at click
+        if position >= 2 and position < len(audio) - 1:
+            second_deriv = abs((audio[position] - audio[position-1]) -
+                              (audio[position-1] - audio[position-2]))
+        else:
+            second_deriv = 0.0
+
+        # Click width (how many samples above threshold)
+        threshold = 0.1 * peak_amp
+        above_threshold = np.where(np.abs(click_region) > threshold)[0]
+        width = len(above_threshold) if len(above_threshold) > 0 else 1
+
+        # Frequency analysis
+        fft = np.fft.rfft(click_region)
+        freqs = np.fft.rfftfreq(len(click_region), 1/self.sample_rate)
+        magnitudes = np.abs(fft)
+
+        # Frequency centroid (weighted average)
+        if np.sum(magnitudes) > 0:
+            freq_centroid = np.sum(freqs * magnitudes) / np.sum(magnitudes)
+        else:
+            freq_centroid = 0.0
+
+        # Click-to-noise ratio
+        # Get surrounding audio (not including click)
+        pre_start = max(0, position - 200)
+        pre_end = max(0, position - 50)
+        post_start = min(len(audio), position + 50)
+        post_end = min(len(audio), position + 200)
+
+        surrounding = np.concatenate([audio[pre_start:pre_end],
+                                     audio[post_start:post_end]])
+        surrounding_rms = np.sqrt(np.mean(surrounding ** 2)) if len(surrounding) > 0 else rms
+
+        click_to_noise = peak_amp / surrounding_rms if surrounding_rms > 0 else 0.0
+
+        return ClickCharacteristics(
+            position=position,
+            peak_amplitude=float(peak_amp),
+            second_derivative=float(second_deriv),
+            width_samples=int(width),
+            frequency_centroid=float(freq_centroid),
+            rms_level=float(rms),
+            click_to_noise_ratio=float(click_to_noise)
+        )
+
+    def analyze_all_samples(self) -> List[ClickCharacteristics]:
+        """Analyze all available samples"""
+        print("\nAnalyzing all vinyl samples...")
+        all_clicks = []
+
+        # Find all audio files
+        audio_extensions = ['.wav', '.mp3', '.flac', '.ogg']
+        audio_files = []
+        for ext in audio_extensions:
+            audio_files.extend(self.samples_dir.rglob(f'*{ext}'))
+
+        print(f"Found {len(audio_files)} audio files")
+
+        for audio_file in audio_files:
+            print(f"\nProcessing: {audio_file.name}")
+            audio, sr = self.load_audio(audio_file)
+
+            if audio is None:
+                continue
+
+            # Detect clicks with various thresholds
+            for threshold_mult in [1.0, 2.0, 3.0, 5.0]:
+                clicks = self.detect_clicks_in_sample(audio, threshold_mult)
+                if clicks:
+                    print(f"  Threshold {threshold_mult}x: Found {len(clicks)} clicks")
+                    all_clicks.extend(clicks)
+
+        print(f"\nTotal clicks analyzed: {len(all_clicks)}")
+        return all_clicks
+
+    def calculate_optimal_parameters(self, clicks: List[ClickCharacteristics]) -> Dict:
+        """Calculate optimal detection parameters from analyzed clicks"""
+        if not clicks:
+            print("No clicks to analyze!")
+            return {}
+
+        print("\n" + "="*60)
+        print("CLICK CHARACTERISTICS ANALYSIS")
+        print("="*60)
+
+        # Extract arrays
+        peak_amps = np.array([c.peak_amplitude for c in clicks])
+        second_derivs = np.array([c.second_derivative for c in clicks])
+        widths = np.array([c.width_samples for c in clicks])
+        freq_centroids = np.array([c.frequency_centroid for c in clicks])
+        cnrs = np.array([c.click_to_noise_ratio for c in clicks])
+
+        # Statistics
+        results = {
+            "num_clicks": len(clicks),
+            "peak_amplitude": {
+                "mean": float(np.mean(peak_amps)),
+                "std": float(np.std(peak_amps)),
+                "median": float(np.median(peak_amps)),
+                "min": float(np.min(peak_amps)),
+                "max": float(np.max(peak_amps)),
+                "percentile_25": float(np.percentile(peak_amps, 25)),
+                "percentile_75": float(np.percentile(peak_amps, 75)),
+            },
+            "second_derivative": {
+                "mean": float(np.mean(second_derivs)),
+                "std": float(np.std(second_derivs)),
+                "median": float(np.median(second_derivs)),
+                "percentile_25": float(np.percentile(second_derivs, 25)),
+                "percentile_75": float(np.percentile(second_derivs, 75)),
+            },
+            "click_width": {
+                "mean": float(np.mean(widths)),
+                "median": float(np.median(widths)),
+                "min": int(np.min(widths)),
+                "max": int(np.max(widths)),
+            },
+            "frequency_centroid": {
+                "mean": float(np.mean(freq_centroids)),
+                "median": float(np.median(freq_centroids)),
+            },
+            "click_to_noise_ratio": {
+                "mean": float(np.mean(cnrs)),
+                "median": float(np.median(cnrs)),
+                "percentile_25": float(np.percentile(cnrs, 25)),
+                "percentile_75": float(np.percentile(cnrs, 75)),
+            }
+        }
+
+        # Recommended parameters
+        results["recommended_parameters"] = {
+            "threshold_range": {
+                "max": float(np.percentile(second_derivs, 90)),  # Conservative
+                "min": float(np.percentile(second_derivs, 10)),  # Aggressive
+                "optimal": float(np.median(second_derivs))
+            },
+            "typical_click_width": int(np.median(widths)),
+            "max_click_width": int(np.percentile(widths, 95)),
+        }
+
+        # Print summary
+        print(f"\nAnalyzed {len(clicks)} clicks")
+        print(f"\nPeak Amplitude:")
+        print(f"  Mean: {results['peak_amplitude']['mean']:.4f}")
+        print(f"  Median: {results['peak_amplitude']['median']:.4f}")
+        print(f"  Range: {results['peak_amplitude']['min']:.4f} - {results['peak_amplitude']['max']:.4f}")
+
+        print(f"\nSecond Derivative:")
+        print(f"  Mean: {results['second_derivative']['mean']:.4f}")
+        print(f"  Median: {results['second_derivative']['median']:.4f}")
+        print(f"  25th-75th percentile: {results['second_derivative']['percentile_25']:.4f} - {results['second_derivative']['percentile_75']:.4f}")
+
+        print(f"\nClick Width:")
+        print(f"  Mean: {results['click_width']['mean']:.1f} samples")
+        print(f"  Median: {results['click_width']['median']:.1f} samples")
+        print(f"  Range: {results['click_width']['min']} - {results['click_width']['max']} samples")
+
+        print(f"\nFrequency Centroid:")
+        print(f"  Mean: {results['frequency_centroid']['mean']:.0f} Hz")
+        print(f"  Median: {results['frequency_centroid']['median']:.0f} Hz")
+
+        print(f"\nClick-to-Noise Ratio:")
+        print(f"  Mean: {results['click_to_noise_ratio']['mean']:.2f}")
+        print(f"  Median: {results['click_to_noise_ratio']['median']:.2f}")
+
+        print("\n" + "="*60)
+        print("RECOMMENDED PARAMETERS FOR C++ CODE")
+        print("="*60)
+        rec = results["recommended_parameters"]
+        print(f"\nThreshold Range:")
+        print(f"  maxThreshold = {rec['threshold_range']['max']:.3f}f;  // Conservative (sensitivity=1)")
+        print(f"  minThreshold = {rec['threshold_range']['min']:.3f}f;  // Aggressive (sensitivity=100)")
+        print(f"  optimalThreshold = {rec['threshold_range']['optimal']:.3f}f;  // Median (sensitivity=50)")
+
+        print(f"\nClick Width:")
+        print(f"  typicalWidth = {rec['typical_click_width']};  // Median width")
+        print(f"  maxClickWidth = {rec['max_click_width']};  // 95th percentile")
+
+        return results
+
+    def plot_distributions(self, clicks: List[ClickCharacteristics]):
+        """Plot distributions of click characteristics"""
+        if not clicks:
+            return
+
+        peak_amps = [c.peak_amplitude for c in clicks]
+        second_derivs = [c.second_derivative for c in clicks]
+        widths = [c.width_samples for c in clicks]
+        freq_centroids = [c.frequency_centroid for c in clicks]
+
+        fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+
+        axes[0, 0].hist(peak_amps, bins=50, edgecolor='black')
+        axes[0, 0].set_title('Peak Amplitude Distribution')
+        axes[0, 0].set_xlabel('Amplitude')
+        axes[0, 0].set_ylabel('Count')
+
+        axes[0, 1].hist(second_derivs, bins=50, edgecolor='black')
+        axes[0, 1].set_title('Second Derivative Distribution')
+        axes[0, 1].set_xlabel('Second Derivative')
+        axes[0, 1].set_ylabel('Count')
+
+        axes[1, 0].hist(widths, bins=30, edgecolor='black')
+        axes[1, 0].set_title('Click Width Distribution')
+        axes[1, 0].set_xlabel('Width (samples)')
+        axes[1, 0].set_ylabel('Count')
+
+        axes[1, 1].hist(freq_centroids, bins=50, edgecolor='black')
+        axes[1, 1].set_title('Frequency Centroid Distribution')
+        axes[1, 1].set_xlabel('Frequency (Hz)')
+        axes[1, 1].set_ylabel('Count')
+
+        plt.tight_layout()
+        output_file = self.results_dir / 'click_distributions.png'
+        plt.savefig(output_file, dpi=150)
+        print(f"\nSaved distribution plots to: {output_file}")
+        plt.close()
+
+    def save_results(self, results: Dict):
+        """Save analysis results to JSON"""
+        output_file = self.results_dir / 'analysis_results.json'
+        with open(output_file, 'w') as f:
+            json.dump(results, f, indent=2)
+        print(f"\nSaved detailed results to: {output_file}")
+
+
+def main():
+    print("="*60)
+    print("VINYL CLICK ANALYSIS TOOL")
+    print("="*60)
+
+    analyzer = VinylClickAnalyzer()
+
+    # Check for Freesound API key
+    api_key = os.environ.get('FREESOUND_API_KEY')
+    if api_key:
+        print("\nFreesound API key found!")
+        download = input("Download samples from Freesound? (y/n): ").lower()
+        if download == 'y':
+            analyzer.download_freesound_samples(api_key, max_samples=20)
+    else:
+        print("\nNo FREESOUND_API_KEY environment variable found.")
+        print("Get one from: https://freesound.org/apiv2/apply")
+        print("Then: export FREESOUND_API_KEY='your_key_here'")
+
+    # Check for local samples
+    print(f"\nLooking for samples in: {analyzer.samples_dir}")
+    print("Place 99Sounds Vinyl Noise SFX in: ./vinyl_samples/99sounds/")
+
+    # Analyze all available samples
+    clicks = analyzer.analyze_all_samples()
+
+    if not clicks:
+        print("\n❌ No clicks found! Please add some vinyl samples to ./vinyl_samples/")
+        return
+
+    # Calculate optimal parameters
+    results = analyzer.calculate_optimal_parameters(clicks)
+
+    # Save results
+    analyzer.save_results(results)
+
+    # Plot distributions
+    try:
+        analyzer.plot_distributions(clicks)
+    except Exception as e:
+        print(f"Could not create plots: {e}")
+
+    print("\n✅ Analysis complete!")
+    print(f"Results saved to: {analyzer.results_dir}")
+
+
+if __name__ == "__main__":
+    main()

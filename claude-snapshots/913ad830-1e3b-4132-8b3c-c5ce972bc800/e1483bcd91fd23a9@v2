@@ -1,0 +1,197 @@
+# Vinyl Click Analysis Tool
+
+Dit script analyseert echte vinyl click/pop/crackle samples om de click detection parameters te optimaliseren met **data-driven** approach in plaats van trial-and-error.
+
+## Setup
+
+### 1. Installeer Python Dependencies
+
+```bash
+pip install numpy scipy librosa requests matplotlib
+```
+
+### 2. Optioneel: Freesound API Key
+
+Voor automatisch downloaden van samples van Freesound.org:
+
+1. Ga naar https://freesound.org/apiv2/apply
+2. Registreer en vraag een API key aan
+3. Set environment variable:
+```bash
+export FREESOUND_API_KEY='jouw_api_key_hier'
+```
+
+### 3. Download 99Sounds Vinyl Noise SFX
+
+1. Download van: https://99sounds.org/vinyl-noise-sfx/
+2. Unzip en plaats alle WAV files in:
+```
+./vinyl_samples/99sounds/
+```
+
+### 4. Optioneel: Eigen Samples Toevoegen
+
+Plaats je eigen vinyl opnames (met clicks) in:
+```
+./vinyl_samples/custom/
+```
+
+Ondersteunde formaten: WAV, MP3, FLAC, OGG
+
+## Gebruik
+
+```bash
+python3 analyze_vinyl_clicks.py
+```
+
+Het script zal:
+1. ✅ (Optioneel) Samples downloaden van Freesound
+2. ✅ Alle audio files in `./vinyl_samples/` analyseren
+3. ✅ Click karakteristieken extraheren
+4. ✅ Optimale parameters berekenen
+5. ✅ Resultaten opslaan in `./analysis_results/`
+
+## Output
+
+### 1. Console Output
+
+Toont statistieken zoals:
+```
+RECOMMENDED PARAMETERS FOR C++ CODE
+====================================
+
+Threshold Range:
+  maxThreshold = 0.850f;  // Conservative (sensitivity=1)
+  minThreshold = 0.045f;  // Aggressive (sensitivity=100)
+  optimalThreshold = 0.250f;  // Median (sensitivity=50)
+
+Click Width:
+  typicalWidth = 28;  // Median width
+  maxClickWidth = 124;  // 95th percentile
+```
+
+### 2. JSON Results
+
+Gedetailleerde statistieken in `./analysis_results/analysis_results.json`
+
+### 3. Distribution Plots
+
+Visualisaties in `./analysis_results/click_distributions.png` met:
+- Peak amplitude distributie
+- Second derivative distributie
+- Click width distributie
+- Frequency centroid distributie
+
+## Toepassen van Resultaten
+
+### Stap 1: Bekijk Aanbevolen Parameters
+
+Na analyse zie je iets zoals:
+```cpp
+maxThreshold = 0.850f;  // Conservative (sensitivity=1)
+minThreshold = 0.045f;  // Aggressive (sensitivity=100)
+```
+
+### Stap 2: Update ClickRemoval.h
+
+Vervang in `Source/DSP/ClickRemoval.h` de threshold waardes:
+
+```cpp
+float calculateThreshold (float rmsLevel)
+{
+    // ... comments ...
+
+    // DATA-DRIVEN thresholds from vinyl sample analysis
+    float maxThreshold = 0.850f;  // Van analyse
+    float minThreshold = 0.045f;  // Van analyse
+
+    // ... rest van de code ...
+}
+```
+
+### Stap 3: Rebuild
+
+```bash
+cd build
+cmake --build . --config Release
+```
+
+## Wat Wordt Geanalyseerd
+
+Voor elke gedetecteerde click:
+
+| Parameter | Beschrijving |
+|-----------|--------------|
+| **Peak Amplitude** | Maximale amplitude van de click |
+| **Second Derivative** | Scherpe van discontinuïteit (onze detectie methode) |
+| **Width** | Duur van click in samples |
+| **Frequency Centroid** | Gewogen gemiddelde frequentie (clicks zijn vaak high-freq) |
+| **RMS Level** | Signaal niveau van omliggende audio |
+| **Click-to-Noise Ratio** | Verhouding click amplitude vs achtergrond |
+
+## Tips
+
+### Voor Betere Resultaten:
+
+1. **Meer samples = betere statistieken**
+   - Download 20+ samples van Freesound
+   - Voeg 99Sounds pack toe
+   - Voeg je eigen vinyl opnames toe
+
+2. **Diverse samples**
+   - Verschillende click types (pop, tick, crackle)
+   - Verschillende loudness levels
+   - Verschillende audio content (muziek, silence)
+
+3. **Meerdere analyses**
+   - Run het script meerdere keren met verschillende samples
+   - Vergelijk de resultaten
+   - Gebruik gemiddelde waardes
+
+### Voorbeeld Workflow:
+
+```bash
+# 1. Setup
+mkdir -p vinyl_samples/99sounds
+mkdir -p vinyl_samples/custom
+
+# 2. Add samples (handmatig downloaden en plaatsen)
+
+# 3. Run analysis
+python3 analyze_vinyl_clicks.py
+
+# 4. Check results
+cat analysis_results/analysis_results.json
+open analysis_results/click_distributions.png
+
+# 5. Update code met aanbevolen parameters
+# 6. Rebuild en test
+```
+
+## Troubleshooting
+
+### "No clicks found"
+- Zorg dat er audio files staan in `./vinyl_samples/`
+- Check dat files niet corrupt zijn
+- Probeer threshold verlagen in het script
+
+### "Module not found"
+```bash
+pip install --upgrade numpy scipy librosa requests matplotlib
+```
+
+### Freesound download werkt niet
+- Check API key is correct
+- Check internet connectie
+- Je kunt ook handmatig samples downloaden
+
+## Volgende Stappen
+
+Na analyse kun je:
+
+1. ✅ Thresholds optimaliseren in `ClickRemoval.h`
+2. ✅ Click width parameters aanpassen
+3. ✅ Frequentie filtering toevoegen (clicks zijn vaak > 5kHz)
+4. ✅ Click-to-noise ratio gebruiken voor betere discriminatie
+
+Dit maakt de click detection **veel betrouwbaarder** dan trial-and-error tuning! 🎯

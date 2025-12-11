@@ -1,0 +1,73 @@
+#pragma once
+
+#include <JuceHeader.h>
+#include "PluginProcessor.h"
+#include "GUI/StemChannel.h"
+#include "GUI/Visualizer.h"
+
+/**
+ * StemperatorEditor - Main plugin GUI
+ *
+ * Features:
+ * - 4 stem channel strips with faders, mute, solo
+ * - Real-time level metering
+ * - Stem visualization display
+ * - Master gain control
+ * - Focus controls for separation tuning
+ */
+class StemperatorEditor : public juce::AudioProcessorEditor,
+                          public juce::Timer
+{
+public:
+    explicit StemperatorEditor (StemperatorProcessor&);
+    ~StemperatorEditor() override;
+
+    void paint (juce::Graphics&) override;
+    void resized() override;
+    void timerCallback() override;
+
+private:
+    StemperatorProcessor& processor;
+
+    // Stem channels
+    std::array<std::unique_ptr<StemChannel>, 4> stemChannels;
+
+    // Visualizer
+    Visualizer visualizer;
+
+    // Master section
+    juce::Slider masterSlider;
+    juce::Label masterLabel { {}, "MASTER" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> masterAttachment;
+
+    // Focus controls
+    juce::Slider vocalsFocusSlider;
+    juce::Slider bassCutoffSlider;
+    juce::Slider drumSensSlider;
+    juce::Label vocalsFocusLabel { {}, "Vocal Focus" };
+    juce::Label bassCutoffLabel { {}, "Bass Cutoff" };
+    juce::Label drumSensLabel { {}, "Drum Sens" };
+
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> vocalsFocusAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> bassCutoffAttachment;
+    std::unique_ptr<juce::AudioProcessorValueTreeState::SliderAttachment> drumSensAttachment;
+
+    // Quality selector
+    juce::ComboBox qualityBox;
+    juce::Label qualityLabel { {}, "Quality" };
+    std::unique_ptr<juce::AudioProcessorValueTreeState::ComboBoxAttachment> qualityAttachment;
+
+    // Logo
+    juce::Label titleLabel { {}, "STEMPERATOR" };
+    juce::Label subtitleLabel { {}, "flarkAUDIO" };
+
+    // Colours
+    const std::array<juce::Colour, 4> stemColours = {
+        juce::Colour (0xffe74c3c),  // Vocals - Red
+        juce::Colour (0xff3498db),  // Drums - Blue
+        juce::Colour (0xff2ecc71),  // Bass - Green
+        juce::Colour (0xfff39c12)   // Other - Orange
+    };
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (StemperatorEditor)
+};

@@ -1,0 +1,97 @@
+#pragma once
+
+#include <juce_gui_basics/juce_gui_basics.h>
+#include <juce_audio_utils/juce_audio_utils.h>
+#include <juce_opengl/juce_opengl.h>
+
+/**
+ * Waveform Display Component
+ *
+ * Displays audio waveform with:
+ * - Zoomable view (horizontal and vertical)
+ * - Overlay of corrected vs uncorrected waveforms
+ * - Visual markers for clicks, track boundaries, cue points
+ * - Playback cursor
+ * - Mouse interaction for selection and editing
+ *
+ * Standalone mode only.
+ */
+class WaveformDisplay : public juce::Component,
+                        public juce::ChangeListener,
+                        public juce::Timer
+{
+public:
+    WaveformDisplay();
+    ~WaveformDisplay() override;
+
+    //==============================================================================
+    /** Load audio file into waveform display */
+    void loadFile (const juce::File& file);
+
+    /** Clear waveform */
+    void clear();
+
+    /** Set playback position (0.0 to 1.0) */
+    void setPlaybackPosition (double position);
+
+    /** Add click marker at sample position */
+    void addClickMarker (int64_t samplePosition);
+
+    /** Clear all click markers */
+    void clearClickMarkers();
+
+    /** Set horizontal zoom level (samples per pixel) */
+    void setHorizontalZoom (double samplesPerPixel);
+
+    /** Set vertical zoom level (amplitude multiplier) */
+    void setVerticalZoom (double amplitudeMultiplier);
+
+    /** Set callback for when user double-clicks to seek playback position */
+    std::function<void(double position)> onSeekPosition;
+
+    //==============================================================================
+    // Public access to zoom levels (for UI controls)
+    double horizontalZoom = 1.0; // Zoom multiplier (1.0 = fit all, >1 = zoomed in)
+    double verticalZoom = 1.0;
+    double scrollPosition = 0.0; // Position in file (0.0 to 1.0)
+
+    //==============================================================================
+    void paint (juce::Graphics& g) override;
+    void resized() override;
+    void mouseDown (const juce::MouseEvent& event) override;
+    void mouseDrag (const juce::MouseEvent& event) override;
+    void mouseUp (const juce::MouseEvent& event) override;
+    void mouseDoubleClick (const juce::MouseEvent& event) override;
+    void mouseWheelMove (const juce::MouseEvent& event, const juce::MouseWheelDetails& wheel) override;
+
+    //==============================================================================
+    void changeListenerCallback (juce::ChangeBroadcaster* source) override;
+    void timerCallback() override;
+
+private:
+    void drawWaveform (juce::Graphics& g, const juce::Rectangle<int>& bounds);
+    void drawClickMarkers (juce::Graphics& g, const juce::Rectangle<int>& bounds);
+    void drawPlaybackCursor (juce::Graphics& g, const juce::Rectangle<int>& bounds);
+    void drawSelection (juce::Graphics& g, const juce::Rectangle<int>& bounds);
+
+    //==============================================================================
+    juce::AudioFormatManager formatManager;
+    juce::AudioThumbnailCache thumbnailCache {10}; // Increased cache size for better performance
+    juce::AudioThumbnail thumbnail;
+
+    double sampleRate = 44100.0;
+    double playbackPosition = 0.0;
+
+    std::vector<int64_t> clickMarkers;
+
+    // Selection
+    int64_t selectionStart = -1;
+    int64_t selectionEnd = -1;
+    bool isDragging = false;
+
+    // OpenGL hardware acceleration (optional, auto-detects)
+    juce::OpenGLContext openGLContext;
+    bool useOpenGL = true;
+
+    JUCE_DECLARE_NON_COPYABLE_WITH_LEAK_DETECTOR (WaveformDisplay)
+};

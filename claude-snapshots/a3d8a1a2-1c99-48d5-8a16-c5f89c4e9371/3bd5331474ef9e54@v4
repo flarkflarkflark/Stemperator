@@ -1,0 +1,142 @@
+-- Stemperator Toolbar Setup Script
+-- Run this once to register all Stemperator scripts and create a dockable toolbar
+-- After running, the toolbar will appear. Drag it to dock next to main toolbar.
+
+local script_path = debug.getinfo(1, "S").source:match("@?(.*[\\/])")
+local reaper_path = reaper.GetResourcePath()
+local sep = package.config:sub(1,1)
+
+-- Scripts to register (only include scripts that exist)
+local scripts = {
+    { file = "Stemperator_AI_Separate.lua", name = "Stemperator: AI Stem Separation", icon = "toolbar_all.png" },
+    { file = "Stemperator_Karaoke.lua", name = "Stemperator: Karaoke (No Vocals)", icon = "toolbar_karaoke.png" },
+    { file = "Stemperator_Instrumental.lua", name = "Stemperator: Instrumental", icon = "toolbar_instrumental.png" },
+    { file = "Stemperator_VocalsOnly.lua", name = "Stemperator: Vocals Only", icon = "toolbar_vocals.png" },
+    { file = "Stemperator_DrumsOnly.lua", name = "Stemperator: Drums Only", icon = "toolbar_drums.png" },
+    { file = "Stemperator_BassOnly.lua", name = "Stemperator: Bass Only", icon = "toolbar_bass.png" },
+    { file = "Stemperator_AllStems.lua", name = "Stemperator: All Stems", icon = "toolbar_all.png" },
+    { file = "Stemperator_Explode_Stems.lua", name = "Stemperator: Explode to Tracks", icon = "toolbar_explode.png" },
+}
+
+-- Copy icons to REAPER toolbar_icons folder
+local icons_path = reaper_path .. sep .. "Data" .. sep .. "toolbar_icons" .. sep
+reaper.RecursiveCreateDirectory(icons_path, 0)
+
+local src_icons = script_path .. "toolbar" .. sep
+for _, s in ipairs(scripts) do
+    if s.icon then
+        local src = src_icons .. s.icon
+        local dst = icons_path .. s.icon
+        local f = io.open(src, "rb")
+        if f then
+            local content = f:read("*a")
+            f:close()
+            local out = io.open(dst, "wb")
+            if out then
+                out:write(content)
+                out:close()
+            end
+        end
+    end
+end
+
+-- Register scripts and get command IDs
+local registered = {}
+for _, s in ipairs(scripts) do
+    local path = script_path .. s.file
+    local f = io.open(path, "r")
+    if f then
+        f:close()
+        local cmd = reaper.AddRemoveReaScript(true, 0, path, true)
+        if cmd > 0 then
+            -- Get the named command ID
+            local cmd_name = reaper.ReverseNamedCommandLookup(cmd)
+            table.insert(registered, {
+                name = s.name,
+                cmd = cmd,
+                cmd_name = cmd_name or ("_" .. cmd),
+                icon = s.icon
+            })
+        end
+    end
+end
+
+-- Read current reaper-menu.ini
+local menu_file = reaper_path .. sep .. "reaper-menu.ini"
+local menu_content = ""
+local f = io.open(menu_file, "r")
+if f then
+    menu_content = f:read("*a")
+    f:close()
+end
+
+-- Check if Stemperator toolbar already exists
+if menu_content:find("%[Floating toolbar 2%]") and menu_content:find("Stemperator") then
+    -- Already configured, just update action IDs
+    reaper.MB("Stemperator toolbar already configured!\n\nGo to: View > Toolbars > Toolbar 2 (Stemperator)\n\nDrag it to dock next to the main toolbar.", "Stemperator Setup", 0)
+else
+    -- Create new toolbar section
+    local toolbar_section = "[Floating toolbar 2]\n"
+    toolbar_section = toolbar_section .. "title=Stemperator\n"
+
+    for i, r in ipairs(registered) do
+        local idx = i - 1
+        if r.icon then
+            toolbar_section = toolbar_section .. string.format("icon_%d=%s\n", idx, r.icon)
+        end
+        toolbar_section = toolbar_section .. string.format("item_%d=%s %s\n", idx, r.cmd_name, r.name)
+    end
+    toolbar_section = toolbar_section .. "\n"
+
+    -- First remove any existing [Floating toolbar 2] section
+    -- Split into lines, filter out the old section, rejoin
+    local lines = {}
+    local skip_section = false
+    for line in (menu_content .. "\n"):gmatch("([^\n]*)\n") do
+        if line:match("^%[Floating toolbar 2%]") then
+            skip_section = true
+        elseif line:match("^%[") then
+            skip_section = false
+        end
+        if not skip_section then
+            table.insert(lines, line)
+        end
+    end
+    menu_content = table.concat(lines, "\n")
+
+    -- Insert before [Main toolbar] or at end
+    if menu_content:find("%[Main toolbar%]") then
+        menu_content = menu_content:gsub("(%[Main toolbar%])", toolbar_section .. "%1")
+    else
+        menu_content = menu_content .. "\n" .. toolbar_section
+    end
+
+    -- Write back
+    f = io.open(menu_file, "w")
+    if f then
+        f:write(menu_content)
+        f:close()
+    end
+
+    -- Show success message
+    local msg = "Stemperator Toolbar Setup Complete!\n\n"
+    msg = msg .. "Registered " .. #registered .. " scripts with toolbar icons.\n\n"
+    msg = msg .. "NEXT STEPS:\n"
+    msg = msg .. "1. Restart REAPER (or Options > Reload reaper-menu.ini)\n"
+    msg = msg .. "2. Go to: View > Toolbars > Toolbar 2 (Stemperator)\n"
+    msg = msg .. "3. Drag the toolbar to dock it next to the main toolbar\n\n"
+    msg = msg .. "Toolbar buttons:\n"
+    msg = msg .. "• AI Separate - Main dialog with all options\n"
+    msg = msg .. "• Karaoke - Remove vocals (instrumental)\n"
+    msg = msg .. "• Instrumental - Same as Karaoke\n"
+    msg = msg .. "• Vocals Only - Extract vocals\n"
+    msg = msg .. "• Drums Only - Extract drums\n"
+    msg = msg .. "• Bass Only - Extract bass\n"
+    msg = msg .. "• All Stems - Extract all 4 stems\n"
+    msg = msg .. "• Explode - Separate to individual tracks"
+
+    reaper.MB(msg, "Stemperator Setup", 0)
+end
+
+-- Try to show the toolbar immediately
+reaper.Main_OnCommand(41680, 0) -- View: Show floating toolbar 2

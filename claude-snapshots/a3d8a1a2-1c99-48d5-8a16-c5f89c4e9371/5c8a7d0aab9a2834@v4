@@ -1,0 +1,70 @@
+[Floating toolbar 1]
+default=2bcb4157b56ed885
+icon_0=toolbar_color_track.png
+item_0=_SWS_TRACKCUSTCOL1 SWS: Set selected track(s) to custom color 1
+title=Toolbar 1
+
+[Floating toolbar 2]
+title=Stemperator
+icon_0=toolbar_settings.png
+item_0=_RSc16078b3e82706216e2e2748d12c52a56df9ad56 Stemperator: AI Stem Separation
+icon_1=toolbar_karaoke.png
+item_1=_RSb750c7ffe12aa97ad1999a2572b8c8ab3bf15691 Stemperator: Karaoke (No Vocals)
+icon_2=toolbar_vocals.png
+item_2=_RS942cb88a6354e4e2ce4e46f0ea7b5459b9d3d880 Stemperator: Vocals Only
+icon_3=toolbar_drums.png
+item_3=_RSed242ecf8a81a38d8c681192128cdbd1b8f7ceac Stemperator: Drums Only
+icon_4=toolbar_bass.png
+item_4=_RS984826dad547f8d55147827e0bf535d1bee080a5 Stemperator: Bass Only
+icon_5=toolbar_other.png
+item_5=_RSee336ddc413df2b7d865d831c59fd8b7280d0d85 Stemperator: Other Only
+icon_6=toolbar_allstems.png
+item_6=_RS1f650d840826673f262c8721509904f6be382043 Stemperator: All 4 Stems
+icon_7=toolbar_6stem.png
+item_7=_RSc62387243cb4fd78d4210b13edbe4b23ac5c61d6 Stemperator: 6-Stem All
+icon_8=toolbar_guitar.png
+item_8=_RSe9a53155ee653438021015d1ff876d8d8a4984de Stemperator: Guitar Only (6-stem)
+icon_9=toolbar_piano.png
+item_9=_RS0ff9cd0cd4a9c3f2c800048413892fd0fa9deaa6 Stemperator: Piano Only (6-stem)
+icon_10=toolbar_explode.png
+item_10=_RS766a7463a1f41446de3f796f093ae4bb2e911ff2 Stemperator: Explode to Tracks
+
+[Main toolbar]
+default=58fbbc5960bcf836
+icon_19=toolbar_midi_pitch_increase_octave.png
+icon_20=toolbar_midi_pitch_decrease_octave.png
+icon_21=toolbar_midi_pitch_increase_semitone.png
+icon_22=toolbar_midi_pitch_decrease_semitone.png
+icon_23=toolbar_midi_mode_event_list.png
+icon_24=toolbar_misc_explode.png
+icon_25=toolbar_record_create_item_seperate_lane.png
+item_0=40023 New project...
+item_1=40025 Open project...
+item_2=40026 Save project
+item_3=40021 Project settings...
+item_4=40029 Undo
+item_5=40030 Redo
+item_6=40364 Enable metronome
+item_7=-1
+item_8=42616 Marquee selection
+item_9=-1
+item_10=40041 Enable auto-crossfade
+item_11=1156 Enable item grouping and track media/razor edit grouping
+item_12=1155 Enable ripple editing
+item_13=40070 Move envelope points with media items
+item_14=40145 Show arrange view grid
+item_15=1157 Enable snapping
+item_16=1135 Enable locking
+item_17=-1
+item_18=42618 Razor editing
+item_19=40515 Item properties: Pitch item up one octave
+item_20=40516 Item properties: Pitch item down one octave
+item_21=40204 Item properties: Pitch item up one semitone
+item_22=40205 Item properties: Pitch item down one semitone
+item_23=_RSd3d7da049cdaf36646c7efdbec7cb80fdd31be4d Script: ArthurMcArthur_McSequencer.lua
+item_24=_RS766a7463a1f41446de3f796f093ae4bb2e911ff2 Stemperator Explode Stems to Tracks
+item_25=_RSc16078b3e82706216e2e2748d12c52a56df9ad56 Creates new tracks with stems from item
+tbf_8=1
+tbf_12=1
+tbf_18=1
+

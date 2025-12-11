@@ -1,0 +1,423 @@
+--[[
+  Stemperator - AI Stem Separation for Reaper
+
+  High-quality AI-powered stem separation using Demucs/audio-separator.
+  Separates the selected media item (respecting splits/edits) into 4 stems.
+
+  Features:
+  - Processes ONLY the selected item portion (respects splits!)
+  - Option to replace in-place or create new tracks
+  - Uses GPU acceleration (RX 9070)
+
+  Requirements:
+  - Python 3 with audio-separator installed: pip install audio-separator[gpu]
+  - Stemperator's audio_separator_process.py script
+
+  Usage:
+  1. Select a media item (can be a split/trimmed portion)
+  2. Run this script
+  3. Choose: Replace in-place OR Create new tracks
+  4. Wait for AI processing
+  5. Stems appear at the exact item position
+
+  Author: flarkAUDIO
+  License: MIT
+--]]
+
+local SCRIPT_NAME = "Stemperator: AI Stem Separation"
+
+-- Configuration
+local PYTHON_PATH = "/home/flark/GIT/Stemperator/.venv/bin/python"
+local SEPARATOR_SCRIPT = "/home/flark/GIT/Stemperator/Source/AI/audio_separator_process.py"
+
+-- Stem configuration
+local STEMS = {
+    { name = "Vocals", color = {255, 100, 100}, file = "vocals.wav" },
+    { name = "Drums",  color = {100, 200, 255}, file = "drums.wav" },
+    { name = "Bass",   color = {150, 100, 255}, file = "bass.wav" },
+    { name = "Other",  color = {100, 255, 150}, file = "other.wav" },
+}
+
+local function rgbToReaperColor(r, g, b)
+    return reaper.ColorToNative(r, g, b) | 0x1000000
+end
+
+-- Render selected item to a temporary WAV file
+local function renderItemToWav(item, outputPath)
+    -- Get item properties
+    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+    local track = reaper.GetMediaItem_Track(item)
+
+    -- Store current state
+    local cursorPos = reaper.GetCursorPosition()
+    local loopStart, loopEnd = reaper.GetSet_LoopTimeRange(false, false, 0, 0, false)
+
+    -- Set time selection to item bounds
+    reaper.GetSet_LoopTimeRange(true, false, itemPos, itemPos + itemLen, false)
+
+    -- Solo the track temporarily
+    local trackCount = reaper.CountTracks(0)
+    local soloStates = {}
+    local muteStates = {}
+
+    for i = 0, trackCount - 1 do
+        local t = reaper.GetTrack(0, i)
+        soloStates[i] = reaper.GetMediaTrackInfo_Value(t, "I_SOLO")
+        muteStates[i] = reaper.GetMediaTrackInfo_Value(t, "B_MUTE")
+        if t == track then
+            reaper.SetMediaTrackInfo_Value(t, "I_SOLO", 2)  -- Solo (ignore routing)
+        else
+            reaper.SetMediaTrackInfo_Value(t, "I_SOLO", 0)
+        end
+    end
+
+    -- Build render command
+    -- Format: reaper will render time selection of soloed track
+    local projectPath = reaper.GetProjectPath("")
+
+    -- Use Reaper's built-in render to file
+    -- We need to use the render action with specific settings
+    -- Action 42230: Render project, using the most recent render settings, auto-close render dialog
+
+    -- First, set up render settings via the render dialog
+    -- Or use SWS: reaper.BR_GetSetRenderTarget
+
+    -- Simpler approach: use command line render
+    -- Even simpler: read the source and apply item offset
+
+    local take = reaper.GetActiveTake(item)
+    if not take then
+        return nil, "No active take"
+    end
+
+    local source = reaper.GetMediaItemTake_Source(take)
+    if not source then
+        return nil, "No source"
+    end
+
+    local sourceFile = reaper.GetMediaSourceFileName(source, "")
+    if not sourceFile or sourceFile == "" then
+        return nil, "No source file"
+    end
+
+    -- Get take offset (where in the source file the item starts)
+    local takeOffset = reaper.GetMediaItemTakeInfo_Value(take, "D_STARTOFFS")
+    local playrate = reaper.GetMediaItemTakeInfo_Value(take, "D_PLAYRATE")
+
+    -- Calculate source start/end times
+    local srcStart = takeOffset
+    local srcEnd = takeOffset + (itemLen * playrate)
+
+    reaper.ShowConsoleMsg(string.format("Source: %s\n", sourceFile))
+    reaper.ShowConsoleMsg(string.format("Item position: %.2fs, length: %.2fs\n", itemPos, itemLen))
+    reaper.ShowConsoleMsg(string.format("Source offset: %.2fs to %.2fs\n", srcStart, srcEnd))
+
+    -- Use ffmpeg to extract just the portion we need
+    local ffmpegCmd = string.format(
+        'ffmpeg -y -i "%s" -ss %.6f -t %.6f -ar 44100 -ac 2 "%s" 2>&1',
+        sourceFile, srcStart, itemLen * playrate, outputPath
+    )
+
+    reaper.ShowConsoleMsg("Extracting item portion with ffmpeg...\n")
+    reaper.ShowConsoleMsg(ffmpegCmd .. "\n")
+
+    local handle = io.popen(ffmpegCmd)
+    local result = handle:read("*a")
+    handle:close()
+
+    -- Restore solo/mute states
+    for i = 0, trackCount - 1 do
+        local t = reaper.GetTrack(0, i)
+        reaper.SetMediaTrackInfo_Value(t, "I_SOLO", soloStates[i])
+        reaper.SetMediaTrackInfo_Value(t, "B_MUTE", muteStates[i])
+    end
+
+    -- Restore time selection and cursor
+    reaper.GetSet_LoopTimeRange(true, false, loopStart, loopEnd, false)
+    reaper.SetEditCurPos(cursorPos, false, false)
+
+    -- Check if output was created
+    local f = io.open(outputPath, "r")
+    if f then
+        f:close()
+        return outputPath
+    else
+        return nil, "Failed to extract audio: " .. result
+    end
+end
+
+-- Run AI separation
+local function runSeparation(inputFile, outputDir, model)
+    local cmd = string.format(
+        '"%s" -u "%s" "%s" "%s" --model %s 2>&1',
+        PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model
+    )
+
+    reaper.ShowConsoleMsg("\n========================================\n")
+    reaper.ShowConsoleMsg("Running AI Separation (Demucs)\n")
+    reaper.ShowConsoleMsg("========================================\n")
+    reaper.ShowConsoleMsg("Model: " .. model .. "\n")
+    reaper.ShowConsoleMsg("This may take a minute...\n\n")
+
+    local handle = io.popen(cmd)
+    if not handle then
+        return nil, "Failed to start separation process"
+    end
+
+    -- Read output and show progress
+    for line in handle:lines() do
+        -- Parse progress: PROGRESS:45:Processing chunk 3/8
+        local percent, stage = line:match("PROGRESS:(%d+):(.+)")
+        if percent then
+            reaper.ShowConsoleMsg(string.format("[%3d%%] %s\n", tonumber(percent), stage))
+        elseif not line:match("^%s*$") then
+            -- Show non-empty lines that aren't progress
+            if line:match("^Loading") or line:match("^Processing") or line:match("^Error") or line:match("^WARNING") then
+                reaper.ShowConsoleMsg(line .. "\n")
+            end
+        end
+    end
+    handle:close()
+
+    -- Check if stems were created
+    local stems = {}
+    for _, stem in ipairs(STEMS) do
+        local stemPath = outputDir .. "/" .. stem.file
+        local f = io.open(stemPath, "r")
+        if f then
+            f:close()
+            stems[stem.name:lower()] = stemPath
+        end
+    end
+
+    if next(stems) == nil then
+        return nil, "Separation failed - no stems created"
+    end
+
+    reaper.ShowConsoleMsg("\nSeparation complete!\n")
+    return stems
+end
+
+-- Replace item in-place with stems on same track
+local function replaceInPlace(item, stemPaths, itemPos, itemLen)
+    local track = reaper.GetMediaItem_Track(item)
+    local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+
+    reaper.Undo_BeginBlock()
+
+    -- Delete original item
+    reaper.DeleteTrackMediaItem(track, item)
+
+    -- Insert stems on the same track, stacked or as takes
+    -- For "in-place", let's create 4 items at the same position (user can then explode to tracks)
+
+    local items = {}
+    for i, stem in ipairs(STEMS) do
+        local stemPath = stemPaths[stem.name:lower()]
+        if stemPath then
+            -- Insert media item
+            local newItem = reaper.AddMediaItemToTrack(track)
+            reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+            reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+
+            -- Add take
+            local take = reaper.AddTakeToMediaItem(newItem)
+            local source = reaper.PCM_Source_CreateFromFile(stemPath)
+            reaper.SetMediaItemTake_Source(take, source)
+            reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", stem.name, true)
+
+            -- Color the item
+            local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+            reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+
+            -- Only show first stem, others as additional takes
+            if i == 1 then
+                reaper.SetMediaItemInfo_Value(newItem, "B_UISEL", 1)
+            end
+
+            items[#items + 1] = newItem
+        end
+    end
+
+    -- Alternative: Put all stems as takes in ONE item
+    -- This lets user switch between stems with Take menu
+    if #items > 1 then
+        -- Merge all items into one with multiple takes
+        local mainItem = items[1]
+
+        for i = 2, #items do
+            local srcItem = items[i]
+            local srcTake = reaper.GetActiveTake(srcItem)
+            if srcTake then
+                -- Copy take to main item
+                local newTake = reaper.AddTakeToMediaItem(mainItem)
+                local srcSource = reaper.GetMediaItemTake_Source(srcTake)
+                reaper.SetMediaItemTake_Source(newTake, srcSource)
+
+                local _, takeName = reaper.GetSetMediaItemTakeInfo_String(srcTake, "P_NAME", "", false)
+                reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", takeName, true)
+            end
+            reaper.DeleteTrackMediaItem(track, srcItem)
+        end
+
+        reaper.ShowConsoleMsg("\nStems added as takes - use 'T' key to switch between stems\n")
+    end
+
+    reaper.Undo_EndBlock("Stemperator: Replace in-place", -1)
+    return 1
+end
+
+-- Create new tracks for each stem
+local function createStemTracks(item, stemPaths, itemPos, itemLen)
+    local track = reaper.GetMediaItem_Track(item)
+    local trackIdx = math.floor(reaper.GetMediaTrackInfo_Value(track, "IP_TRACKNUMBER"))
+    local _, trackName = reaper.GetSetMediaTrackInfo_String(track, "P_NAME", "", false)
+    if trackName == "" then trackName = "Item" end
+
+    -- Get source name from item
+    local take = reaper.GetActiveTake(item)
+    local sourceName = trackName
+    if take then
+        local _, takeName = reaper.GetSetMediaItemTakeInfo_String(take, "P_NAME", "", false)
+        if takeName and takeName ~= "" then
+            sourceName = takeName:match("([^/\\]+)%.[^.]*$") or takeName
+        end
+    end
+
+    reaper.Undo_BeginBlock()
+
+    -- Create folder track
+    reaper.InsertTrackAtIndex(trackIdx, true)
+    local folderTrack = reaper.GetTrack(0, trackIdx)
+    reaper.GetSetMediaTrackInfo_String(folderTrack, "P_NAME", sourceName .. " - Stems", true)
+    reaper.SetMediaTrackInfo_Value(folderTrack, "I_FOLDERDEPTH", 1)
+
+    -- Create stem tracks
+    local importedCount = 0
+    for i, stem in ipairs(STEMS) do
+        local stemPath = stemPaths[stem.name:lower()]
+        if stemPath then
+            -- Create track
+            reaper.InsertTrackAtIndex(trackIdx + i, true)
+            local newTrack = reaper.GetTrack(0, trackIdx + i)
+
+            -- Set track properties
+            reaper.GetSetMediaTrackInfo_String(newTrack, "P_NAME", sourceName .. " - " .. stem.name, true)
+            local color = rgbToReaperColor(stem.color[1], stem.color[2], stem.color[3])
+            reaper.SetMediaTrackInfo_Value(newTrack, "I_CUSTOMCOLOR", color)
+
+            -- Insert media item at correct position
+            local newItem = reaper.AddMediaItemToTrack(newTrack)
+            reaper.SetMediaItemInfo_Value(newItem, "D_POSITION", itemPos)
+            reaper.SetMediaItemInfo_Value(newItem, "D_LENGTH", itemLen)
+
+            -- Add source
+            local newTake = reaper.AddTakeToMediaItem(newItem)
+            local source = reaper.PCM_Source_CreateFromFile(stemPath)
+            reaper.SetMediaItemTake_Source(newTake, source)
+            reaper.GetSetMediaItemTakeInfo_String(newTake, "P_NAME", stem.name, true)
+
+            -- Color item
+            reaper.SetMediaItemInfo_Value(newItem, "I_CUSTOMCOLOR", color)
+
+            importedCount = importedCount + 1
+        end
+    end
+
+    -- Close folder
+    if importedCount > 0 then
+        local lastTrack = reaper.GetTrack(0, trackIdx + importedCount)
+        reaper.SetMediaTrackInfo_Value(lastTrack, "I_FOLDERDEPTH", -1)
+    end
+
+    -- Mute original item
+    reaper.SetMediaItemInfo_Value(item, "B_MUTE", 1)
+
+    reaper.Undo_EndBlock("Stemperator: Create stem tracks", -1)
+    return importedCount
+end
+
+-- Main function
+local function main()
+    -- Check for selected item
+    local item = reaper.GetSelectedMediaItem(0, 0)
+    if not item then
+        reaper.MB("Please select a media item to separate.", SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Get item info
+    local itemPos = reaper.GetMediaItemInfo_Value(item, "D_POSITION")
+    local itemLen = reaper.GetMediaItemInfo_Value(item, "D_LENGTH")
+
+    reaper.ShowConsoleMsg("\n========================================\n")
+    reaper.ShowConsoleMsg("Stemperator AI Separation\n")
+    reaper.ShowConsoleMsg("========================================\n")
+    reaper.ShowConsoleMsg(string.format("Item: %.2fs at position %.2fs\n", itemLen, itemPos))
+
+    -- Ask: New tracks or in-place?
+    local modeChoice = reaper.MB(
+        "How do you want the stems?\n\n" ..
+        "YES = Create NEW TRACKS (folder with 4 stem tracks)\n" ..
+        "NO = Replace IN-PLACE (stems as takes, switch with T key)",
+        SCRIPT_NAME, 3)
+
+    if modeChoice == 2 then return end  -- Cancel
+    local createNewTracks = (modeChoice == 6)  -- Yes
+
+    -- Ask: Model?
+    local modelChoice = reaper.MB(
+        "Select AI model:\n\n" ..
+        "YES = htdemucs (fast, ~30s for 3min song)\n" ..
+        "NO = htdemucs_ft (best quality, slower)",
+        SCRIPT_NAME, 3)
+
+    if modelChoice == 2 then return end  -- Cancel
+    local model = (modelChoice == 6) and "htdemucs" or "htdemucs_ft"
+
+    -- Create temp directory
+    local tempDir = "/tmp/stemperator_" .. os.time()
+    os.execute('mkdir -p "' .. tempDir .. '"')
+    local tempInput = tempDir .. "/input.wav"
+
+    -- Extract item audio to temp file
+    local extracted, err = renderItemToWav(item, tempInput)
+    if not extracted then
+        reaper.MB("Failed to extract audio:\n\n" .. (err or "Unknown error"), SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Run AI separation
+    local stems, sepErr = runSeparation(tempInput, tempDir, model)
+    if not stems then
+        reaper.MB("Separation failed:\n\n" .. (sepErr or "Unknown error"), SCRIPT_NAME, 0)
+        return
+    end
+
+    -- Import stems
+    local count
+    if createNewTracks then
+        count = createStemTracks(item, stems, itemPos, itemLen)
+        reaper.ShowConsoleMsg(string.format("\nCreated %d stem tracks\n", count))
+    else
+        count = replaceInPlace(item, stems, itemPos, itemLen)
+        reaper.ShowConsoleMsg("\nReplaced item with stems (as takes)\n")
+    end
+
+    -- Cleanup temp files (optional - leave for debugging)
+    -- os.execute('rm -rf "' .. tempDir .. '"')
+
+    reaper.MB(
+        "Stem separation complete!\n\n" ..
+        (createNewTracks
+            and "4 stem tracks created in a folder.\nOriginal item muted."
+            or "Item replaced with stems as takes.\nPress T to switch between stems."),
+        SCRIPT_NAME, 0)
+
+    reaper.UpdateArrange()
+end
+
+-- Run
+reaper.ClearConsole()
+main()
