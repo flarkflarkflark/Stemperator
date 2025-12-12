@@ -84,6 +84,17 @@ local LANGUAGES = {
         model_quality_desc = "htdemucs_ft - Best quality, slower (4 stems)",
         model_6stem_desc = "htdemucs_6s - Adds Guitar & Piano separation",
 
+        -- Device options
+        device = "Device:",
+        device_auto = "Auto (GPU)",
+        device_cpu = "CPU",
+        device_gpu0 = "GPU 0",
+        device_gpu1 = "GPU 1",
+        tooltip_device_auto = "Automatically use first available GPU, fallback to CPU",
+        tooltip_device_cpu = "Force CPU processing (slower but uses less VRAM)",
+        tooltip_device_gpu0 = "Use first GPU (cuda:0)",
+        tooltip_device_gpu1 = "Use second GPU (cuda:1)",
+
         -- Preset tooltips
         tooltip_preset_karaoke = "Everything except vocals",
         tooltip_preset_all = "Select all available stems",
@@ -276,6 +287,17 @@ local LANGUAGES = {
         model_quality_desc = "htdemucs_ft - Beste kwaliteit, langzamer (4 stems)",
         model_6stem_desc = "htdemucs_6s - Voegt Gitaar & Piano separatie toe",
 
+        -- Device options
+        device = "Apparaat:",
+        device_auto = "Auto (GPU)",
+        device_cpu = "CPU",
+        device_gpu0 = "GPU 0",
+        device_gpu1 = "GPU 1",
+        tooltip_device_auto = "Gebruik automatisch eerste beschikbare GPU, terugval naar CPU",
+        tooltip_device_cpu = "Forceer CPU verwerking (langzamer maar gebruikt minder VRAM)",
+        tooltip_device_gpu0 = "Gebruik eerste GPU (cuda:0)",
+        tooltip_device_gpu1 = "Gebruik tweede GPU (cuda:1)",
+
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles behalve zang",
         tooltip_preset_all = "Selecteer alle beschikbare stems",
@@ -467,6 +489,17 @@ local LANGUAGES = {
         model_fast_desc = "htdemucs - Schnellstes Modell, gute Qualitaet (4 Stems)",
         model_quality_desc = "htdemucs_ft - Beste Qualitaet, langsamer (4 Stems)",
         model_6stem_desc = "htdemucs_6s - Fuegt Gitarre & Klavier Trennung hinzu",
+
+        -- Device options
+        device = "Geraet:",
+        device_auto = "Auto (GPU)",
+        device_cpu = "CPU",
+        device_gpu0 = "GPU 0",
+        device_gpu1 = "GPU 1",
+        tooltip_device_auto = "Automatisch erste verfuegbare GPU verwenden, Rueckfall auf CPU",
+        tooltip_device_cpu = "CPU-Verarbeitung erzwingen (langsamer aber weniger VRAM)",
+        tooltip_device_gpu0 = "Erste GPU verwenden (cuda:0)",
+        tooltip_device_gpu1 = "Zweite GPU verwenden (cuda:1)",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles ausser Gesang",

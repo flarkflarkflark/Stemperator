@@ -211,6 +211,7 @@ local MODELS = {
 -- Settings (persist between runs)
 local SETTINGS = {
     model = "htdemucs",
+    device = "auto",           -- Device selection: auto, cpu, cuda:0, cuda:1
     createNewTracks = true,
     createFolder = false,
     muteOriginal = false,      -- Mute original item(s) after separation
@@ -381,6 +382,9 @@ local function loadSettings()
     local model = reaper.GetExtState(EXT_SECTION, "model")
     if model ~= "" then SETTINGS.model = model end
 
+    local device = reaper.GetExtState(EXT_SECTION, "device")
+    if device ~= "" then SETTINGS.device = device end
+
     local createNewTracks = reaper.GetExtState(EXT_SECTION, "createNewTracks")
     if createNewTracks ~= "" then SETTINGS.createNewTracks = (createNewTracks == "1") end
 
@@ -449,6 +453,7 @@ end
 -- Save settings to ExtState
 local function saveSettings()
     reaper.SetExtState(EXT_SECTION, "model", SETTINGS.model, true)
+    reaper.SetExtState(EXT_SECTION, "device", SETTINGS.device, true)
     reaper.SetExtState(EXT_SECTION, "createNewTracks", SETTINGS.createNewTracks and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "createFolder", SETTINGS.createFolder and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "muteOriginal", SETTINGS.muteOriginal and "1" or "0", true)
@@ -7680,6 +7685,34 @@ local function dialogLoop()
         or T("tooltip_sequential")
     setTooltip(col3X, modelY, modelBoxW, btnH, parallelTip)
 
+    -- Device selection
+    modelY = modelY + S(28)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = col3X
+    gfx.y = modelY
+    gfx.drawstr(T("device"))
+
+    modelY = modelY + S(20)
+    if drawRadio(col3X, modelY, SETTINGS.device == "auto", T("device_auto"), nil, modelBoxW) then
+        SETTINGS.device = "auto"
+    end
+    setTooltip(col3X, modelY, modelBoxW, btnH, T("tooltip_device_auto"))
+    modelY = modelY + S(22)
+    if drawRadio(col3X, modelY, SETTINGS.device == "cpu", T("device_cpu"), nil, modelBoxW) then
+        SETTINGS.device = "cpu"
+    end
+    setTooltip(col3X, modelY, modelBoxW, btnH, T("tooltip_device_cpu"))
+    modelY = modelY + S(22)
+    if drawRadio(col3X, modelY, SETTINGS.device == "cuda:0", T("device_gpu0"), nil, modelBoxW) then
+        SETTINGS.device = "cuda:0"
+    end
+    setTooltip(col3X, modelY, modelBoxW, btnH, T("tooltip_device_gpu0"))
+    modelY = modelY + S(22)
+    if drawRadio(col3X, modelY, SETTINGS.device == "cuda:1", T("device_gpu1"), nil, modelBoxW) then
+        SETTINGS.device = "cuda:1"
+    end
+    setTooltip(col3X, modelY, modelBoxW, btnH, T("tooltip_device_gpu1"))
+
     -- === COLUMN 4: Output ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     gfx.x = col4X
@@ -9427,7 +9460,7 @@ local function startSeparationProcess(inputFile, outputDir, model)
         if batFile then
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. inputFile .. '" "' .. outputDir .. '" --model ' .. model .. ' --segment-size 30 ')
+            batFile:write('"' .. inputFile .. '" "' .. outputDir .. '" --model ' .. model .. ' --device ' .. SETTINGS.device .. ' --segment-size 30 ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -9453,8 +9486,8 @@ local function startSeparationProcess(inputFile, outputDir, model)
         -- Unix: run in background
         -- Single-track mode uses larger segment size (40) for better GPU utilization
         local cmd = string.format(
-            '"%s" -u "%s" "%s" "%s" --model %s --segment-size 30 >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
-            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile, outputDir
+            '"%s" -u "%s" "%s" "%s" --model %s --device %s --segment-size 30 >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
+            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, SETTINGS.device, stdoutFile, logFile, outputDir
         )
         os.execute(cmd)
     end
@@ -9596,8 +9629,8 @@ local function runSeparation(inputFile, outputDir, model)
         local vbsFile = io.open(vbsPath, "w")
         if vbsFile then
             local pythonCmd = string.format(
-                '"%s" -u "%s" "%s" "%s" --model %s',
-                PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model
+                '"%s" -u "%s" "%s" "%s" --model %s --device %s',
+                PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, SETTINGS.device
             )
             pythonCmd = pythonCmd:gsub('"', '""')
             vbsFile:write('Set WshShell = CreateObject("WScript.Shell")\n')
@@ -9607,8 +9640,8 @@ local function runSeparation(inputFile, outputDir, model)
         end
     else
         cmd = string.format(
-            '"%s" -u "%s" "%s" "%s" --model %s >"%s" 2>"%s"',
-            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile
+            '"%s" -u "%s" "%s" "%s" --model %s --device %s >"%s" 2>"%s"',
+            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, SETTINGS.device, stdoutFile, logFile
         )
     end
 
@@ -10886,7 +10919,7 @@ startSeparationProcessForJob = function(job, segmentSize)
         if batFile then
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize .. ' ')
+            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --device ' .. SETTINGS.device .. ' --segment-size ' .. segmentSize .. ' ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -10910,7 +10943,7 @@ startSeparationProcessForJob = function(job, segmentSize)
     else
         -- macOS/Linux
         local cmd = '"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" '
-        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize
+        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --device ' .. SETTINGS.device .. ' --segment-size ' .. segmentSize
         cmd = cmd .. ' >"' .. stdoutFile .. '" 2>"' .. logFile .. '" && echo DONE >"' .. doneFile .. '" &'
         os.execute(cmd)
     end
