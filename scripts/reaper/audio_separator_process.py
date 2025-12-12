@@ -39,7 +39,7 @@ def emit_progress(percent: float, stage: str = ""):
     sys.stdout.write(f"PROGRESS:{int(percent)}:{stage}\n")
     sys.stdout.flush()
 
-def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs"):
+def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs", gpu_id: int = 0):
     """
     Separate audio into stems using audio-separator.
 
@@ -75,11 +75,18 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
     print(f"Input: {input_file}", file=sys.stderr)
     print(f"Output: {output_dir}", file=sys.stderr)
 
-    # Check GPU availability
+    # Check GPU availability and select device
     import torch
-    if torch.cuda.is_available():
-        device = "cuda:0"  # Use first GPU (RX 9070)
-        print(f"Using GPU: {torch.cuda.get_device_name(0)}", file=sys.stderr)
+    if gpu_id < 0:
+        device = "cpu"
+        print("Using CPU (forced)", file=sys.stderr)
+    elif torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        if gpu_id >= device_count:
+            print(f"WARNING: GPU {gpu_id} not available (only {device_count} GPUs), using GPU 0", file=sys.stderr)
+            gpu_id = 0
+        device = f"cuda:{gpu_id}"
+        print(f"Using GPU {gpu_id}: {torch.cuda.get_device_name(gpu_id)}", file=sys.stderr)
     else:
         device = "cpu"
         print("WARNING: No GPU detected, using CPU (will be slow)", file=sys.stderr)
@@ -265,7 +272,12 @@ def check_installation():
         print(f"CUDA available: {torch.cuda.is_available()}", file=sys.stderr)
 
         if torch.cuda.is_available():
-            print(f"GPU: {torch.cuda.get_device_name(0)}", file=sys.stderr)
+            count = torch.cuda.device_count()
+            print(f"GPUs available: {count}", file=sys.stderr)
+            for i in range(count):
+                props = torch.cuda.get_device_properties(i)
+                memory_gb = props.total_memory / (1024**3)
+                print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({memory_gb:.1f} GB)", file=sys.stderr)
 
         return True
     except ImportError as e:
@@ -279,10 +291,14 @@ def main():
     parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
     parser.add_argument("--model", default="htdemucs",
                         help="Model to use (htdemucs, htdemucs_ft, UVR-MDX-NET-Voc_FT, etc.)")
+    parser.add_argument("--gpu-id", type=int, default=0,
+                        help="GPU device ID to use (0, 1, etc.) or -1 for CPU")
     parser.add_argument("--check", action="store_true",
                         help="Only check installation, don't process")
     parser.add_argument("--list-models", action="store_true",
                         help="List available models")
+    parser.add_argument("--list-gpus", action="store_true",
+                        help="List available GPUs")
 
     args = parser.parse_args()
 
@@ -302,6 +318,19 @@ def main():
         print("  Kim_Vocal_2 - Alternative vocal model")
         sys.exit(0)
 
+    if args.list_gpus:
+        import torch
+        if torch.cuda.is_available():
+            count = torch.cuda.device_count()
+            print(f"Available GPUs ({count}):")
+            for i in range(count):
+                props = torch.cuda.get_device_properties(i)
+                memory_gb = props.total_memory / (1024**3)
+                print(f"  GPU {i}: {torch.cuda.get_device_name(i)} ({memory_gb:.1f} GB)")
+        else:
+            print("No GPUs detected (CPU only)")
+        sys.exit(0)
+
     if not args.input or not args.output_dir:
         parser.print_help()
         sys.exit(1)
@@ -311,7 +340,7 @@ def main():
         sys.exit(1)
 
     try:
-        output_files = separate_stems(args.input, args.output_dir, args.model)
+        output_files = separate_stems(args.input, args.output_dir, args.model, args.gpu_id)
 
         # Output JSON for C++ to parse
         print(json.dumps(output_files))

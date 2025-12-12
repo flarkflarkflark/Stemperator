@@ -20,7 +20,20 @@ endif()
 
 # Add JUCE (from root directory)
 get_filename_component(ROOT_DIR "${CMAKE_SOURCE_DIR}/.." ABSOLUTE)
-add_subdirectory(${ROOT_DIR}/JUCE JUCE)
+set(JUCE_PATH "${ROOT_DIR}/JUCE")
+
+# Verify JUCE exists before trying to add it
+if(NOT EXISTS "${JUCE_PATH}/CMakeLists.txt")
+    message(FATAL_ERROR 
+        "JUCE not found at: ${JUCE_PATH}\n"
+        "Please clone JUCE to the repository root:\n"
+        "  cd ${ROOT_DIR}\n"
+        "  git clone https://github.com/juce-framework/JUCE.git\n"
+        "Or if using git submodules:\n"
+        "  git submodule update --init --recursive")
+endif()
+
+add_subdirectory(${JUCE_PATH} JUCE)
 
 # =============================================================================
 # GPU Acceleration Detection

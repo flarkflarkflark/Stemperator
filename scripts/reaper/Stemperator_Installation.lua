@@ -441,9 +441,13 @@ end
 -- Main installation function with progress window
 local function runInstallationWithProgress()
     openProgressWindow()
-    progressWindowLoop()
     
-    updateProgress(0, "Starting installation...", "Operating System: " .. OS)
+    -- Defer both window rendering and installation to avoid blocking
+    reaper.defer(progressWindowLoop)  -- Start window loop
+    
+    -- Start installation in next defer cycle
+    reaper.defer(function()
+        updateProgress(0, "Starting installation...", "Operating System: " .. OS)
     updateProgress(0, "", "Script path: " .. script_path)
     
     -- Step 1: Find Python
@@ -544,6 +548,7 @@ local function runInstallationWithProgress()
         end)
         return false
     end
+    end)  -- End deferred installation function
 end
 
 -- Check existing installation status
