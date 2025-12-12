@@ -39,7 +39,7 @@ def emit_progress(percent: float, stage: str = ""):
     sys.stdout.write(f"PROGRESS:{int(percent)}:{stage}\n")
     sys.stdout.flush()
 
-def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs", gpu_id: int = 0):
+def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs", device: str = "auto"):
     """
     Separate audio into stems using audio-separator.
 
@@ -47,6 +47,7 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
         input_file: Path to input audio file
         output_dir: Directory to write output stems
         model_name: Model to use for separation (htdemucs, htdemucs_ft, htdemucs_6s)
+        device: Device to use (auto, cpu, cuda:0, cuda:1, etc.)
 
     Returns:
         dict: Paths to output stem files
@@ -56,12 +57,12 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
     import time
 
     # Map short names to full model names used by audio-separator
-    # Model names require .yaml suffix for Demucs v4 models
+    # The audio-separator library handles the .yaml suffix automatically
     model_mapping = {
-        'htdemucs': 'htdemucs.yaml',
-        'htdemucs_ft': 'htdemucs_ft.yaml',
-        'htdemucs_6s': 'htdemucs_6s.yaml',
-        'hdemucs_mmi': 'hdemucs_mmi.yaml',
+        'htdemucs': 'htdemucs',
+        'htdemucs_ft': 'htdemucs_ft',
+        'htdemucs_6s': 'htdemucs_6s',
+        'hdemucs_mmi': 'hdemucs_mmi',
     }
 
     # Use mapped name or original if not in mapping
@@ -77,19 +78,49 @@ def separate_stems(input_file: str, output_dir: str, model_name: str = "htdemucs
 
     # Check GPU availability and select device
     import torch
-    if gpu_id < 0:
-        device = "cpu"
-        print("Using CPU (forced)", file=sys.stderr)
-    elif torch.cuda.is_available():
-        device_count = torch.cuda.device_count()
-        if gpu_id >= device_count:
-            print(f"WARNING: GPU {gpu_id} not available (only {device_count} GPUs), using GPU 0", file=sys.stderr)
-            gpu_id = 0
-        device = f"cuda:{gpu_id}"
-        print(f"Using GPU {gpu_id}: {torch.cuda.get_device_name(gpu_id)}", file=sys.stderr)
+    
+    # Parse device preference
+    if device == "auto":
+        # Auto: use first GPU if available, otherwise CPU
+        if torch.cuda.is_available():
+            device = "cuda:0"
+            print(f"Device preference: auto", file=sys.stderr)
+            print(f"Selected device: cuda:0 (auto-selected)", file=sys.stderr)
+        else:
+            device = "cpu"
+            print(f"Device preference: auto", file=sys.stderr)
+            print(f"Selected device: cpu (no GPU available)", file=sys.stderr)
+    elif device == "cpu":
+        print(f"Device preference: cpu", file=sys.stderr)
+        print(f"Selected device: cpu", file=sys.stderr)
+    elif device.startswith("cuda:"):
+        # Validate GPU ID
+        if torch.cuda.is_available():
+            gpu_id = int(device.split(":")[1])
+            device_count = torch.cuda.device_count()
+            if gpu_id >= device_count:
+                print(f"WARNING: GPU {gpu_id} not available (only {device_count} GPUs), using GPU 0", file=sys.stderr)
+                device = "cuda:0"
+            print(f"Device preference: {device}", file=sys.stderr)
+            print(f"Selected device: {device}", file=sys.stderr)
+        else:
+            print(f"WARNING: No GPU detected, falling back to CPU", file=sys.stderr)
+            device = "cpu"
     else:
-        device = "cpu"
-        print("WARNING: No GPU detected, using CPU (will be slow)", file=sys.stderr)
+        print(f"WARNING: Invalid device '{device}', using auto", file=sys.stderr)
+        device = "cuda:0" if torch.cuda.is_available() else "cpu"
+    
+    # Print available devices
+    if torch.cuda.is_available():
+        device_count = torch.cuda.device_count()
+        print(f"Available devices:", file=sys.stderr)
+        print(f"  - cpu:  CPU", file=sys.stderr)
+        for i in range(device_count):
+            marker = " <-- SELECTED" if device == f"cuda:{i}" else ""
+            print(f"  - cuda:{i}:  {torch.cuda.get_device_name(i)}{marker}", file=sys.stderr)
+    else:
+        print(f"Available devices:", file=sys.stderr)
+        print(f"  - cpu:  CPU <-- SELECTED", file=sys.stderr)
 
     # Progress emitter thread for model loading phase
     # This provides smooth progress during the slow model loading
@@ -291,8 +322,8 @@ def main():
     parser.add_argument("output_dir", nargs="?", help="Output directory for stems")
     parser.add_argument("--model", default="htdemucs",
                         help="Model to use (htdemucs, htdemucs_ft, UVR-MDX-NET-Voc_FT, etc.)")
-    parser.add_argument("--gpu-id", type=int, default=0,
-                        help="GPU device ID to use (0, 1, etc.) or -1 for CPU")
+    parser.add_argument("--device", default="auto",
+                        help="Device to use: auto (default), cpu, cuda:0, cuda:1, etc.")
     parser.add_argument("--check", action="store_true",
                         help="Only check installation, don't process")
     parser.add_argument("--list-models", action="store_true",
@@ -340,7 +371,7 @@ def main():
         sys.exit(1)
 
     try:
-        output_files = separate_stems(args.input, args.output_dir, args.model, args.gpu_id)
+        output_files = separate_stems(args.input, args.output_dir, args.model, args.device)
 
         # Output JSON for C++ to parse
         print(json.dumps(output_files))
