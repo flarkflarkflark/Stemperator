@@ -242,6 +242,23 @@ pip install audio-separator[gpu]
 
 ---
 
+## Contributing
+
+Contributions are welcome! For development setup and guidelines:
+
+1. See [AGENTS.md](AGENTS.md) for project overview and AI assistant guidance
+2. See [CLAUDE.md](CLAUDE.md) for detailed code locations and developer notes
+3. See [.github/copilot-instructions.md](.github/copilot-instructions.md) for coding standards
+
+**Quick Start for Developers**:
+- Clone the repository
+- Main code is in `scripts/reaper/Stemperator_AI_Separate.lua` (~10.5K lines Lua)
+- No build step - scripts are interpreted by REAPER
+- Testing is manual via REAPER's Actions → Load ReaScript
+- Distribution via ReaPack (see `scripts/reaper/index.xml`)
+
+---
+
 ## Credits
 
 - **Demucs**: Meta AI Research (MIT License)
