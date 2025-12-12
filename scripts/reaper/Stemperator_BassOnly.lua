@@ -1,6 +1,6 @@
 -- @description STEMperator - Quick Bass Only
 -- @author flarkAUDIO
--- @version 1.0.0
+-- @version 2.0.0
 -- @changelog
 --   Initial release
 -- @link Repository https://github.com/flarkflarkflark/Stemperator

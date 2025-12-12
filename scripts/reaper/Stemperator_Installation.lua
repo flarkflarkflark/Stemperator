@@ -1,6 +1,6 @@
 -- @description STEMperator - Installation & Setup
 -- @author flarkAUDIO
--- @version 1.0.0
+-- @version 2.0.0
 -- @changelog
 --   v1.0.0: Initial release
 --   - Cross-platform Python/audio-separator installation

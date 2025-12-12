@@ -1,6 +1,6 @@
 -- @description STEMperator: Piano Only (6-stem model)
 -- @author flarkAUDIO
--- @version 1.0.0
+-- @version 2.0.0
 -- @about Quick action to extract only the Piano stem using the 6-stem model
 
 -- Load the main script's functions
