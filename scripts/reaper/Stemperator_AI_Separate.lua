@@ -187,6 +187,68 @@ end
 local PYTHON_PATH = findPython()
 local SEPARATOR_SCRIPT = findSeparatorScript()
 
+-- Detect available devices by calling Python script
+local AVAILABLE_DEVICES = nil
+local function detectAvailableDevices()
+    if AVAILABLE_DEVICES then return AVAILABLE_DEVICES end
+    
+    AVAILABLE_DEVICES = {}
+    
+    -- Always include Auto and CPU options
+    table.insert(AVAILABLE_DEVICES, { id = "auto", name = "Auto", desc = "Automatically select best device" })
+    table.insert(AVAILABLE_DEVICES, { id = "cpu", name = "CPU", desc = "CPU only (slow but always works)" })
+    
+    -- Try to query Python for available devices
+    local cmd
+    if OS == "Windows" then
+        cmd = '"' .. PYTHON_PATH .. '" "' .. SEPARATOR_SCRIPT .. '" --list-devices 2>nul'
+    else
+        cmd = '"' .. PYTHON_PATH .. '" "' .. SEPARATOR_SCRIPT .. '" --list-devices 2>/dev/null'
+    end
+    
+    local handle = io.popen(cmd)
+    if handle then
+        local output = handle:read("*a")
+        handle:close()
+        
+        -- Parse output: "  cuda:0: NVIDIA RTX 3090"
+        for device_id, device_name in output:gmatch("  ([%w:]+): ([^\n]+)") do
+            -- Skip CPU as we already added it
+            if device_id ~= "cpu" then
+                -- Format name for display
+                local displayName = device_name
+                -- Shorten NVIDIA/AMD names if too long
+                if #displayName > 30 then
+                    displayName = displayName:sub(1, 27) .. "..."
+                end
+                
+                -- Determine device type for description
+                local desc = ""
+                if device_id:match("^cuda:") then
+                    desc = "NVIDIA/AMD GPU (CUDA/ROCm)"
+                elseif device_id:match("^directml:") then
+                    desc = "AMD/Intel GPU (DirectML)"
+                elseif device_id == "mps" then
+                    desc = "Apple Silicon GPU"
+                end
+                
+                table.insert(AVAILABLE_DEVICES, {
+                    id = device_id,
+                    name = displayName,
+                    desc = desc
+                })
+            end
+        end
+    end
+    
+    debugLog("Detected devices: " .. #AVAILABLE_DEVICES)
+    for _, dev in ipairs(AVAILABLE_DEVICES) do
+        debugLog("  " .. dev.id .. ": " .. dev.name)
+    end
+    
+    return AVAILABLE_DEVICES
+end
+
 -- Stem configuration (with selection state)
 -- First 4 are always shown, Guitar/Piano only for 6-stem model
 local STEMS = {
@@ -211,6 +273,7 @@ local MODELS = {
 -- Settings (persist between runs)
 local SETTINGS = {
     model = "htdemucs",
+    device = "auto",           -- Device selection: auto, cpu, cuda:0, cuda:1, directml:0, directml:1, mps
     createNewTracks = true,
     createFolder = false,
     muteOriginal = false,      -- Mute original item(s) after separation
@@ -381,6 +444,9 @@ local function loadSettings()
     local model = reaper.GetExtState(EXT_SECTION, "model")
     if model ~= "" then SETTINGS.model = model end
 
+    local device = reaper.GetExtState(EXT_SECTION, "device")
+    if device ~= "" then SETTINGS.device = device end
+
     local createNewTracks = reaper.GetExtState(EXT_SECTION, "createNewTracks")
     if createNewTracks ~= "" then SETTINGS.createNewTracks = (createNewTracks == "1") end
 
@@ -449,6 +515,7 @@ end
 -- Save settings to ExtState
 local function saveSettings()
     reaper.SetExtState(EXT_SECTION, "model", SETTINGS.model, true)
+    reaper.SetExtState(EXT_SECTION, "device", SETTINGS.device, true)
     reaper.SetExtState(EXT_SECTION, "createNewTracks", SETTINGS.createNewTracks and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "createFolder", SETTINGS.createFolder and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "muteOriginal", SETTINGS.muteOriginal and "1" or "0", true)
@@ -7668,6 +7735,57 @@ local function dialogLoop()
         modelY = modelY + S(22)
     end
 
+    -- Device selection
+    modelY = modelY + S(8)
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = col3X
+    gfx.y = modelY
+    gfx.drawstr(T("device"))
+    modelY = modelY + S(18)
+    
+    -- Detect available devices (cached)
+    local devices = detectAvailableDevices()
+    
+    -- Draw device selector as dropdown-style (show current selection + click to cycle)
+    local currentDeviceName = "Auto"
+    for _, dev in ipairs(devices) do
+        if dev.id == SETTINGS.device then
+            currentDeviceName = dev.name
+            break
+        end
+    end
+    
+    -- Draw button showing current device
+    local deviceBtnColor = {100, 160, 220}
+    if drawButton(col3X, modelY, modelBoxW, btnH, currentDeviceName, deviceBtnColor[1], deviceBtnColor[2], deviceBtnColor[3]) then
+        -- Cycle to next device
+        local currentIdx = 1
+        for i, dev in ipairs(devices) do
+            if dev.id == SETTINGS.device then
+                currentIdx = i
+                break
+            end
+        end
+        local nextIdx = (currentIdx % #devices) + 1
+        SETTINGS.device = devices[nextIdx].id
+    end
+    
+    -- Tooltip shows device description
+    local deviceTooltip = "Auto"
+    for _, dev in ipairs(devices) do
+        if dev.id == SETTINGS.device then
+            deviceTooltip = dev.desc
+            if dev.desc and dev.desc ~= "" then
+                deviceTooltip = dev.name .. " - " .. dev.desc
+            else
+                deviceTooltip = dev.name
+            end
+            break
+        end
+    end
+    setTooltip(col3X, modelY, modelBoxW, btnH, deviceTooltip)
+    modelY = modelY + S(22)
+
     -- Processing mode
     modelY = modelY + S(8)
     local parallelColor = SETTINGS.parallelProcessing and {100, 180, 255} or {160, 160, 160}
@@ -9427,7 +9545,7 @@ local function startSeparationProcess(inputFile, outputDir, model)
         if batFile then
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. inputFile .. '" "' .. outputDir .. '" --model ' .. model .. ' --segment-size 30 ')
+            batFile:write('"' .. inputFile .. '" "' .. outputDir .. '" --model ' .. model .. ' --device ' .. SETTINGS.device .. ' ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -9453,8 +9571,8 @@ local function startSeparationProcess(inputFile, outputDir, model)
         -- Unix: run in background
         -- Single-track mode uses larger segment size (40) for better GPU utilization
         local cmd = string.format(
-            '"%s" -u "%s" "%s" "%s" --model %s --segment-size 30 >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
-            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile, outputDir
+            '"%s" -u "%s" "%s" "%s" --model %s --device %s >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
+            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, SETTINGS.device, stdoutFile, logFile, outputDir
         )
         os.execute(cmd)
     end
@@ -10886,7 +11004,7 @@ startSeparationProcessForJob = function(job, segmentSize)
         if batFile then
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize .. ' ')
+            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --device ' .. SETTINGS.device .. ' ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -10910,7 +11028,7 @@ startSeparationProcessForJob = function(job, segmentSize)
     else
         -- macOS/Linux
         local cmd = '"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" '
-        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize
+        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --device ' .. SETTINGS.device
         cmd = cmd .. ' >"' .. stdoutFile .. '" 2>"' .. logFile .. '" && echo DONE >"' .. doneFile .. '" &'
         os.execute(cmd)
     end
