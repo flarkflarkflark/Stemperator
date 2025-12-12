@@ -1,5 +1,9 @@
 # Copilot Instructions for STEMperator
 
+**Repository**: https://github.com/flarkflarkflark/Stemperator  
+**Current Version**: 2.0.0 (defined in `APP_VERSION` constant ~line 202)  
+**ReaPack URL**: `https://raw.githubusercontent.com/flarkflarkflark/Stemperator/main/scripts/reaper/index.xml`
+
 ## Project Overview
 
 STEMperator is a REAPER Lua script for AI-powered stem separation using Meta's Demucs. This repository contains:
@@ -78,12 +82,12 @@ STEMperator is a REAPER Lua script for AI-powered stem separation using Meta's D
 
 ## Version Management
 
-When updating version:
-1. Edit `APP_VERSION` constant in `Stemperator_AI_Separate.lua` (line 197)
-2. Update `@version` in script header
-3. Update `@changelog` section in script header
-4. Update `index.xml` version and changelog
-5. Commit and push together
+When updating version (must be synchronized in 4 places):
+1. Edit `APP_VERSION` constant in `Stemperator_AI_Separate.lua` (~line 202)
+2. Update `@version` in script header (line 3)
+3. Update `@changelog` section in script header (lines 4-29)
+4. Update `scripts/reaper/index.xml` version and changelog
+5. Commit all changes together
 
 ## Build and Test
 

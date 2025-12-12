@@ -59,12 +59,12 @@ gfx.rect(x, y, w, h, 1)
 
 Version appears in **4 places** and must be synchronized:
 
-1. `Stemperator_AI_Separate.lua` line 197: `APP_VERSION = "1.5.0"`
-2. Same file, header `@version` tag
-3. Same file, header `@changelog` section  
-4. `index.xml` package manifest
+1. `Stemperator_AI_Separate.lua` ~line 202: `APP_VERSION = "2.0.0"`
+2. Same file, header `@version` tag (line 3)
+3. Same file, header `@changelog` section (lines 4-29)
+4. `scripts/reaper/index.xml` package manifest
 
-**When bumping version**: Update all 4 locations consistently.
+**When bumping version**: Update all 4 locations consistently in a single commit.
 
 ### 4. The Code Is Large
 
@@ -147,10 +147,10 @@ vim scripts/reaper/Stemperator_AI_Separate.lua
 # - Test functionality manually
 
 # 3. Update version if needed (4 places!)
-# - Line 197 in main script
-# - @version in header
-# - @changelog in header  
-# - index.xml
+# - ~Line 202 in main script (APP_VERSION constant)
+# - Line 3 in main script (@version in header)
+# - Lines 4-29 in main script (@changelog section)
+# - scripts/reaper/index.xml
 
 # 4. Commit
 git add scripts/reaper/
@@ -328,8 +328,8 @@ A: No. REAPER Lua is Lua 5.3 without coroutine libraries commonly used for async
 
 ## Quick Reference
 
-- **Main script**: `scripts/reaper/Stemperator_AI_Separate.lua` (10.5K lines)
-- **Version**: Line 197 of main script (+ 3 other locations)
+- **Main script**: `scripts/reaper/Stemperator_AI_Separate.lua` (~10.5K lines)
+- **Version**: 2.0.0 (defined ~line 202 of main script + 3 other locations)
 - **i18n**: `scripts/reaper/lang/i18n.lua`
 - **Python**: `scripts/reaper/audio_separator_process.py`
 - **Install**: `scripts/install.sh` (Unix) or `scripts/install.ps1` (Windows)
