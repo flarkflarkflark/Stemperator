@@ -20,8 +20,14 @@
       </version>
     </reapack>
     <reapack name="Stemperator_Installation.lua" type="script" desc="STEMperator - Installation &amp; Setup (Run First!)">
-      <version name="2.0.0" author="flarkAUDIO" time="2025-12-12T00:00:00Z">
-        <changelog><![CDATA[v2.0.0: Enhanced installation system
+      <version name="2.1.0" author="flarkAUDIO" time="2025-12-12T00:00:00Z">
+        <changelog><![CDATA[v2.1.0: Live progress window
+- Added real-time progress window during installation
+- Automatically opens console for detailed logging
+- Shows installation status with progress bar
+- Displays final result dialog after completion
+
+v2.0.0: Enhanced installation system
 - Cross-platform Python/audio-separator installation
 - GPU detection (NVIDIA CUDA, AMD ROCm, Apple MPS)
 - Automatic venv creation and dependency install
