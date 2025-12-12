@@ -29,3 +29,4 @@ Thumbs.db
 releases/
 test_device_detection.py
 __pycache__/
+integration_test.py
