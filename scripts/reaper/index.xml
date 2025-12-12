@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <index version="1" name="STEMperator - AI Stem Separation">
-  <category name="AI/Stem Separation">
+  <category name="STEMperator">
     <reapack name="Stemperator_AI_Separate.lua" type="script" desc="STEMperator - AI Stem Separation (Main Dialog)">
       <version name="2.0.0" author="flarkAUDIO" time="2025-12-12T00:00:00Z">
         <changelog><![CDATA[v2.0.0: Fresh release - REAPER-only focus
