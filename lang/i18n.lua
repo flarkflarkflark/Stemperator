@@ -22,6 +22,7 @@ local LANGUAGES = {
         stems = "Stems (1-4):",
         stems_6 = "Stems (1-6):",
         model = "Model:",
+        device = "Device:",
         output = "Output:",
         after = "After:",
         selected = "Selected:",
@@ -90,6 +91,13 @@ local LANGUAGES = {
         model_fast_desc = "htdemucs - Fastest model, good quality (4 stems)",
         model_quality_desc = "htdemucs_ft - Best quality, slower (4 stems)",
         model_6stem_desc = "htdemucs_6s - Adds Guitar & Piano separation",
+
+        -- Device descriptions
+        device_auto_desc = "Automatically select best GPU",
+        device_cpu_desc = "Force CPU processing (slower)",
+        device_gpu0_desc = "First GPU (e.g., RX 9070)",
+        device_gpu1_desc = "Second GPU (e.g., 780M)",
+        device_directml_desc = "AMD GPU via DirectML",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Everything except vocals",
@@ -221,6 +229,7 @@ local LANGUAGES = {
         stems = "Stems (1-4):",
         stems_6 = "Stems (1-6):",
         model = "Model:",
+        device = "Apparaat:",
         output = "Uitvoer:",
         after = "Daarna:",
         selected = "Geselecteerd:",
@@ -289,6 +298,13 @@ local LANGUAGES = {
         model_fast_desc = "htdemucs - Snelste model, goede kwaliteit (4 stems)",
         model_quality_desc = "htdemucs_ft - Beste kwaliteit, langzamer (4 stems)",
         model_6stem_desc = "htdemucs_6s - Voegt Gitaar & Piano separatie toe",
+
+        -- Device descriptions
+        device_auto_desc = "Automatisch beste GPU selecteren",
+        device_cpu_desc = "Forceer CPU verwerking (langzamer)",
+        device_gpu0_desc = "Eerste GPU (bijv. RX 9070)",
+        device_gpu1_desc = "Tweede GPU (bijv. 780M)",
+        device_directml_desc = "AMD GPU via DirectML",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles behalve zang",
@@ -420,6 +436,7 @@ local LANGUAGES = {
         stems = "Stems (1-4):",
         stems_6 = "Stems (1-6):",
         model = "Modell:",
+        device = "Geraet:",
         output = "Ausgabe:",
         after = "Danach:",
         selected = "Ausgewaehlt:",
@@ -488,6 +505,13 @@ local LANGUAGES = {
         model_fast_desc = "htdemucs - Schnellstes Modell, gute Qualitaet (4 Stems)",
         model_quality_desc = "htdemucs_ft - Beste Qualitaet, langsamer (4 Stems)",
         model_6stem_desc = "htdemucs_6s - Fuegt Gitarre & Klavier Trennung hinzu",
+
+        -- Device descriptions
+        device_auto_desc = "Automatisch beste GPU auswaehlen",
+        device_cpu_desc = "CPU Verarbeitung erzwingen (langsamer)",
+        device_gpu0_desc = "Erste GPU (z.B. RX 9070)",
+        device_gpu1_desc = "Zweite GPU (z.B. 780M)",
+        device_directml_desc = "AMD GPU ueber DirectML",
 
         -- Preset tooltips
         tooltip_preset_karaoke = "Alles ausser Gesang",

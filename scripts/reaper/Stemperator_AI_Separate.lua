@@ -201,6 +201,15 @@ local STEMS = {
 -- App version (single source of truth)
 local APP_VERSION = "2.0.0"
 
+-- Available processing devices
+local DEVICES = {
+    { id = "auto", name = "Auto", desc = "Automatically select best GPU" },
+    { id = "cpu", name = "CPU", desc = "Force CPU processing (slower)" },
+    { id = "cuda:0", name = "GPU 0", desc = "First GPU (e.g., RX 9070)" },
+    { id = "cuda:1", name = "GPU 1", desc = "Second GPU (e.g., 780M)" },
+    { id = "directml", name = "DirectML", desc = "AMD GPU via DirectML" },
+}
+
 -- Available models
 local MODELS = {
     { id = "htdemucs", name = "Fast", desc = "htdemucs - Fastest model, good quality (4 stems)" },
@@ -222,6 +231,7 @@ local SETTINGS = {
     parallelProcessing = true, -- Process multiple tracks in parallel (uses more GPU memory)
     language = "en",           -- UI language: en, nl, de
     visualFX = true,           -- Enable/disable visual effects (procedural art backgrounds)
+    device = "auto",           -- Device selection: "auto", "cpu", "cuda:0", "cuda:1", "directml"
 }
 
 -- ========== INTERNATIONALIZATION (i18n) ==========
@@ -412,6 +422,9 @@ local function loadSettings()
     local visualFX = reaper.GetExtState(EXT_SECTION, "visualFX")
     if visualFX ~= "" then SETTINGS.visualFX = (visualFX == "1") end
 
+    local device = reaper.GetExtState(EXT_SECTION, "device")
+    if device ~= "" then SETTINGS.device = device end
+
     -- Load language setting and initialize i18n
     local language = reaper.GetExtState(EXT_SECTION, "language")
     if language ~= "" then SETTINGS.language = language end
@@ -460,6 +473,7 @@ local function saveSettings()
     reaper.SetExtState(EXT_SECTION, "parallelProcessing", SETTINGS.parallelProcessing and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "visualFX", SETTINGS.visualFX and "1" or "0", true)
     reaper.SetExtState(EXT_SECTION, "language", SETTINGS.language, true)
+    reaper.SetExtState(EXT_SECTION, "device", SETTINGS.device, true)
 
     for _, stem in ipairs(STEMS) do
         reaper.SetExtState(EXT_SECTION, "stem_" .. stem.name, stem.selected and "1" or "0", true)
@@ -7565,12 +7579,13 @@ local function dialogLoop()
     -- Determine 6-stem mode early (needed for stem display)
     local is6Stem = (SETTINGS.model == "htdemucs_6s")
 
-    -- Column positions (4 columns)
+    -- Column positions (5 columns for device selection)
     local col1X = S(10)   -- Presets
     local col2X = S(90)   -- Stems
-    local col3X = S(175)  -- Model
-    local col4X = S(260)  -- Output
-    local colW = S(70)
+    local col3X = S(140)  -- Model
+    local col4X = S(205)  -- Device (NEW)
+    local col5X = S(272)  -- Output
+    local colW = S(58)
     local btnH = S(20)
 
     -- === COLUMN 1: Presets ===
@@ -7680,9 +7695,46 @@ local function dialogLoop()
         or T("tooltip_sequential")
     setTooltip(col3X, modelY, modelBoxW, btnH, parallelTip)
 
-    -- === COLUMN 4: Output ===
+    -- === COLUMN 4: Device ===
     gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
     gfx.x = col4X
+    gfx.y = contentTop
+    gfx.drawstr(T("device") or "Device")
+
+    local deviceBoxW = S(58)
+    local deviceY = contentTop + S(20)
+    
+    -- Device options with tooltips
+    local deviceDescKeys = {
+        auto = "device_auto_desc",
+        cpu = "device_cpu_desc",
+        ["cuda:0"] = "device_gpu0_desc",
+        ["cuda:1"] = "device_gpu1_desc",
+        directml = "device_directml_desc",
+    }
+    
+    for _, device in ipairs(DEVICES) do
+        local deviceColor = nil
+        if device.id == "cpu" then
+            deviceColor = {160, 160, 160}  -- Gray for CPU
+        elseif device.id == "auto" then
+            deviceColor = {100, 200, 100}  -- Green for auto
+        else
+            deviceColor = {100, 180, 255}  -- Blue for GPU options
+        end
+        
+        if drawRadio(col4X, deviceY, SETTINGS.device == device.id, device.name, deviceColor, deviceBoxW) then
+            SETTINGS.device = device.id
+            saveSettings()
+        end
+        local descKey = deviceDescKeys[device.id] or "device_auto_desc"
+        setTooltip(col4X, deviceY, deviceBoxW, btnH, T(descKey) or device.desc)
+        deviceY = deviceY + S(22)
+    end
+
+    -- === COLUMN 5: Output ===
+    gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
+    gfx.x = col5X
     gfx.y = contentTop
     gfx.drawstr(T("output"))
 
@@ -7701,85 +7753,85 @@ local function dialogLoop()
     local inPlaceLabel = T("in_place")
 
     local outY = contentTop + S(20)
-    if drawRadio(col4X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW) then
+    if drawRadio(col5X, outY, SETTINGS.createNewTracks, newTracksLabel, nil, outBoxW) then
         SETTINGS.createNewTracks = true
     end
-    setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
+    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_new_tracks"))
     outY = outY + S(22)
-    if drawRadio(col4X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW) then
+    if drawRadio(col5X, outY, not SETTINGS.createNewTracks, inPlaceLabel, nil, outBoxW) then
         SETTINGS.createNewTracks = false
     end
-    setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_in_place"))
+    setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_in_place"))
 
     -- Options (only when creating new tracks)
     if SETTINGS.createNewTracks then
         outY = outY + S(28)
         gfx.set(THEME.textDim[1], THEME.textDim[2], THEME.textDim[3], 1)
-        gfx.x = col4X
+        gfx.x = col5X
         gfx.y = outY
         gfx.drawstr(T("after"))
 
         outY = outY + S(20)
-        if drawCheckbox(col4X, outY, SETTINGS.createFolder, T("create_folder"), 160, 160, 160, outBoxW) then
+        if drawCheckbox(col5X, outY, SETTINGS.createFolder, T("create_folder"), 160, 160, 160, outBoxW) then
             SETTINGS.createFolder = not SETTINGS.createFolder
         end
-        setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_create_folder"))
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_create_folder"))
 
         outY = outY + S(22)
-        if drawCheckbox(col4X, outY, SETTINGS.muteOriginal, T("mute_original"), 160, 160, 160, outBoxW) then
+        if drawCheckbox(col5X, outY, SETTINGS.muteOriginal, T("mute_original"), 160, 160, 160, outBoxW) then
             SETTINGS.muteOriginal = not SETTINGS.muteOriginal
             if SETTINGS.muteOriginal then
                 SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_mute_original"))
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_mute_original"))
 
         outY = outY + S(22)
         local delItemColor = SETTINGS.deleteOriginal and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(col4X, outY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], outBoxW) then
+        if drawCheckbox(col5X, outY, SETTINGS.deleteOriginal, T("delete_original"), delItemColor[1], delItemColor[2], delItemColor[3], outBoxW) then
             SETTINGS.deleteOriginal = not SETTINGS.deleteOriginal
             if SETTINGS.deleteOriginal then
                 SETTINGS.muteOriginal = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_delete_original"))
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_original"))
 
         outY = outY + S(22)
         local delTrackColor = SETTINGS.deleteOriginalTrack and {255, 120, 120} or {160, 160, 160}
-        if drawCheckbox(col4X, outY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], outBoxW) then
+        if drawCheckbox(col5X, outY, SETTINGS.deleteOriginalTrack, T("delete_track"), delTrackColor[1], delTrackColor[2], delTrackColor[3], outBoxW) then
             SETTINGS.deleteOriginalTrack = not SETTINGS.deleteOriginalTrack
             if SETTINGS.deleteOriginalTrack then
                 SETTINGS.deleteOriginal = true; SETTINGS.muteOriginal = false
                 SETTINGS.muteSelection = false; SETTINGS.deleteSelection = false
             end
         end
-        setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_delete_track"))
+        setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_track"))
 
         -- Selection-level options (only if time selection exists)
         local hasTimeSel = hasTimeSelection()
         if hasTimeSel then
             outY = outY + S(22)
-            if drawCheckbox(col4X, outY, SETTINGS.muteSelection, T("mute_selection"), 160, 160, 160, outBoxW) then
+            if drawCheckbox(col5X, outY, SETTINGS.muteSelection, T("mute_selection"), 160, 160, 160, outBoxW) then
                 SETTINGS.muteSelection = not SETTINGS.muteSelection
                 if SETTINGS.muteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                     SETTINGS.deleteSelection = false
                 end
             end
-            setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_mute_selection"))
+            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_mute_selection"))
 
             outY = outY + S(22)
             local delSelColor = SETTINGS.deleteSelection and {255, 120, 120} or {160, 160, 160}
-            if drawCheckbox(col4X, outY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], outBoxW) then
+            if drawCheckbox(col5X, outY, SETTINGS.deleteSelection, T("delete_selection"), delSelColor[1], delSelColor[2], delSelColor[3], outBoxW) then
                 SETTINGS.deleteSelection = not SETTINGS.deleteSelection
                 if SETTINGS.deleteSelection then
                     SETTINGS.muteOriginal = false; SETTINGS.deleteOriginal = false; SETTINGS.deleteOriginalTrack = false
                     SETTINGS.muteSelection = false
                 end
             end
-            setTooltip(col4X, outY, outBoxW, btnH, T("tooltip_delete_selection"))
+            setTooltip(col5X, outY, outBoxW, btnH, T("tooltip_delete_selection"))
         end
     end
 
@@ -9451,10 +9503,10 @@ local function startSeparationProcess(inputFile, outputDir, model)
         end
     else
         -- Unix: run in background
-        -- Single-track mode uses larger segment size (40) for better GPU utilization
+        local deviceArg = SETTINGS.device or "auto"
         local cmd = string.format(
-            '"%s" -u "%s" "%s" "%s" --model %s --segment-size 30 >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
-            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, stdoutFile, logFile, outputDir
+            '"%s" -u "%s" "%s" "%s" --model %s --device %s >"%s" 2>"%s" && echo DONE > "%s/done.txt" &',
+            PYTHON_PATH, SEPARATOR_SCRIPT, inputFile, outputDir, model, deviceArg, stdoutFile, logFile, outputDir
         )
         os.execute(cmd)
     end
@@ -10884,9 +10936,10 @@ startSeparationProcessForJob = function(job, segmentSize)
         local batPath = job.trackDir .. PATH_SEP .. "run_separation.bat"
         local batFile = io.open(batPath, "w")
         if batFile then
+            local deviceArg = SETTINGS.device or "auto"
             batFile:write('@echo off\n')
             batFile:write('"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" ')
-            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize .. ' ')
+            batFile:write('"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --device ' .. deviceArg .. ' ')
             batFile:write('>"' .. stdoutFile .. '" 2>"' .. logFile .. '"\n')
             batFile:write('echo DONE >"' .. doneFile .. '"\n')
             batFile:close()
@@ -10909,8 +10962,9 @@ startSeparationProcessForJob = function(job, segmentSize)
         end
     else
         -- macOS/Linux
+        local deviceArg = SETTINGS.device or "auto"
         local cmd = '"' .. PYTHON_PATH .. '" -u "' .. SEPARATOR_SCRIPT .. '" '
-        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --segment-size ' .. segmentSize
+        cmd = cmd .. '"' .. job.inputFile .. '" "' .. job.trackDir .. '" --model ' .. SETTINGS.model .. ' --device ' .. deviceArg
         cmd = cmd .. ' >"' .. stdoutFile .. '" 2>"' .. logFile .. '" && echo DONE >"' .. doneFile .. '" &'
         os.execute(cmd)
     end
