@@ -29,7 +29,7 @@
 --   - Apple Silicon: MPS (auto-detected)
 
 local SCRIPT_NAME = "STEMperator: Installation & Setup"
-local SCRIPT_VERSION = "1.0.0"
+local SCRIPT_VERSION = "2.0.0"
 
 -- Get script path
 local info = debug.getinfo(1, "S")
