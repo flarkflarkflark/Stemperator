@@ -27,3 +27,6 @@ Thumbs.db
 # Logs
 *.log
 releases/
+test_device_detection.py
+__pycache__/
+integration_test.py
