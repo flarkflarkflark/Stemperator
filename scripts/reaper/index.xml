@@ -3,15 +3,14 @@
   <category name="AI/Stem Separation">
     <reapack name="Stemperator_AI_Separate.lua" type="script" desc="STEMperator - AI Stem Separation (Main Dialog)">
       <version name="2.0.0" author="flarkAUDIO" time="2025-12-12T00:00:00Z">
-v2.0.0: Fresh release - REAPER-only focus
+        <changelog><![CDATA[v2.0.0: Fresh release - REAPER-only focus
 - Repo restructured: plugin/standalone moved to legacy/
 - Renamed to STEMperator (REAPER scripts focus)
 - All branding updated to STEMperator
 - Clean separation from STEMdropper project
 - Improved Installation script (+65% enhanced functionality)
 
-
-        <changelog><![CDATA[v1.5.0: MilkDrop visuals + FX toggle
+v1.5.0: MilkDrop visuals + FX toggle
 - 100 MilkDrop-inspired patterns (1000 unique styles!)
 - Smooth crossfade transitions with zoom effect (1.5s)
 - FX toggle icon on all pages (below day/night icon)
