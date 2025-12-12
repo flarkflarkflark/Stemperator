@@ -143,12 +143,26 @@ The install scripts automatically:
 
 ### GPU Acceleration
 
+**NEW:** Device selection now available! Choose which GPU to use or fall back to CPU.
+
 | GPU | Support | Speed Improvement |
 |-----|---------|-------------------|
 | NVIDIA (CUDA) | ✓ Full | 10-20x faster |
-| AMD (ROCm) | ✓ Linux only | 10-15x faster |
+| AMD Windows (DirectML) | ✓ Full | 10-20x faster |
+| AMD Linux (ROCm) | ✓ Full | 10-15x faster |
 | Apple Silicon (MPS) | ✓ Native | 5-10x faster |
 | Intel/AMD (CPU) | ✓ Fallback | Baseline |
+
+**Device Selection:**
+- Click the "Device:" button in the dialog to cycle through available devices
+- Options: Auto, CPU, GPU 0, GPU 1, etc.
+- Selection is saved between sessions
+- See [Device Selection Guide](docs/DEVICE_SELECTION.md) for details
+
+**Multi-GPU Support:**
+- Parallel processing can distribute tracks across multiple GPUs
+- Sequential processing uses the selected device for all tracks
+- Ideal for users with AMD RX 9070 + Radeon 780M or similar setups
 
 ### Manual Installation
 
